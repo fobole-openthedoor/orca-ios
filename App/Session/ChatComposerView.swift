@@ -38,6 +38,21 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private let mic = UIButton(configuration: .plain())
   private let sendButton = SendButton()
   private var textHeight: NSLayoutConstraint!
+  /// The composer: one line at rest (+, the field, the mic and send), a card with its controls row while
+  /// editing or holding a draft, and, dragged up by its grabber, the whole screen for writing.
+  private let row = UIStackView()
+  private let grabber = UIView()
+  private let grabberArea = UIView()
+  private var expandedSet: [NSLayoutConstraint] = []
+  private var collapsedSet: [NSLayoutConstraint] = []
+  private(set) var isCollapsed = false
+  /// 0 inline, 1 full screen; in between while dragged.
+  private(set) var fullScreenProgress: CGFloat = 0
+  private var dragStart: CGFloat = 0
+  /// The tallest the field may grow, from the chat (the space above the composer).
+  var fullTextHeight: (() -> CGFloat)?
+  /// The full-screen progress changed: the chat dims behind it.
+  var onFullScreen: ((CGFloat) -> Void)?
   private var textTop: NSLayoutConstraint!
   private var textUnderChips: NSLayoutConstraint!
   private var working = false
@@ -106,12 +121,28 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     // Holding send while the agent works offers the other way to send (MobileNativeChatSendButton.tsx).
     sendButton.addInteraction(UIContextMenuInteraction(delegate: self))
 
-    let row = UIStackView(arrangedSubviews: [attach, modelChip, UIView(), contextRing, mic, sendButton])
+    [attach, modelChip, UIView(), contextRing, mic, sendButton].forEach { row.addArrangedSubview($0) }
     row.axis = .horizontal
     row.alignment = .center
     row.spacing = Spacing.sm
     row.translatesAutoresizingMaskIntoConstraints = false
-    for view in [attachmentStrip, textView, placeholder, row] as [UIView] { surface.contentView.addSubview(view) }
+    for view in [attachmentStrip, textView, placeholder, row, grabberArea] as [UIView] { surface.contentView.addSubview(view) }
+    // In the one-line state the field sits inside the controls row's span; it must take its own touches.
+    surface.contentView.bringSubviewToFront(textView)
+    grabber.backgroundColor = Palette.textMuted.withAlphaComponent(0.5)
+    grabber.layer.cornerRadius = 2.5
+    grabber.translatesAutoresizingMaskIntoConstraints = false
+    grabberArea.translatesAutoresizingMaskIntoConstraints = false
+    grabberArea.addSubview(grabber)
+    grabberArea.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(dragged(_:))))
+    grabberArea.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(toggleFullScreen)))
+    grabberArea.isAccessibilityElement = true
+    grabberArea.accessibilityTraits = .button
+    grabberArea.accessibilityLabel = String(localized: "orcaios.composer.fullScreen", defaultValue: "Full screen editor")
+    textView.onHardwareReturn = { [weak self] in
+      guard self?.sendButton.action == .send else { return }
+      self?.send(queue: false)
+    }
     // The text sits under the attachment chips when there are any.
     textTop = textView.topAnchor.constraint(equalTo: surface.contentView.topAnchor, constant: Spacing.md + 2)
     textUnderChips = textView.topAnchor.constraint(equalTo: attachmentStrip.bottomAnchor, constant: Spacing.sm)
@@ -136,20 +167,124 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
       attachmentRow.topAnchor.constraint(equalTo: attachmentStrip.contentLayoutGuide.topAnchor),
       attachmentRow.bottomAnchor.constraint(equalTo: attachmentStrip.contentLayoutGuide.bottomAnchor),
       attachmentRow.heightAnchor.constraint(equalTo: attachmentStrip.frameLayoutGuide.heightAnchor),
-      textView.leadingAnchor.constraint(equalTo: surface.contentView.leadingAnchor, constant: Spacing.lg + 2),
-      textView.trailingAnchor.constraint(equalTo: surface.contentView.trailingAnchor, constant: -Spacing.lg),
       textHeight,
       placeholder.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
       placeholder.trailingAnchor.constraint(lessThanOrEqualTo: textView.trailingAnchor),
-      placeholder.centerYAnchor.constraint(equalTo: textView.centerYAnchor),
-      row.topAnchor.constraint(equalTo: textView.bottomAnchor, constant: Spacing.sm),
+      // On the first line, however tall the field grows.
+      placeholder.topAnchor.constraint(equalTo: textView.topAnchor, constant: 4),
       row.leadingAnchor.constraint(equalTo: surface.contentView.leadingAnchor, constant: Spacing.md),
       row.trailingAnchor.constraint(equalTo: surface.contentView.trailingAnchor, constant: -Spacing.md),
       row.bottomAnchor.constraint(equalTo: surface.contentView.bottomAnchor, constant: -Spacing.md),
       mic.widthAnchor.constraint(equalToConstant: 44),
       mic.heightAnchor.constraint(equalToConstant: 44),
+      grabberArea.topAnchor.constraint(equalTo: surface.contentView.topAnchor),
+      grabberArea.centerXAnchor.constraint(equalTo: surface.contentView.centerXAnchor),
+      grabberArea.widthAnchor.constraint(equalToConstant: 120),
+      grabberArea.heightAnchor.constraint(equalToConstant: 18),
+      grabber.centerXAnchor.constraint(equalTo: grabberArea.centerXAnchor),
+      grabber.topAnchor.constraint(equalTo: grabberArea.topAnchor, constant: 6),
+      grabber.widthAnchor.constraint(equalToConstant: 36),
+      grabber.heightAnchor.constraint(equalToConstant: 5),
     ])
+    // The card: the field across the surface, its controls row under it.
+    expandedSet = [
+      textView.leadingAnchor.constraint(equalTo: surface.contentView.leadingAnchor, constant: Spacing.lg + 2),
+      textView.trailingAnchor.constraint(equalTo: surface.contentView.trailingAnchor, constant: -Spacing.lg),
+      row.topAnchor.constraint(equalTo: textView.bottomAnchor, constant: Spacing.sm),
+    ]
+    // At rest: one line, the field between + and the mic.
+    collapsedSet = [
+      textView.leadingAnchor.constraint(equalTo: attach.trailingAnchor, constant: Spacing.xs),
+      textView.trailingAnchor.constraint(equalTo: contextRing.leadingAnchor, constant: -Spacing.xs),
+      textView.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+      row.topAnchor.constraint(equalTo: surface.contentView.topAnchor, constant: Spacing.sm),
+    ]
+    NSLayoutConstraint.activate(expandedSet)
     refresh()
+    updateCollapsed(animated: false)
+  }
+
+  // MARK: Rest, card and full screen
+
+  func textViewDidBeginEditing(_ textView: UITextView) { updateCollapsed(animated: true) }
+
+  func textViewDidEndEditing(_ textView: UITextView) { updateCollapsed(animated: true) }
+
+  /// One line when nothing is being written; the card otherwise.
+  private func updateCollapsed(animated: Bool) {
+    let collapse = !textView.isFirstResponder && currentText.isEmpty && attachments.isEmpty && fullScreenProgress == 0
+    guard collapse != isCollapsed || expandedSet.first?.isActive == collapse else { return }
+    isCollapsed = collapse
+    let change = {
+      NSLayoutConstraint.deactivate(collapse ? self.expandedSet + [self.textTop, self.textUnderChips] : self.collapsedSet)
+      NSLayoutConstraint.activate(collapse ? self.collapsedSet : self.expandedSet)
+      if !collapse {
+        let chips = !self.attachments.isEmpty
+        self.textTop.isActive = !chips
+        self.textUnderChips.isActive = chips
+      }
+      self.modelChip.alpha = collapse ? 0 : 1
+      self.grabberArea.alpha = collapse ? 0 : 1
+      self.layoutIfNeeded()
+      self.superview?.layoutIfNeeded()
+    }
+    // The chip leaves the row in the one-line state, so the field has the room.
+    modelChip.isHidden = collapse || modelChip.menu == nil
+    if animated { UIView.animate(withDuration: 0.24, delay: 0, options: .curveEaseOut, animations: change) } else { change() }
+    onHeightChange?()
+  }
+
+  @objc private func toggleFullScreen() {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    settleFullScreen(fullScreenProgress < 0.5)
+  }
+
+  @objc private func dragged(_ pan: UIPanGestureRecognizer) {
+    let range = max(1, fullHeight - inlineHeight)
+    switch pan.state {
+    case .began:
+      dragStart = fullScreenProgress
+    case .changed:
+      let progress = min(1, max(0, dragStart - pan.translation(in: self).y / range))
+      setFullScreen(progress)
+    case .ended, .cancelled:
+      let velocity = pan.velocity(in: self).y
+      let dragged = pan.translation(in: self).y
+      // Pulled down from the inline card: put the keyboard away.
+      if dragStart == 0, dragged > 60 {
+        settleFullScreen(false)
+        textView.resignFirstResponder()
+        return
+      }
+      settleFullScreen(abs(velocity) > 600 ? velocity < 0 : fullScreenProgress > 0.5)
+    default: break
+    }
+  }
+
+  private var inlineHeight: CGFloat { (textView.font?.lineHeight ?? 20) * 6 + 8 }
+  private var fullHeight: CGFloat { max(inlineHeight, fullTextHeight?() ?? inlineHeight) }
+
+  private func setFullScreen(_ progress: CGFloat) {
+    fullScreenProgress = progress
+    textView.isScrollEnabled = true
+    textHeight.constant = max(32, fittingHeight(capped: inlineHeight)) + (fullHeight - max(32, fittingHeight(capped: inlineHeight))) * progress
+    onFullScreen?(progress)
+    onHeightChange?()
+    superview?.layoutIfNeeded()
+  }
+
+  private func settleFullScreen(_ full: Bool) {
+    if full, !textView.isFirstResponder { textView.becomeFirstResponder() }
+    UIView.animate(springDuration: 0.42, bounce: 0) {
+      self.setFullScreen(full ? 1 : 0)
+    } completion: { _ in
+      if !full { self.refresh() }
+    }
+  }
+
+  private func fittingHeight(capped: CGFloat) -> CGFloat {
+    let width = max(textView.bounds.width, 100)
+    return min(ceil(textView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height), capped)
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -157,7 +292,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   /// The model chip's label and menu, from the session's options.
   /// "Opus 5.5 Med": the model in the primary colour, its effort muted, as the official chip.
   func setModel(title: String?, detail: String? = nil, menu: UIMenu?) {
-    modelChip.isHidden = title == nil
+    modelChip.isHidden = title == nil || isCollapsed
     var configuration = modelChip.configuration
     configuration?.attributedTitle = title.map {
       var text = AttributedString($0, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 15, weight: .medium), .foregroundColor: Palette.textPrimary]))
@@ -212,6 +347,11 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     placeholder.isHidden = !textView.text.isEmpty
     let action: Action = !currentText.isEmpty || !attachments.isEmpty ? .send : working ? .stop : .dictate
     sendButton.set(action)
+    // Full screen holds its height; the drag owns it.
+    guard fullScreenProgress == 0 else { return }
+    if isCollapsed != (!textView.isFirstResponder && currentText.isEmpty && attachments.isEmpty) {
+      DispatchQueue.main.async { self.updateCollapsed(animated: true) }
+    }
     // Grow up to six lines, then scroll, as the official field does.
     let width = max(textView.bounds.width, 100)
     let fitting = textView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
@@ -253,6 +393,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     attachments = []
     refresh()
     onSend?(text, sending, queue)
+    if fullScreenProgress > 0 { settleFullScreen(false) }
   }
 
   /// What is typed, unsent.
@@ -350,8 +491,10 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     }
     let shown = !attachments.isEmpty
     attachmentStrip.isHidden = !shown
-    textTop.isActive = !shown
-    textUnderChips.isActive = shown
+    if !isCollapsed {
+      textTop.isActive = !shown
+      textUnderChips.isActive = shown
+    }
     onHeightChange?()
   }
 
@@ -540,6 +683,24 @@ final class SendButton: UIControl {
 /// leaving ordinary text to the editor.
 final class ComposerTextView: UITextView {
   var onPasteAttachments: (([NSItemProvider]) -> Void)?
+  /// Return on a hardware keyboard sends; Shift-Return is a new line.
+  var onHardwareReturn: (() -> Void)?
+
+  override var keyCommands: [UIKeyCommand]? {
+    // While an input method composes, Return is its own.
+    guard markedTextRange == nil else { return nil }
+    let send = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(hardwareReturn))
+    send.wantsPriorityOverSystemBehavior = true
+    let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(hardwareNewline))
+    newline.wantsPriorityOverSystemBehavior = true
+    return [send, newline]
+  }
+
+  @objc private func hardwareReturn() {
+    onHardwareReturn?()
+  }
+
+  @objc private func hardwareNewline() { insertText("\n") }
 
   override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
     if action == #selector(paste(_:)) {

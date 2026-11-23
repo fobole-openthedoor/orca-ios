@@ -12,6 +12,8 @@ final class ChatViewController: UIViewController {
   private let composer = ChatComposerView()
   private let dock = ChatDockView()
   private let suggestions = ChatSuggestionPanel()
+  /// Dims the chat behind a full-screen composer.
+  private let dim = UIView()
   private var suggestionTask: Task<Void, Never>?
   /// Workspace files matching a query, for @ mentions.
   var searchFiles: ((String) async -> [String])?
@@ -60,6 +62,11 @@ final class ChatViewController: UIViewController {
     collection.alwaysBounceVertical = true
     view.addSubview(collection)
     view.addSubview(composer)
+    dim.backgroundColor = .black
+    dim.alpha = 0
+    dim.isUserInteractionEnabled = false
+    dim.translatesAutoresizingMaskIntoConstraints = false
+    view.insertSubview(dim, aboveSubview: collection)
     view.addSubview(dock)
     view.addSubview(suggestions)
     collection.translatesAutoresizingMaskIntoConstraints = false
@@ -98,6 +105,10 @@ final class ChatViewController: UIViewController {
       suggestions.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       suggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor),
       suggestions.bottomAnchor.constraint(equalTo: composer.topAnchor),
+      dim.topAnchor.constraint(equalTo: view.topAnchor),
+      dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
     ])
     view.keyboardLayoutGuide.usesBottomSafeArea = true
 
@@ -115,6 +126,16 @@ final class ChatViewController: UIViewController {
       }
     }
     composer.onToken = { [weak self] token in self?.suggest(token) }
+    // Full screen: the field grows to just under the top bar, the chat dims behind it.
+    composer.fullTextHeight = { [weak self] in
+      guard let self else { return 0 }
+      let room = self.composer.frame.maxY - self.view.safeAreaInsets.top - Spacing.md
+      return room - (self.composer.frame.height - self.composer.textView.frame.height)
+    }
+    composer.onFullScreen = { [weak self] progress in
+      self?.dim.alpha = 0.22 * progress
+      self?.dock.alpha = 1 - progress
+    }
     composer.contextRing.addAction(
       UIAction { [weak self] _ in
         guard let self, let usage = self.composer.contextRing.usage else { return }
