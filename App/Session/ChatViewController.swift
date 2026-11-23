@@ -11,6 +11,10 @@ final class ChatViewController: UIViewController {
   private var dataSource: UICollectionViewDiffableDataSource<Int, ChatLine>!
   private let composer = ChatComposerView()
   private let dock = ChatDockView()
+  private let suggestions = ChatSuggestionPanel()
+  private var suggestionTask: Task<Void, Never>?
+  /// Workspace files matching a query, for @ mentions.
+  var searchFiles: ((String) async -> [String])?
   private let toBottom = UIButton(configuration: .glass())
   private var projection = ChatProjection(rows: [], expanded: [], transcript: ChatTranscript())
   private var expanded: Set<String> = []
@@ -57,6 +61,7 @@ final class ChatViewController: UIViewController {
     view.addSubview(collection)
     view.addSubview(composer)
     view.addSubview(dock)
+    view.addSubview(suggestions)
     collection.translatesAutoresizingMaskIntoConstraints = false
 
     toBottom.configuration?.image = UIImage(
@@ -90,6 +95,9 @@ final class ChatViewController: UIViewController {
       dock.trailingAnchor.constraint(equalTo: view.trailingAnchor),
       dock.bottomAnchor.constraint(equalTo: composer.topAnchor),
       toBottom.bottomAnchor.constraint(equalTo: dock.topAnchor, constant: -Spacing.sm),
+      suggestions.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      suggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      suggestions.bottomAnchor.constraint(equalTo: composer.topAnchor),
     ])
     view.keyboardLayoutGuide.usesBottomSafeArea = true
 
@@ -98,14 +106,15 @@ final class ChatViewController: UIViewController {
     composer.restore(text: draft.text, attachments: draft.attachments)
     NotificationCenter.default.addObserver(
       self, selector: #selector(saveDraft), name: UIApplication.willResignActiveNotification, object: nil)
-    composer.onSend = { [weak self] text, attachments in
+    composer.onSend = { [weak self] text, attachments, queue in
       guard let self else { return }
       ChatDraftStore.save(self.model.sessionId, text: "", attachments: [])
       self.followsBottom = true
       Task {
-        if let refusal = await self.model.submit(text: text, attachments: attachments) { self.say(refusal) }
+        if let refusal = await self.model.submit(text: text, attachments: attachments, queue: queue) { self.say(refusal) }
       }
     }
+    composer.onToken = { [weak self] token in self?.suggest(token) }
     composer.onPickPhotos = { [weak self] in self?.pickPhotos() }
     composer.onTakePhoto = { [weak self] in self?.takePhoto() }
     composer.onPickFiles = { [weak self] in self?.pickFiles() }
@@ -114,6 +123,24 @@ final class ChatViewController: UIViewController {
     }
     composer.onError = { [weak self] message in self?.say(message) }
     dock.onOpen = { [weak self] task in self?.openBackgroundTask(task) }
+    dock.onQueued = { [weak self] message, action in
+      guard let self else { return }
+      Task {
+        switch action {
+        case .send:
+          if let refusal = await self.model.queuedMessage(message.id, send: true) { self.say(refusal) }
+        case .delete:
+          if let refusal = await self.model.queuedMessage(message.id, send: false) { self.say(refusal) }
+        case .edit:
+          // Back into the composer to change, out of the queue.
+          if let refusal = await self.model.queuedMessage(message.id, send: false) {
+            self.say(refusal)
+          } else {
+            self.composer.setText(message.text)
+          }
+        }
+      }
+    }
     dock.onGoal = { [weak self] change in
       guard let self else { return }
       Task { if let refusal = await self.model.changeGoal(change) { self.say(refusal) } }
@@ -169,7 +196,9 @@ final class ChatViewController: UIViewController {
     // A turn's end moves the goal's time and status; read them again.
     if lastWorking == true, !model.isWorking { Task { await model.refreshOptions() } }
     lastWorking = model.isWorking
-    dock.show(tasks: model.transcript.backgroundTasks, stopsAll: model.transcript.stopsBackgroundTasks, goal: model.options?.goal)
+    dock.show(
+      tasks: model.transcript.backgroundTasks, stopsAll: model.transcript.stopsBackgroundTasks, goal: model.options?.goal,
+      queued: model.transcript.queuedMessages)
     view.setNeedsLayout()
     presentNewPrompt()
     updateModelChip()
@@ -314,6 +343,44 @@ final class ChatViewController: UIViewController {
         guard let full = await model.fullItem(id), case .toolCall(let whole) = full.body else { return nil }
         return whole
       }, animated: true)
+  }
+
+  /// Fills the suggestion panel for what is being typed: the agent's slash commands, or workspace files.
+  private func suggest(_ token: ComposerToken?) {
+    suggestionTask?.cancel()
+    guard let token else {
+      suggestions.show([])
+      return
+    }
+    let pick: ([ChatSuggestionPanel.Row]) -> Void = { [weak self] rows in
+      guard let self else { return }
+      self.suggestions.show(rows)
+      self.suggestions.onPick = { [weak self] row in self?.composer.complete(token, with: row.insert) }
+    }
+    switch token {
+    case .command(let query, _):
+      pick(ChatCommand.matching(query, in: model.commands).prefix(30).map { command in
+        ChatSuggestionPanel.Row(
+          icon: command.kind == "skill" ? .sparkles : .squareChevronRight,
+          title: "/" + command.name + (command.argumentHint.map { " " + $0 } ?? ""),
+          detail: command.description, insert: "/" + command.name)
+      })
+    case .file(let query, _):
+      guard let searchFiles else { return }
+      suggestionTask = Task { [weak self] in
+        // Waits for a pause in typing before asking the desktop.
+        try? await Task.sleep(for: .milliseconds(query.isEmpty ? 0 : 150))
+        guard !Task.isCancelled else { return }
+        let paths = await searchFiles(query)
+        guard !Task.isCancelled, self != nil else { return }
+        pick(paths.prefix(30).map { path in
+          let name = (path as NSString).lastPathComponent
+          let folder = (path as NSString).deletingLastPathComponent
+          return ChatSuggestionPanel.Row(
+            icon: .fileText, title: name, detail: folder.isEmpty ? nil : folder, insert: "@" + path)
+        })
+      }
+    }
   }
 
   override func viewWillDisappear(_ animated: Bool) {
@@ -684,7 +751,8 @@ extension ChatViewController: UICollectionViewDelegate {
   func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
     switch dataSource.itemIdentifier(for: indexPath) {
     case .work, .run, .call: return true
-    case .thoughts(let key): return projection.thoughts[key]?.live == false
+    // A live thought opens too, and its words stream in under it.
+    case .thoughts: return true
     case .prompt(let id): return projection.items[id].map(ChatProjection.isWaiting) ?? false
     default: return false
     }

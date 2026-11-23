@@ -8,7 +8,9 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     case send, stop, loading, dictate
   }
 
-  var onSend: ((String, [OutgoingAttachment]) -> Void)?
+  /// The text and attachments, and whether to hold them until the running turn ends (queue) rather than
+  /// steer into it.
+  var onSend: ((String, [OutgoingAttachment], Bool) -> Void)?
   var onStop: (() -> Void)?
   var onHeightChange: (() -> Void)?
   /// The + menu's sources: photos, the camera, files. The composer pastes on its own.
@@ -99,6 +101,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     mic.addAction(UIAction { [weak self] _ in self?.toggleDictation() }, for: .primaryActionTriggered)
 
     sendButton.addAction(UIAction { [weak self] _ in self?.primaryTapped() }, for: .touchUpInside)
+    // Holding send while the agent works offers the other way to send (MobileNativeChatSendButton.tsx).
+    sendButton.addInteraction(UIContextMenuInteraction(delegate: self))
 
     let row = UIStackView(arrangedSubviews: [attach, modelChip, UIView(), mic, sendButton])
     row.axis = .horizontal
@@ -171,6 +175,33 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
 
   func textViewDidChange(_ textView: UITextView) {
     refresh()
+    reportToken()
+  }
+
+  func textViewDidChangeSelection(_ textView: UITextView) {
+    reportToken()
+  }
+
+  /// A `/command` or `@mention` being typed, for the suggestion panel; nil when there is none.
+  var onToken: ((ComposerToken?) -> Void)?
+  private var lastToken: ComposerToken?
+
+  private func reportToken() {
+    let token = ComposerToken.at(textView.text ?? "", cursor: textView.selectedRange.location)
+    guard token != lastToken else { return }
+    lastToken = token
+    onToken?(token)
+  }
+
+  /// Puts a picked command or file in place of the token being typed, with a space after it.
+  func complete(_ token: ComposerToken, with insert: String) {
+    let ns = (textView.text ?? "") as NSString
+    guard NSMaxRange(token.range) <= ns.length else { return }
+    let replacement = insert + " "
+    textView.text = ns.replacingCharacters(in: token.range, with: replacement)
+    textView.selectedRange = NSRange(location: token.range.location + (replacement as NSString).length, length: 0)
+    refresh()
+    reportToken()
   }
 
   private var currentText: String { textView.text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -199,14 +230,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private func primaryTapped() {
     switch sendButton.action {
     case .send:
-      let text = textView.text ?? ""
-      guard !currentText.isEmpty || !attachments.isEmpty else { return }
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      let sending = attachments
-      textView.text = ""
-      attachments = []
-      refresh()
-      onSend?(text, sending)
+      send(queue: false)
     case .stop:
       UIImpactFeedbackGenerator(style: .medium).impactOccurred()
       sendButton.set(.loading)
@@ -216,6 +240,17 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     case .loading:
       break
     }
+  }
+
+  private func send(queue: Bool) {
+    let text = textView.text ?? ""
+    guard !currentText.isEmpty || !attachments.isEmpty else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    let sending = attachments
+    textView.text = ""
+    attachments = []
+    refresh()
+    onSend?(text, sending, queue)
   }
 
   /// What is typed, unsent.
@@ -529,4 +564,25 @@ final class ComposerTextView: UITextView {
 
   /// Text long enough to flood the composer, which goes as a file instead.
   var onPasteText: ((String) -> Void)?
+}
+
+extension ChatComposerView: UIContextMenuInteractionDelegate {
+  func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint)
+    -> UIContextMenuConfiguration?
+  {
+    guard working, sendButton.action == .send else { return nil }
+    return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
+      let steer = UIAction(
+        title: String(localized: "chat.composer.sendSteer", defaultValue: "Steer"),
+        subtitle: String(localized: "chat.composer.sendSteerHint", defaultValue: "Goes into what the agent is doing now"),
+        image: Lucide.cornerDownRight.image(size: 18)
+      ) { _ in self?.send(queue: false) }
+      let queue = UIAction(
+        title: String(localized: "chat.composer.sendQueue", defaultValue: "Queue"),
+        subtitle: String(localized: "chat.composer.sendQueueHint", defaultValue: "Runs after the current turn"),
+        image: Lucide.listEnd.image(size: 18)
+      ) { _ in self?.send(queue: true) }
+      return UIMenu(children: [queue, steer])
+    })
+  }
 }

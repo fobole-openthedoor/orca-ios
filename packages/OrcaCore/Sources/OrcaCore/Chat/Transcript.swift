@@ -356,6 +356,8 @@ public struct ChatTranscript: Sendable, Equatable {
   public private(set) var activity: String?
   /// Work the agent left running in the background (agents, shells, monitors), as the host last listed it.
   public private(set) var backgroundTasks: [BackgroundTask] = []
+  /// Messages waiting for the running turn to end (agent-session-queued-message-wire.ts), in send order.
+  public private(set) var queuedMessages: [QueuedMessage] = []
   public private(set) var stopsBackgroundTasks = false
 
   /// The prompts that can still be answered, when the host says; nil on hosts that do not.
@@ -491,6 +493,10 @@ public struct ChatTranscript: Sendable, Equatable {
       backgroundTasks = live ? (roster["tasks"]?.arrayValue ?? []).compactMap(BackgroundTask.init) : []
       stopsBackgroundTasks = live && (roster["supportsStopAll"]?.boolValue ?? true)
     }
+    // Absent means unchanged; null or [] empties it.
+    if let queued = frame["queuedMessages"] {
+      queuedMessages = (queued.arrayValue ?? []).compactMap(QueuedMessage.init).sorted { $0.position < $1.position }
+    }
     if let ids = frame["actionablePromptIds"]?.arrayValue {
       actionablePromptIds = Set(ids.compactMap(\.stringValue))
     }
@@ -499,6 +505,28 @@ public struct ChatTranscript: Sendable, Equatable {
   private mutating func rebuild() {
     // Journal order, never arrival or clock order.
     items = byId.values.sorted { ($0.sequence, $0.sequenceIndex, $0.id) < ($1.sequence, $1.sequenceIndex, $1.id) }
+  }
+}
+
+/// A message the host holds until the running turn ends, then sends on its own.
+public struct QueuedMessage: Sendable, Equatable, Identifiable {
+  public var id: String
+  public var position: Int
+  public var text: String
+  /// `waiting`, or `returned` when sending it failed and it waits for the person.
+  public var state: String
+  /// Sent to steer the running turn; held only until the turn takes it in.
+  public var steers: Bool
+
+  init?(_ json: JSONValue) {
+    guard let id = json["messageId"]?.stringValue else { return nil }
+    self.id = id
+    position = json["position"]?.intValue ?? 0
+    let body = json["body"]
+    let blocks = (body?["blocks"]?.arrayValue ?? []).compactMap { $0["text"]?.stringValue }
+    text = blocks.isEmpty ? (body?["text"]?.stringValue ?? "") : blocks.joined(separator: "\n\n")
+    state = json["state"]?.stringValue ?? "waiting"
+    steers = json["steers"]?.boolValue ?? false
   }
 }
 

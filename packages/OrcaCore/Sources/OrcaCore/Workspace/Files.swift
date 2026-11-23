@@ -181,6 +181,14 @@ extension HostAPI {
     return data
   }
 
+  /// Workspace files whose path matches `query`, for an @ mention (`files.searchPaths`).
+  public func searchPaths(worktreeId: String, query: String, limit: Int = 30) async throws -> [String] {
+    let result = try await connection.request(
+      "files.searchPaths",
+      ["worktree": .string("id:\(worktreeId)"), "query": .string(query), "limit": .number(Double(limit))])
+    return (result["files"]?.arrayValue ?? []).compactMap { $0["relativePath"]?.stringValue }
+  }
+
   public func statFile(worktreeId: String, path: String) async throws -> FileStat {
     let result = try await connection.request("files.stat", fileParams(worktreeId, path))
     return FileStat(

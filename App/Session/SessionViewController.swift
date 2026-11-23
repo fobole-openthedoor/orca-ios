@@ -146,6 +146,9 @@ final class SessionViewController: UIViewController {
         let chat = ChatViewController(model: model)
         chat.imageLoader = ChatImageLoader(api: session.api, worktreeId: worktreeId)
         chat.isBotChat = bot != nil
+        let api = session.api
+        let searchIn = worktreeId
+        chat.searchFiles = { query in (try? await api.searchPaths(worktreeId: searchIn, query: query)) ?? [] }
         let agentType: String? = { if case .agentSession(_, let agent) = tab?.kind { return agent } else { return nil } }()
         chat.onActivity = { [weak self] working, detail in
           guard let self, let worktree = self.session.worktree(id: self.worktreeId) else { return }

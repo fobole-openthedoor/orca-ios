@@ -144,7 +144,7 @@ final class ActivityRowView: UIView {
     // A running line swaps its icon for the spinner, in the same slot.
     if running { spinner.startAnimating() } else { spinner.stopAnimating() }
     icon.isHidden = running
-    chevron.isHidden = !opens || running
+    chevron.isHidden = !opens
     chevron.transform = expanded ? CGAffineTransform(rotationAngle: .pi / 2) : .identity
     accessibilityLabel = [text, extra].compactMap { $0 }.joined(separator: ", ")
     accessibilityTraits = opens ? .button : .staticText
@@ -177,7 +177,7 @@ final class ThoughtTextView: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  func show(_ text: String) { label.text = text }
+  func show(_ text: String) { label.text = text.trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 
 /// The files a turn changed (MobileNativeChatTurnDiffRollup): a count with its +/−, then a row per file

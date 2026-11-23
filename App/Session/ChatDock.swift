@@ -10,12 +10,15 @@ final class ChatDockView: UIView {
   /// A task was picked to look at: open the call that started it.
   var onOpen: ((BackgroundTask) -> Void)?
   var onGoal: ((ChatSessionModel.GoalChange) -> Void)?
+  enum QueuedAction { case send, edit, delete }
+  var onQueued: ((QueuedMessage, QueuedAction) -> Void)?
 
   private let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
   private let row = UIStackView()
   private var tasks: [BackgroundTask] = []
   private var stopsAll = false
   private var goal: ChatOptions.Goal?
+  private var queued: [QueuedMessage] = []
 
   init() {
     super.init(frame: .zero)
@@ -42,11 +45,12 @@ final class ChatDockView: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  func show(tasks: [BackgroundTask], stopsAll: Bool, goal: ChatOptions.Goal?) {
-    guard tasks != self.tasks || stopsAll != self.stopsAll || goal != self.goal else { return }
+  func show(tasks: [BackgroundTask], stopsAll: Bool, goal: ChatOptions.Goal?, queued: [QueuedMessage] = []) {
+    guard tasks != self.tasks || stopsAll != self.stopsAll || goal != self.goal || queued != self.queued else { return }
     self.tasks = tasks
     self.stopsAll = stopsAll
     self.goal = goal
+    self.queued = queued
     redraw()
   }
 
@@ -67,6 +71,11 @@ final class ChatDockView: UIView {
       guard !members.isEmpty else { continue }
       let title = String(format: Bundle.main.localizedString(forKey: group.key, value: "%lld", table: nil), members.count)
       segments.append(segment(icon: group.icon, title: title, menu: taskMenu(members)))
+    }
+    if !queued.isEmpty {
+      let title = String.localizedStringWithFormat(
+        String(localized: "chat.queuedMessages.queuedCount", defaultValue: "%lld queued"), queued.count)
+      segments.insert(segment(icon: .listEnd, title: title, menu: queuedMenu()), at: 0)
     }
     if let goal { segments.append(goalSegment(goal)) }
     for (index, segment) in segments.enumerated() {
@@ -142,6 +151,35 @@ final class ChatDockView: UIView {
           ]))
     }
     return UIMenu(children: children)
+  }
+
+  /// Each queued message as a submenu: send it now, take it back to edit, or delete it (confirmed).
+  private func queuedMenu() -> UIMenu {
+    UIMenu(children: queued.map { message in
+      let delete = String(localized: "chat.queuedMessages.deleteMessage", defaultValue: "Delete message")
+      let title = message.text.replacingOccurrences(of: "\n", with: " ")
+      let submenu = UIMenu(
+        title: title.isEmpty ? "…" : String(title.prefix(80)), image: Lucide.messageSquare.image(size: 18),
+        children: [
+          UIAction(
+            title: String(localized: "chat.composer.sendSteer", defaultValue: "Steer"), image: Lucide.send.image(size: 18)
+          ) { [weak self] _ in self?.onQueued?(message, .send) },
+          UIAction(
+            title: String(localized: "chat.queuedMessages.editMessage", defaultValue: "Edit message"),
+            image: Lucide.pencil.image(size: 18)
+          ) { [weak self] _ in self?.onQueued?(message, .edit) },
+          UIMenu(
+            title: delete, image: Lucide.trash2.image(size: 18), options: .destructive,
+            children: [
+              UIAction(title: delete, attributes: .destructive) { [weak self] _ in self?.onQueued?(message, .delete) }
+            ]),
+        ])
+      submenu.subtitle =
+        message.state == "returned"
+        ? String(localized: "chat.queuedMessages.pausedState", defaultValue: "Paused")
+        : String(localized: "chat.queuedMessages.queuedState", defaultValue: "Queued")
+      return submenu
+    })
   }
 
   private func goalSegment(_ goal: ChatOptions.Goal) -> UIButton {

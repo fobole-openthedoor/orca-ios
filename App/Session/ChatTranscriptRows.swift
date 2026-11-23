@@ -97,7 +97,11 @@ struct ChatProjection {
         if case .toolCall(let call) = item.body { return !ToolCategory.isAsk(call) }
         return true
       }
-      let answerIndex = items.lastIndex { Self.prose($0) != nil }
+      // A turn's answer is its last words that say something: a closing bare NO_REPLY (a bot with nothing
+      // more to add) yields to what it said before, and only stands when it said nothing else.
+      let answerIndex =
+        items.lastIndex { Self.prose($0).map { !BotQuietResult.strip($0).words.isEmpty } ?? false }
+        ?? items.lastIndex { Self.prose($0) != nil }
       let hasWork = items.indices.contains { $0 != answerIndex }
       var seconds = turn.seconds
       if seconds == nil, let first = items.first?.observedAt, let last = items.last?.observedAt, last > first {
@@ -178,7 +182,9 @@ struct ChatProjection {
           runKey = nil
           thoughtKey = nil
           filesKey = nil
-          if Self.prose(item) != nil {
+          if let words = Self.prose(item) {
+            // A bare NO_REPLY that isn't the turn's answer says nothing; it gets no row.
+            if position != answerIndex, BotQuietResult.strip(words).words.isEmpty, BotQuietResult.strip(words).quiet { continue }
             lines.append(.answer(id: item.id))
             if !live && position == answerIndex { finalAnswers.insert(item.id) }
           } else {
@@ -192,7 +198,18 @@ struct ChatProjection {
           lines.insert(contentsOf: group.items.dropFirst().map { ChatLine.thoughtText(id: $0.id) }, at: at + 1)
         }
       }
-      if live { lines.append(.working) }
+      // The running turn's last line spins; a thought or a call already spinning there says the same.
+      if live {
+        let tailSpins: Bool = {
+          guard let last = items.last else { return false }
+          switch last.body {
+          case .toolCall: return true
+          case .message(let message): return message.role == "reasoning"
+          default: return false
+          }
+        }()
+        if !tailSpins { lines.append(.working) }
+      }
     }
     // An opened run lists its calls under it.
     for (key, run) in runs where openRuns.contains(key) {

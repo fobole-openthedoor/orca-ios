@@ -156,6 +156,24 @@ public final class ChatSessionModel {
     }
   }
 
+  /// Sends a queued message now, or takes it out of the queue.
+  public func queuedMessage(_ id: String, send: Bool) async -> String? {
+    let mutation = AgentSessionMutation(
+      method: send ? "agentSession.queuedMessageSend" : "agentSession.queuedMessageDelete", sessionId: sessionId,
+      fields: ["messageId": .string(id)], expectedRuntimeFence: transcript.fence)
+    do {
+      switch try await api.perform(mutation) {
+      case .accepted(_, let fence, _):
+        transcript.noteFence(fence)
+        return nil
+      case .refused(let code, let message):
+        return message.isEmpty ? code : message
+      }
+    } catch {
+      return HostSession.describe(error)
+    }
+  }
+
   public enum GoalChange: Sendable {
     case pause, resume, clear
   }
@@ -214,7 +232,9 @@ public final class ChatSessionModel {
   }
 
   /// Sends a composed message, turning a leading `/clear` or `/compact` into the host's own command.
-  public func submit(text: String, attachments: [OutgoingAttachment]) async -> String? {
+  /// `queue`: while the agent works, hold it until the turn ends instead of steering into it
+  /// (`delivery: queue-if-active`, the send button's hold menu).
+  public func submit(text: String, attachments: [OutgoingAttachment], queue: Bool = false) async -> String? {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     if attachments.isEmpty, trimmed.hasPrefix("/") {
       let parts = trimmed.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
@@ -222,7 +242,7 @@ public final class ChatSessionModel {
         return await runConversationCommand(name, instructions: parts.count > 1 ? parts[1] : nil)
       }
     }
-    await send(text: text, attachments: attachments)
+    await send(text: text, attachments: attachments, queue: queue)
     return nil
   }
 
@@ -290,7 +310,7 @@ public final class ChatSessionModel {
   // MARK: Writes
 
   /// Sends a message. The bubble appears at once and follows the upload, the write and the journal.
-  public func send(text: String, attachments: [OutgoingAttachment]) async {
+  public func send(text: String, attachments: [OutgoingAttachment], queue: Bool = false) async {
     let operationId = AgentSessionMutation.newOperationId()
     let uploads = !attachments.isEmpty
     pending.append(PendingSend(id: operationId, text: text, attachments: attachments, state: uploads ? .uploading(progress: 0) : .sending))
@@ -326,23 +346,27 @@ public final class ChatSessionModel {
       return
     }
     update(operationId) { $0.state = .sending }
-    await write(operationId: operationId, body: body, retryOnStaleFence: true)
+    await write(operationId: operationId, body: body, queue: queue, retryOnStaleFence: true)
   }
 
-  private func write(operationId: String, body: JSONValue, retryOnStaleFence: Bool) async {
+  private func write(operationId: String, body: JSONValue, queue: Bool = false, retryOnStaleFence: Bool) async {
+    var fields: [String: JSONValue] = ["body": body]
+    if queue { fields["delivery"] = "queue-if-active" }
     let mutation = AgentSessionMutation(
-      method: "agentSession.send", sessionId: sessionId, fields: ["body": body],
+      method: "agentSession.send", sessionId: sessionId, fields: fields,
       expectedRuntimeFence: transcript.fence, clientOperationId: operationId)
     do {
       switch try await api.perform(mutation) {
-      case .accepted(_, let fence, _):
+      case .accepted(let value, let fence, _):
         transcript.noteFence(fence)
+        // Held for after the turn: it shows in the queue, not as a bubble.
+        if let queued = value["queued"], queued != .null { pending.removeAll { $0.id == operationId } }
         reconcilePending()
       case .refused(let code, let message):
         if code == "agent_session_checkpoint_stale", retryOnStaleFence {
           // The stream carries the new fence; give it a moment to land, then try once more.
           try? await Task.sleep(for: .milliseconds(400))
-          await write(operationId: operationId, body: body, retryOnStaleFence: false)
+          await write(operationId: operationId, body: body, queue: queue, retryOnStaleFence: false)
         } else {
           update(operationId) { $0.state = .failed(reason: message.isEmpty ? code : message) }
         }
