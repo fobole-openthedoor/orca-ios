@@ -167,6 +167,10 @@ final class ChatViewController: UIViewController {
         self.present(ContextUsageViewController.sheet(usage), animated: true)
       }, for: .touchUpInside)  // A bare UIControl never sends primaryActionTriggered.
     composer.onPickPhotos = { [weak self] in self?.pickPhotos() }
+    composer.onAttachMenu = { [weak self] choices in
+      guard let self else { return }
+      ChatAttachMenu(choices: choices).show(in: self.view, from: self.composer.attachAnchor, above: self.composer)
+    }
     composer.onTakePhoto = { [weak self] in self?.takePhoto() }
     composer.onPickFiles = { [weak self] in self?.pickFiles() }
     composer.onOpenImages = { [weak self] images, index in

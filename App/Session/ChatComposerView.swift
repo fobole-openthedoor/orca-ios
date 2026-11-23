@@ -100,10 +100,12 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     attach.configuration?.cornerStyle = .capsule
     attach.configuration?.contentInsets = .init(top: 10, leading: 10, bottom: 10, trailing: 10)
     attach.accessibilityLabel = String(localized: "chat.composer.addToMessage", defaultValue: "Add to message")
-    attach.showsMenuAsPrimaryAction = true
-    attach.menu = UIMenu(children: [
-      UIDeferredMenuElement.uncached { [weak self] completion in completion(self?.attachMenu() ?? []) }
-    ])
+    // Opens its own card over the composer (ChatGPT's), which a system menu would cover.
+    attach.addAction(UIAction { [weak self] _ in
+      guard let self else { return }
+      Haptics.select()
+      self.onAttachMenu?(self.attachChoices())
+    }, for: .primaryActionTriggered)
     textView.onPasteAttachments = { [weak self] providers in self?.take(providers) }
     textView.onPasteText = { [weak self] text in self?.add([AttachmentIntake.textFile(text)]) }
     addInteraction(UIDropInteraction(delegate: self))
@@ -566,32 +568,47 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     adding { await AttachmentIntake.load(providers) }
   }
 
-  private func attachMenu() -> [UIMenuElement] {
-    var items: [UIMenuElement] = [
-      UIAction(title: String(localized: "session.nativeChatAttachActions.photos", defaultValue: "Photos"), image: UIImage(systemName: "photo.on.rectangle")) {
-        [weak self] _ in self?.onPickPhotos?()
-      },
-      UIAction(title: String(localized: "session.nativeChatAttachActions.files", defaultValue: "Files"), image: UIImage(systemName: "folder")) {
-        [weak self] _ in self?.onPickFiles?()
-      },
-    ]
+  /// One row of the attach card.
+  struct AttachChoice {
+    let title: String
+    let image: UIImage?
+    let run: () -> Void
+  }
+
+  /// Shows the attach card with these rows; the chat places it over the composer.
+  var onAttachMenu: (([AttachChoice]) -> Void)?
+
+  /// Camera, Photos, Files, as ChatGPT lists them; Paste when the clipboard holds something to attach.
+  private func attachChoices() -> [AttachChoice] {
+    var rows: [AttachChoice] = []
     if UIImagePickerController.isSourceTypeAvailable(.camera) {
-      items.insert(
-        UIAction(title: String(localized: "orcaios.composer.camera", defaultValue: "Take Photo"), image: UIImage(systemName: "camera")) {
-          [weak self] _ in self?.onTakePhoto?()
-        }, at: 1)
+      rows.append(
+        AttachChoice(
+          title: String(localized: "orcaios.composer.camera", defaultValue: "Take Photo"), image: UIImage(systemName: "camera")
+        ) { [weak self] in self?.onTakePhoto?() })
     }
+    rows.append(
+      AttachChoice(
+        title: String(localized: "session.nativeChatAttachActions.photos", defaultValue: "Photos"),
+        image: UIImage(systemName: "photo.on.rectangle")
+      ) { [weak self] in self?.onPickPhotos?() })
+    rows.append(
+      AttachChoice(
+        title: String(localized: "session.nativeChatAttachActions.files", defaultValue: "Files"), image: UIImage(systemName: "paperclip")
+      ) { [weak self] in self?.onPickFiles?() })
     let pasteboard = UIPasteboard.general
     if pasteboard.hasImages || AttachmentIntake.canAttach(pasteboard.itemProviders) {
-      items.append(
-        UIMenu(options: .displayInline, children: [
-          UIAction(title: String(localized: "session.accessoryKeys.pasteFromClipboard", defaultValue: "Paste from clipboard"), image: UIImage(systemName: "doc.on.clipboard")) {
-            [weak self] _ in self?.take(UIPasteboard.general.itemProviders)
-          }
-        ]))
+      rows.append(
+        AttachChoice(
+          title: String(localized: "session.accessoryKeys.pasteFromClipboard", defaultValue: "Paste from clipboard"),
+          image: UIImage(systemName: "doc.on.clipboard")
+        ) { [weak self] in self?.take(UIPasteboard.general.itemProviders) })
     }
-    return items
+    return rows
   }
+
+  /// Where the attach card grows from.
+  var attachAnchor: UIView { attach }
 
   private func drawAttachments() {
     attachmentRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
