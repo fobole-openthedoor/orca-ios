@@ -102,16 +102,11 @@ final class AutomationsViewController: UIViewController {
     if session.connectionState == .connected, loadedFor != hostId { load() }
   }
 
-  /// New (nil) or existing; a save reloads the list.
+  /// New (nil) or existing, on the host's Automations page as the official + opens it; a save reloads the list.
   private func edit(_ automation: Automation?) {
     guard let hostId, let session = model.session(for: hostId) else { return }
     let editor = AutomationEditorViewController(session: session, automation: automation) { [weak self] in self?.load() }
-    if automation == nil {
-      let navigation = UINavigationController(rootViewController: editor)
-      present(navigation, animated: true)
-    } else {
-      navigationController?.pushViewController(editor, animated: true)
-    }
+    navigationController?.pushViewController(editor, animated: true)
   }
 
   private func load() {

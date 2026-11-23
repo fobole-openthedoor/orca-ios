@@ -57,34 +57,64 @@ public struct AutomationDetail: Sendable, Equatable {
   public var hostId: String?
   public var repoId: String?
   public var path: String?
+  public var baseBranch: String?
+  /// `inherit`, `run` or `skip`.
+  public var setupDecision: String
+  public var reuseSession: Bool
+  public var extraAgentArgs: String?
+  public var precheckCommand: String?
+  public var precheckTimeoutSeconds: Int?
+  public var missedRunGraceMinutes: Int?
 }
 
-/// What the editor saves: the fields the phone writes.
+/// What the editor saves: the fields the phone writes (automation-draft.ts AutomationDraft).
 public struct AutomationDraft: Sendable, Equatable {
   public var name: String
   public var prompt: String
   public var agentId: String
   public var rrule: String
   public var timezone: String
-  public var enabled: Bool
   public var setup: AutomationSetup?
   /// `new_per_run` or `existing`.
   public var workspaceMode: String
   public var workspaceId: String?
+  public var baseBranch = ""
+  /// `inherit`, `run` or `skip`.
+  public var setupDecision = "inherit"
+  public var reuseSession = false
+  public var extraAgentArgs = ""
+  public var precheckCommand = ""
+  /// Seconds, as typed.
+  public var precheckTimeout = "60"
+  /// Missed-run grace in minutes, as typed.
+  public var grace = "720"
 
   public init(
-    name: String, prompt: String, agentId: String, rrule: String, timezone: String, enabled: Bool,
-    setup: AutomationSetup?, workspaceMode: String, workspaceId: String?
+    name: String, prompt: String, agentId: String, rrule: String, timezone: String, setup: AutomationSetup?,
+    workspaceMode: String, workspaceId: String?
   ) {
     self.name = name
     self.prompt = prompt
     self.agentId = agentId
     self.rrule = rrule
     self.timezone = timezone
-    self.enabled = enabled
     self.setup = setup
     self.workspaceMode = workspaceMode
     self.workspaceId = workspaceId
+  }
+
+  /// Fills the run target and advanced fields from a saved automation.
+  public mutating func apply(_ detail: AutomationDetail) {
+    timezone = detail.timezone
+    workspaceMode = detail.workspaceMode
+    workspaceId = detail.workspaceId
+    baseBranch = detail.baseBranch ?? ""
+    setupDecision = detail.setupDecision
+    reuseSession = detail.reuseSession
+    extraAgentArgs = detail.extraAgentArgs ?? ""
+    precheckCommand = detail.precheckCommand ?? ""
+    precheckTimeout = String(detail.precheckTimeoutSeconds ?? 60)
+    grace = String(detail.missedRunGraceMinutes ?? 720)
   }
 }
 
@@ -159,7 +189,14 @@ extension HostAPI {
       setupId: context?["projectHostSetupId"]?.stringValue,
       hostId: context?["hostId"]?.stringValue,
       repoId: context?["repoId"]?.stringValue,
-      path: context?["path"]?.stringValue)
+      path: context?["path"]?.stringValue,
+      baseBranch: json["baseBranch"]?.stringValue,
+      setupDecision: json["setupDecision"]?.stringValue ?? "inherit",
+      reuseSession: json["reuseSession"]?.boolValue ?? false,
+      extraAgentArgs: json["extraAgentArgs"]?.stringValue,
+      precheckCommand: json["precheck"]?["command"]?.stringValue,
+      precheckTimeoutSeconds: json["precheck"]?["timeoutSeconds"]?.intValue,
+      missedRunGraceMinutes: json["missedRunGraceMinutes"]?.intValue)
   }
 
   /// Creates an automation and returns its id.
@@ -169,7 +206,10 @@ extension HostAPI {
     var params = editableFields(draft)
     for (key, value) in try target(draft, setup: setup, targets: targets) { params[key] = value }
     params["dtstart"] = .number((Date().timeIntervalSince1970 * 1000).rounded())
-    params["enabled"] = .bool(draft.enabled)
+    // A new automation starts on; the list's switch turns it off.
+    params["enabled"] = .bool(true)
+    // An unset base branch is left out of a create, not sent as null.
+    if draft.baseBranch.isEmpty { params["baseBranch"] = nil }
     params["creationKey"] = .string(UUID().uuidString.lowercased())
     let reply = try await connection.request("automation.create", .object(params))
     return reply["automation"]?["id"]?.stringValue
@@ -182,7 +222,6 @@ extension HostAPI {
     let fields = editableFields(draft)
     let before = editableFields(original)
     var updates = fields.filter { before[$0.key] != $0.value }
-    if draft.enabled != original.enabled { updates["enabled"] = .bool(draft.enabled) }
     var params: [String: JSONValue] = ["id": .string(automation.id)]
     if let owner = automation.expectedOwner { params["expectedOwner"] = owner }
     let moved =
@@ -212,12 +251,21 @@ extension HostAPI {
   }
 
   private func editableFields(_ draft: AutomationDraft) -> [String: JSONValue] {
-    [
+    let precheck = draft.precheckCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+    return [
       "name": .string(draft.name.trimmingCharacters(in: .whitespacesAndNewlines)),
       "prompt": .string(draft.prompt.trimmingCharacters(in: .whitespacesAndNewlines)),
       "agentId": .string(draft.agentId),
       "rrule": .string(draft.rrule),
       "timezone": .string(draft.timezone),
+      "baseBranch": draft.baseBranch.isEmpty ? .null : .string(draft.baseBranch),
+      "setupDecision": .string(draft.setupDecision),
+      "reuseSession": .bool(draft.workspaceMode == "existing" && draft.reuseSession),
+      "extraAgentArgs": .string(draft.extraAgentArgs),
+      "precheck": precheck.isEmpty
+        ? .null
+        : ["command": .string(draft.precheckCommand), "timeoutSeconds": .number(Double(Int(draft.precheckTimeout) ?? 60))],
+      "missedRunGraceMinutes": .number(Double(Int(draft.grace) ?? 720)),
     ]
   }
 

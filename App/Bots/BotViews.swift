@@ -50,6 +50,15 @@ final class BotAvatarView: UIView {
     letter.isHidden = true
   }
 
+  /// A name's first letter on the raised fill (bot-avatar-fallback.ts botInitial), for a bot from another app.
+  func show(initialOf name: String) {
+    backgroundColor = Palette.bgRaised
+    mascot.image = nil
+    rim.image = nil
+    letter.isHidden = false
+    letter.text = name.trimmingCharacters(in: .whitespaces).first.map { String($0).uppercased() } ?? "?"
+  }
+
   func show(_ bot: Bot) {
     if let id = bot.mascotId, let picture = Self.image("\(id)") {
       let color = bot.avatarColor.flatMap(Self.color) ?? Self.defaultColor

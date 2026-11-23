@@ -106,6 +106,8 @@ public struct BotImportSource: Sendable, Equatable {
     public var absolutePath: String
     /// The Orca bot an earlier import made from it.
     public var importedAs: String?
+    /// That bot's id, to update it instead of making a second one.
+    public var importedAsId: String?
   }
 
   public var app: String
@@ -124,7 +126,8 @@ extension HostAPI {
         guard let agent = bot["agent"]?.stringValue, let absolute = bot["absolutePath"]?.stringValue else { return nil }
         return .init(
           agent: agent, name: bot["name"]?.stringValue ?? agent, path: bot["path"]?.stringValue ?? absolute,
-          absolutePath: absolute, importedAs: bot["importedAs"]?["name"]?.stringValue)
+          absolutePath: absolute, importedAs: bot["importedAs"]?["name"]?.stringValue,
+          importedAsId: bot["importedAs"]?["botId"]?.stringValue)
       }
       return BotImportSource(app: app, bots: bots)
     }

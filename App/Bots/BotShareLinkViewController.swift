@@ -1,26 +1,33 @@
 import OrcaCore
 import UIKit
 
-/// New bot › From a link (bots/sharing/MobileBotSharePasteLink.tsx): paste a link someone shared, then
-/// review what the bot comes with before making it.
-final class BotShareLinkViewController: UITableViewController {
+/// New bot › From a link (bots/sharing/MobileBotSharePasteLink.tsx): a short sheet with the line that says what
+/// to do, then the link field, whose Paste reads the clipboard only when tapped. Continue waits until the text
+/// reads as a bot link, then reviews what the bot comes with before making it.
+final class BotShareLinkViewController: UIViewController {
   private let session: HostSession
   private let agent: String
   private let onCreated: (Bot) -> Void
-  private let field = UITextField()
+  private let field = OutlinedField(monospace: true)
+  private let pasteButton = UIButton(type: .system)
+  private let errorLabel = TextLabel(size: 13, color: Palette.statusRed, lines: 0)
   private var reading = false
+
+  /// The sheet fits the page while it shows, as the official drawer does, and grows back for what follows.
+  private static let detent = UISheetPresentationController.Detent.custom(identifier: .init("orca.botLink")) { _ in 170 }
 
   init(session: HostSession, agent: String, onCreated: @escaping (Bot) -> Void) {
     self.session = session
     self.agent = agent
     self.onCreated = onCreated
-    super.init(style: .insetGrouped)
+    super.init(nibName: nil, bundle: nil)
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
   override func viewDidLoad() {
     super.viewDidLoad()
+    view.backgroundColor = .systemGroupedBackground
     title = String(localized: "bots.share.receive.fromLink", defaultValue: "From a link")
     navigationItem.largeTitleDisplayMode = .never
     let next = UIBarButtonItem(
@@ -28,28 +35,76 @@ final class BotShareLinkViewController: UITableViewController {
       target: nil, action: nil)
     next.primaryAction = UIAction(title: next.title ?? "") { [weak self] _ in self?.review() }
     navigationItem.rightBarButtonItem = next
+
+    let description = TextLabel(
+      String(localized: "bots.share.receive.pasteDescription", defaultValue: "Paste a link someone shared."), size: 14,
+      color: Palette.textSecondary, lines: 0)
     field.placeholder = String(localized: "bots.share.receive.linkPlaceholder", defaultValue: "https://app.orca.dev/bots/share/…")
-    field.accessibilityLabel = String(localized: "bots.share.receive.link", defaultValue: "Link")
-    field.autocapitalizationType = .none
-    field.autocorrectionType = .no
-    field.keyboardType = .URL
-    field.clearButtonMode = .whileEditing
-    field.returnKeyType = .go
-    field.addAction(UIAction { [weak self] _ in self?.update() }, for: .editingChanged)
-    field.addAction(UIAction { [weak self] _ in self?.review() }, for: .editingDidEndOnExit)
-    tableView.register(UITableViewCell.self, forCellReuseIdentifier: "row")
+    field.textField.accessibilityLabel = String(localized: "bots.share.receive.link", defaultValue: "Link")
+    field.textField.keyboardType = .URL
+    field.textField.returnKeyType = .go
+    field.onChange = { [weak self] _ in self?.update() }
+    field.onReturn = { [weak self] in self?.review() }
+    var paste = UIButton.Configuration.plain()
+    paste.attributedTitle = AttributedString(
+      String(localized: "bots.share.receive.paste", defaultValue: "Paste"),
+      attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 15), .foregroundColor: Palette.textSecondary]))
+    paste.contentInsets = .init(top: 6, leading: Spacing.sm, bottom: 6, trailing: 0)
+    pasteButton.configuration = paste
+    pasteButton.setContentHuggingPriority(.required, for: .horizontal)
+    pasteButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+    pasteButton.addAction(
+      UIAction { [weak self] _ in
+        guard let self, let text = UIPasteboard.general.string else { return }
+        self.field.text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.update()
+      }, for: .primaryActionTriggered)
+    field.trailing = pasteButton
+    errorLabel.isHidden = true
+
+    let stack = UIStackView(arrangedSubviews: [description, field, errorLabel])
+    stack.axis = .vertical
+    stack.spacing = Spacing.sm
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(stack)
+    NSLayoutConstraint.activate([
+      stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: Spacing.xs),
+      stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Spacing.lg),
+      stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Spacing.lg),
+    ])
     update()
+  }
+
+  override func viewWillAppear(_ animated: Bool) {
+    super.viewWillAppear(animated)
+    resizeSheet(to: [Self.detent])
   }
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
-    field.becomeFirstResponder()
+    field.textField.becomeFirstResponder()
   }
 
-  private var shareId: String? { BotShareReview.shareId(in: field.text ?? "") }
+  override func viewWillDisappear(_ animated: Bool) {
+    super.viewWillDisappear(animated)
+    resizeSheet(to: [.large()])
+  }
+
+  private func resizeSheet(to detents: [UISheetPresentationController.Detent]) {
+    guard let sheet = navigationController?.sheetPresentationController else { return }
+    sheet.animateChanges {
+      sheet.detents = detents
+      sheet.selectedDetentIdentifier = detents.first?.identifier
+    }
+  }
+
+  private var shareId: String? { BotShareReview.shareId(in: field.text) }
 
   private func update() {
     navigationItem.rightBarButtonItem?.isEnabled = shareId != nil && !reading
+    // Paste shows while the field is empty.
+    pasteButton.isHidden = !field.text.isEmpty
+    errorLabel.isHidden = true
   }
 
   private func review() {
@@ -60,50 +115,28 @@ final class BotShareLinkViewController: UITableViewController {
     Task {
       defer {
         reading = false
-        update()
+        navigationItem.rightBarButtonItem?.isEnabled = self.shareId != nil
       }
       do {
         guard let review = try await api.botShareReview(shareId: shareId) else {
           return say(
-            String(localized: "bots.share.receive.stopped", defaultValue: "This link no longer works"),
-            String(localized: "bots.share.receive.stoppedDetail", defaultValue: "Ask the sharer for a new one"))
+            String(localized: "bots.share.receive.stopped", defaultValue: "This link no longer works") + "\n"
+              + String(localized: "bots.share.receive.stoppedDetail", defaultValue: "Ask whoever shared it for a new one."))
         }
         navigationController?.pushViewController(
           BotShareReviewViewController(session: session, agent: agent, review: review, onCreated: onCreated),
           animated: true)
       } catch {
-        say(nil, (error as? RPCError)?.message ?? error.localizedDescription)
+        say((error as? RPCError)?.message ?? error.localizedDescription)
       }
     }
   }
 
-  private func say(_ title: String?, _ message: String) {
-    let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-    alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
-    present(alert, animated: true)
-  }
-
-  override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }
-
-  override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-    String(localized: "bots.share.receive.pasteDescription", defaultValue: "Paste a link someone shared.")
-  }
-
-  override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-    let cell = tableView.dequeueReusableCell(withIdentifier: "row", for: indexPath)
-    cell.selectionStyle = .none
-    if field.superview !== cell.contentView {
-      field.translatesAutoresizingMaskIntoConstraints = false
-      cell.contentView.addSubview(field)
-      NSLayoutConstraint.activate([
-        field.leadingAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.leadingAnchor),
-        field.trailingAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.trailingAnchor),
-        field.topAnchor.constraint(equalTo: cell.contentView.topAnchor),
-        field.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor),
-        field.heightAnchor.constraint(equalToConstant: 52),
-      ])
-    }
-    return cell
+  /// The error under the field, in red, as the official page shows it.
+  private func say(_ message: String) {
+    UINotificationFeedbackGenerator().notificationOccurred(.error)
+    errorLabel.text = message
+    errorLabel.isHidden = false
   }
 }
 

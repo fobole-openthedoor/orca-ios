@@ -4,13 +4,13 @@ import UIKit
 /// New bot (bots/MobileNewBotSheet.tsx): a mascot to shuffle, a name, and the agent it runs. Create makes it
 /// on this desktop and opens its Home Chat, where the bot speaks first.
 final class NewBotViewController: UITableViewController {
-  private struct Agent {
+  struct Agent {
     let id: String
     let title: String
     let mark: FilledIcon
   }
 
-  private static let agents = [
+  static let agents = [
     Agent(id: "claude", title: "Claude Code", mark: AgentMark.claude),
     Agent(id: "codex", title: "Codex", mark: AgentMark.codex),
   ]
@@ -22,9 +22,8 @@ final class NewBotViewController: UITableViewController {
   /// The template this bot starts from: its purpose seeds the bot's SOUL.md.
   private var template: BotTemplate?
   private var mascotHeader: UIView?
-  /// A bot from another app to bring over; its first turn imports it instead of the usual setup.
-  private var importFrom: [String: JSONValue]?
-  private var importedName: String?
+  /// What other apps keep on this desktop; Import from another app shows once the desktop answered.
+  private var importRead = BotImportViewController.Read.loading
   private let avatar = BotAvatarView(size: 72)
   private let nameField = UITextField()
   private var creating = false
@@ -62,6 +61,12 @@ final class NewBotViewController: UITableViewController {
     tableView.register(UITableViewCell.self, forCellReuseIdentifier: "row")
     mascotHeader = makeHeader()
     tableView.keyboardDismissMode = .interactive
+    // Only a desktop that lists other apps' bots takes `importFrom`; an older one drops it.
+    Task {
+      let sources = try? await session.api.botImportSources()
+      importRead = sources.map { .ready($0) } ?? .failed
+      tableView.reloadSections([0], with: .none)
+    }
 
     nameField.placeholder = String(localized: "bots.new.namePlaceholder", defaultValue: "Name your bot")
     nameField.font = .systemFont(ofSize: 17)
@@ -152,7 +157,6 @@ final class NewBotViewController: UITableViewController {
   /// What a template adds to the create (bot-proposal.ts proposalCreateParams). A host without template
   /// packages takes the seed alone, and a newer template's id only from a host that knows it.
   private var templateFields: [String: JSONValue] {
-    if let importFrom { return ["importFrom": .object(importFrom)] }
     guard let template else { return [:] }
     let packages = session.status?.supports("bots.templates.v2") ?? false
     var seed: [String: JSONValue] = [
@@ -169,8 +173,6 @@ final class NewBotViewController: UITableViewController {
 
   private func use(_ picked: BotTemplate?) {
     template = picked
-    importFrom = nil
-    importedName = nil
     if let picked {
       nameField.text = picked.shownName
       mascotId = picked.mascot
@@ -188,19 +190,32 @@ final class NewBotViewController: UITableViewController {
 
   // MARK: Table
 
-  // Use template, then the name, then the agent.
+  // Use template, Import from another app and From a link, then the name, then the agent.
   override func numberOfSections(in tableView: UITableView) -> Int { 3 }
 
-  override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { section == 0 ? 3 : 1 }
+  private enum StartRow { case template, importing, link }
 
-  private func bringOver(name: String, from: [String: JSONValue]) {
-    template = nil
-    importFrom = from
-    importedName = name
-    if self.name.isEmpty { nameField.text = name }
-    navigationItem.subtitle = String(format: String(localized: "bots.new.runsOnHost", defaultValue: "Runs on %@."), session.name)
-    updateCreate()
-    tableView.reloadData()
+  private var startRows: [StartRow] {
+    if case .ready = importRead { return [.template, .importing, .link] }
+    return [.template, .link]
+  }
+
+  override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+    section == 0 ? startRows.count : 1
+  }
+
+  /// "We found a bot in OpenClaw." (bot-import.ts botImportNudge): OpenClaw's, else Hermes'.
+  private var importNudge: String? {
+    guard case .ready(let sources) = importRead else { return nil }
+    for app in ["openclaw", "hermes"] {
+      let count = sources.first { $0.app == app }?.bots.count ?? 0
+      guard count > 0, let label = BotImportSource.appNames[app] else { continue }
+      return count == 1
+        ? String(format: String(localized: "bots.import.nudgeOne", defaultValue: "We found a bot in %@."), label)
+        : String(
+          format: String(localized: "bots.import.nudgeMany", defaultValue: "We found %1$lld bots in %2$@."), count, label)
+    }
+    return nil
   }
 
 
@@ -216,15 +231,17 @@ final class NewBotViewController: UITableViewController {
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
     Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
-    guard indexPath.section == 0 else { return }
-    if indexPath.row == 0 {
+    guard indexPath.section == 0, !creating else { return }
+    switch startRows[indexPath.row] {
+    case .template:
       navigationController?.pushViewController(BotTemplatesViewController { [weak self] in self?.use($0) }, animated: true)
-    } else if indexPath.row == 2 {
+    case .link:
       navigationController?.pushViewController(
         BotShareLinkViewController(session: session, agent: agent.id, onCreated: onCreated), animated: true)
-    } else {
+    case .importing:
       navigationController?.pushViewController(
-        BotImportViewController(session: session) { [weak self] name, from in self?.bringOver(name: name, from: from) },
+        BotImportViewController(
+          session: session, read: importRead, mascotId: mascotId, agent: agent, onCreated: onCreated),
         animated: true)
     }
   }
@@ -235,13 +252,16 @@ final class NewBotViewController: UITableViewController {
     cell.accessoryType = .none
     if indexPath.section == 0 {
       var content = UIListContentConfiguration.valueCell()
-      if indexPath.row == 0 {
+      switch startRows[indexPath.row] {
+      case .template:
         content.text = String(localized: "bots.new.fromTemplate", defaultValue: "Use template")
         content.secondaryText = template?.shownName
-      } else if indexPath.row == 1 {
+      case .importing:
+        content = UIListContentConfiguration.subtitleCell()
         content.text = String(localized: "bots.import.title", defaultValue: "Import from another app")
-        content.secondaryText = importedName
-      } else {
+        content.secondaryText = importNudge
+        content.secondaryTextProperties.color = Palette.textSecondary
+      case .link:
         content = UIListContentConfiguration.subtitleCell()
         content.text = String(localized: "bots.share.receive.fromLink", defaultValue: "From a link")
         content.secondaryText = String(localized: "bots.share.receive.pasteDescription", defaultValue: "Paste a link someone shared.")
