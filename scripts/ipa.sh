@@ -9,10 +9,16 @@ out="${1:-$root/.build/Orca-unsigned.ipa}"
 derived="$root/.build/DerivedData-release"
 cd "$root"
 xcodegen --quiet
-xcodebuild -project Orca.xcodeproj -scheme Orca -configuration Release -destination 'generic/platform=iOS' \
-  -derivedDataPath "$derived" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build 2>&1 \
-  | grep -E "^/.*error: |BUILD (SUCCEEDED|FAILED)" | sort -u
+log="$(mktemp)"
+if ! xcodebuild -project Orca.xcodeproj -scheme Orca -configuration Release -destination 'generic/platform=iOS' \
+  -derivedDataPath "$derived" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build > "$log" 2>&1; then
+  grep -E "error: |BUILD FAILED" "$log" | sort -u
+  exit 1
+fi
+rm -f "$log"
 app="$derived/Build/Products/Release-iphoneos/Orca.app"
+# A failed build can still leave a bundle with resources in it; only a bundle with the app in it ships.
+[ -x "$app/Orca" ] || { echo "no executable in $app" >&2; exit 1; }
 stage="$(mktemp -d)"
 mkdir -p "$stage/Payload"
 cp -R "$app" "$stage/Payload/"
