@@ -25,10 +25,12 @@ final class TroubleshootingViewController: SettingsPageViewController {
   private var checks: [Check] = []
   private var expanded: String?
   private var run: Task<Void, Never>?
+  private let runCell = RunDiagnosticsCell()
 
   override func viewDidLoad() {
     super.viewDidLoad()
     title = String(localized: "diagnostics.troubleshootView.title", defaultValue: "Troubleshooting")
+    runCell.onRun = { [weak self] in self?.runDiagnostics() }
     rebuild()
   }
 
@@ -44,13 +46,8 @@ final class TroubleshootingViewController: SettingsPageViewController {
       case .running: String(localized: "diagnostics.troubleshootView.running", defaultValue: "Running…")
       case .done: String(localized: "diagnostics.troubleshootView.runAgain", defaultValue: "Run again")
       }
-    var sections = [
-      Section(rows: [
-        state == .running
-          ? .spinner(runTitle)
-          : .value(icon: .activity, title: runTitle) { [weak self] in self?.runDiagnostics() }
-      ])
-    ]
+    runCell.show(title: runTitle, running: state == .running)
+    var sections = [Section(rows: [.custom(runCell)])]
     if !checks.isEmpty {
       sections.append(
         Section(
@@ -58,7 +55,7 @@ final class TroubleshootingViewController: SettingsPageViewController {
             let (icon, color): (Lucide, UIColor) =
               switch check.status {
               case .pass: (.circleCheck, Palette.statusGreen)
-              case .warn: (.triangleAlert, Palette.statusAmber)
+              case .warn: (.triangleAlert, Palette.textMuted)
               case .fail: (.circleX, Palette.statusRed)
               }
             return .status(
@@ -373,5 +370,47 @@ final class TroubleshootingViewController: SettingsPageViewController {
         ]),
     ]
     return issues
+  }
+}
+
+/// The official "Run diagnostics" button: centred on the raised fill, the Activity icon or a spinner before
+/// its label, faded while it runs.
+private final class RunDiagnosticsCell: UITableViewCell {
+  var onRun: (() -> Void)?
+  private let button = UIButton(type: .system)
+
+  init() {
+    super.init(style: .default, reuseIdentifier: nil)
+    backgroundColor = Palette.bgRaised
+    selectionStyle = .none
+    var configuration = UIButton.Configuration.plain()
+    configuration.image = Lucide.activity.image(size: 16).withRenderingMode(.alwaysTemplate)
+    configuration.imagePadding = Spacing.sm
+    configuration.baseForegroundColor = Palette.textPrimary
+    configuration.contentInsets = NSDirectionalEdgeInsets(top: Spacing.md, leading: Spacing.lg, bottom: Spacing.md, trailing: Spacing.lg)
+    button.configuration = configuration
+    button.addAction(UIAction { [weak self] _ in self?.onRun?() }, for: .primaryActionTriggered)
+    button.translatesAutoresizingMaskIntoConstraints = false
+    contentView.addSubview(button)
+    NSLayoutConstraint.activate([
+      button.topAnchor.constraint(equalTo: contentView.topAnchor),
+      button.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+      button.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+      button.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+    ])
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  func show(title: String, running: Bool) {
+    guard var configuration = button.configuration else { return }
+    configuration.attributedTitle = AttributedString(
+      title, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: Typography.bodySize, weight: .semibold)]))
+    configuration.showsActivityIndicator = running
+    button.configuration = configuration
+    // Not disabled: a disabled button greys its label, and the official one only fades.
+    button.isUserInteractionEnabled = !running
+    contentView.alpha = running ? Feedback.disabledOpacity : 1
+    button.accessibilityTraits = running ? [.button, .notEnabled] : .button
   }
 }

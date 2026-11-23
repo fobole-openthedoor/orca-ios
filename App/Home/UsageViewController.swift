@@ -17,6 +17,9 @@ final class UsageViewController: UIViewController {
 
   override func viewDidLoad() {
     super.viewDidLoad()
+    NotificationCenter.default.addObserver(forName: UsagePercentageDisplay.changed, object: nil, queue: .main) { [weak self] _ in
+      MainActor.assumeIsolated { self?.render() }
+    }
     title = HomeTab.usage.title
     view.backgroundColor = Palette.bgBase
     navigationItem.largeTitleDisplayMode = .always
@@ -279,7 +282,9 @@ private final class UsageBarRow: UIView {
     let used = min(100, max(0, window.usedPercent.rounded()))
     fill.backgroundColor = used >= 80 ? Palette.statusRed : used >= 60 ? Palette.statusAmber : Palette.statusGreen
     track.addSubview(fill)
-    let percent = TextLabel("\(Int(window.usedPercent.rounded()))%", size: 15, alignment: .right, tabular: true)
+    // Used or left, as Settings › Appearance says; the colour always follows what is used.
+    let shown = UsagePercentageDisplay.current == .used ? Int(used) : 100 - Int(used)
+    let percent = TextLabel("\(shown)%", size: 15, alignment: .right, tabular: true)
     let reset = TextLabel(Self.resetText(window), size: 14, color: Palette.textMuted)
     for view in [name, track, percent, reset] as [UIView] { addSubview(view) }
     NSLayoutConstraint.activate([

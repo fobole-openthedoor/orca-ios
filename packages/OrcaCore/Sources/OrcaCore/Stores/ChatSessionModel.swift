@@ -73,7 +73,20 @@ public final class ChatSessionModel {
 
   /// The transcript rows worth drawing, then the sends still in flight.
   public var rows: [ChatRow] {
-    transcript.items.filter(Self.isDrawable).map(ChatRow.item) + pending.map(ChatRow.pending)
+    // A subagent's rows share the session's journal; the chat draws only its own agent's, and a subagent's
+    // work is read from its task in the dock (`subagentItems`).
+    transcript.items.filter { $0.agentId == nil && Self.isDrawable($0) }.map(ChatRow.item) + pending.map(ChatRow.pending)
+  }
+
+  /// What one subagent wrote and ran, in order.
+  public func subagentItems(_ agentId: String) -> [TranscriptItem] {
+    transcript.items.filter { $0.agentId == agentId && Self.isDrawable($0) }
+  }
+
+  /// The subagents with rows in the loaded journal.
+  public var subagentIds: [String] {
+    var seen = Set<String>()
+    return transcript.items.compactMap(\.agentId).filter { seen.insert($0).inserted }
   }
 
   public var isWorking: Bool {

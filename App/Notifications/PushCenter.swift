@@ -18,30 +18,57 @@ private let log = Logger(subsystem: "com.thm.orcaios", category: "push")
 final class PushCenter: NSObject {
   static let shared = PushCenter()
 
-  /// The user's choices, kept on this phone and sent with every registration.
+  /// The user's choices, kept on this phone and sent with every registration. A missing value takes the
+  /// official default (notification-delivery-preferences.ts): only when away, with sound, every alert type.
   struct Settings: Equatable {
     var enabled = true
-    var filter = PushFilter()
+    var filter = PushFilter(onlyWhenDesktopAway: true, onlyWhenAgentNeedsInput: false, sound: true)
+    /// Skip a foreground alert for the workspace on screen. Only this phone reads it; desktops never see it.
+    var suppressWhileViewing = true
 
     private static let defaults = UserDefaults.standard
 
     @MainActor static var current: Settings {
       get {
         var settings = Settings()
-        if defaults.object(forKey: "orca.push.enabled") != nil { settings.enabled = defaults.bool(forKey: "orca.push.enabled") }
-        settings.filter.onlyWhenDesktopAway = defaults.bool(forKey: "orca.push.onlyAway")
-        settings.filter.onlyWhenAgentNeedsInput = defaults.bool(forKey: "orca.push.onlyNeedsInput")
-        if defaults.object(forKey: "orca.push.sound") != nil { settings.filter.sound = defaults.bool(forKey: "orca.push.sound") }
+        func read(_ key: String, into value: inout Bool) {
+          if defaults.object(forKey: key) != nil { value = defaults.bool(forKey: key) }
+        }
+        read("orca.push.enabled", into: &settings.enabled)
+        read("orca.push.onlyAway", into: &settings.filter.onlyWhenDesktopAway)
+        read("orca.push.onlyNeedsInput", into: &settings.filter.onlyWhenAgentNeedsInput)
+        read("orca.push.sound", into: &settings.filter.sound)
+        read("orca.push.suppressWhileViewing", into: &settings.suppressWhileViewing)
         return settings
       }
       set {
+        let old = current
         defaults.set(newValue.enabled, forKey: "orca.push.enabled")
         defaults.set(newValue.filter.onlyWhenDesktopAway, forKey: "orca.push.onlyAway")
         defaults.set(newValue.filter.onlyWhenAgentNeedsInput, forKey: "orca.push.onlyNeedsInput")
         defaults.set(newValue.filter.sound, forKey: "orca.push.sound")
-        PushCenter.shared.settingsChanged()
+        defaults.set(newValue.suppressWhileViewing, forKey: "orca.push.suppressWhileViewing")
+        // The suppress switch stays on this phone, so changing only it re-registers nowhere.
+        if old.enabled != newValue.enabled || old.filter != newValue.filter { PushCenter.shared.settingsChanged() }
       }
     }
+  }
+
+  /// The workspace on screen, for "Suppress while focused" (notification-viewing-policy.ts). The session
+  /// screen sets it when it appears and clears it (nil) when it goes: `hostKey` is the paired host's id as
+  /// the push names it (`PairedHost.ID.uuidString`), `executionHost` the route's server, nil for the
+  /// desktop's own workspaces.
+  static var viewing: (hostKey: String, worktreeId: String, executionHost: String?)?
+
+  /// Whether a push that arrives while Orca is open is about the workspace being looked at, and the user
+  /// asked not to be told about that one.
+  static func suppressesWhileViewing(_ userInfo: [AnyHashable: Any]) -> Bool {
+    guard Settings.current.suppressWhileViewing, UIApplication.shared.applicationState == .active,
+      let viewing, let orca = userInfo["orca"] as? [String: Any],
+      let host = orca["host"] as? String, host.caseInsensitiveCompare(viewing.hostKey) == .orderedSame,
+      let worktreeId = orca["worktreeId"] as? String, worktreeId == viewing.worktreeId
+    else { return false }
+    return orca["executionHost"] as? String == viewing.executionHost
   }
 
   private var model: AppModel?
@@ -223,7 +250,11 @@ extension PushCenter: UNUserNotificationCenterDelegate {
   nonisolated func userNotificationCenter(
     _ center: UNUserNotificationCenter, willPresent notification: UNNotification
   ) async -> UNNotificationPresentationOptions {
-    [.banner, .list, .sound]
+    let userInfo = notification.request.content.userInfo
+    // userInfo is a plain property list; it is only read on the main actor to compare against the screen.
+    nonisolated(unsafe) let info = userInfo
+    let suppress = await MainActor.run { PushCenter.suppressesWhileViewing(info) }
+    return suppress ? [] : [.banner, .list, .sound]
   }
 
   /// A tapped notification opens the workspace it is about.

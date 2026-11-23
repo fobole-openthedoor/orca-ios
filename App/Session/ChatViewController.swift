@@ -18,7 +18,10 @@ final class ChatViewController: UIViewController {
   /// Workspace files matching a query, for @ mentions.
   var searchFiles: ((String) async -> [String])?
   private let toBottom = UIButton(configuration: .glass())
-  private var projection = ChatProjection(rows: [], expanded: [], transcript: ChatTranscript())
+  private var projection = ChatProjection(rows: [], expanded: [], transcript: ChatTranscript()) {
+    didSet { lineIndex = Dictionary(projection.lines.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first }) }
+  }
+  private var lineIndex: [ChatLine: Int] = [:]
   private var expanded: Set<String> = []
   private var openThoughts: Set<String> = []
   /// Activity lines opened to their calls, and calls opened to their input and output.
@@ -408,7 +411,12 @@ final class ChatViewController: UIViewController {
         match = backgroundTaskCall(task)
       }
       let sheet: UIViewController
-      if let (id, call) = match {
+      // A subagent's own words and calls, when the journal carries them under its id.
+      let own = task.kind == "agent" ? model.subagentItems(task.id) : []
+      if !own.isEmpty, var call = match?.1 ?? Optional(Self.placeholderCall(for: task)) {
+        call.output = Self.transcriptText(own)
+        sheet = ToolOutputViewController.sheet(call: call, load: nil)
+      } else if let (id, call) = match {
         let model = self.model
         sheet = ToolOutputViewController.sheet(call: call) {
           guard let full = await model.fullItem(id), case .toolCall(let whole) = full.body else { return nil }
@@ -437,6 +445,20 @@ final class ChatViewController: UIViewController {
       }
     }
     return nil
+  }
+
+  /// A subagent's rows as plain text: its words, its calls with their arguments, its thoughts marked.
+  private static func transcriptText(_ items: [TranscriptItem]) -> String {
+    items.compactMap { item -> String? in
+      switch item.body {
+      case .message(let message) where message.role == "reasoning": return "› " + message.text
+      case .message(let message): return message.text
+      case .toolCall(let call):
+        let head = "$ \(call.name) \(call.summary)"
+        return [head, call.output].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+      default: return nil
+      }
+    }.joined(separator: "\n\n")
   }
 
   /// What the strip knows of a task whose starting call is out of reach: its label, kind and running time.
@@ -503,6 +525,25 @@ final class ChatViewController: UIViewController {
 
   @objc private func saveDraft() {
     ChatDraftStore.save(model.sessionId, text: composer.draftText, attachments: composer.attachments)
+  }
+
+  /// Whether a line sits on the turn's activity thread: calls, thoughts, notes, questions and the working
+  /// line do; the person's words, the agent's words and cards break it.
+  private static func onThread(_ line: ChatLine?) -> Bool {
+    switch line {
+    case .run, .thoughts, .thoughtText, .call, .prompt, .workItem, .working: true
+    default: false
+    }
+  }
+
+  /// Which neighbours a line joins on the thread.
+  private func threadJoins(_ line: ChatLine) -> (up: Bool, down: Bool) {
+    guard let index = lineIndex[line] else { return (false, false) }
+    let lines = projection.lines
+    return (
+      index > 0 && Self.onThread(lines[index - 1]),
+      index + 1 < lines.count && Self.onThread(lines[index + 1])
+    )
   }
 
   private func imageSources(_ paths: [String]) -> [ImageViewerController.Source] {
@@ -648,6 +689,8 @@ final class ChatViewController: UIViewController {
     let workItem = registration(WorkItemView.init) { [weak self] view, line in
       guard let self, case .workItem(let id) = line, let item = self.projection.items[id] else { return }
       view.show(item)
+      let joins = self.threadJoins(line)
+      view.connect(up: joins.up, down: joins.down)
     }
     let answer = registration(AnswerView.init) { [weak self] view, line in
       guard let self, case .answer(let id) = line, let item = self.projection.items[id],
@@ -674,6 +717,8 @@ final class ChatViewController: UIViewController {
     }
     let activity = registration(ActivityRowView.init) { [weak self] view, line in
       guard let self else { return }
+      let joins = self.threadJoins(line)
+      view.connect(up: joins.up, down: joins.down)
       switch line {
       case .run(let key):
         guard let run = self.projection.runs[key] else { return }

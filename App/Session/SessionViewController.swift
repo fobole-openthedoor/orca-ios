@@ -199,6 +199,9 @@ final class SessionViewController: UIViewController {
         api: session.api, handle: handle,
         sendsQueryReplies: session.status?.supports(HostCapability.terminalQueryReply) ?? false,
         colors: tab?.terminalColors)
+    case .markdown(let path), .file(let path, _):
+      // A note or file tab reads as its preview: Markdown rendered, code highlighted.
+      next = FilePreviewViewController(session: session, worktreeId: worktreeId, path: path)
     case nil where tabsLoaded:
       let api = session.api
       let selector = selector
@@ -329,6 +332,14 @@ final class SessionViewController: UIViewController {
         UIAction(title: "Codex", image: AgentMark.codex.image(size: 18)) { [weak self] _ in
           self?.run { try await api.createChat(agent: "codex", worktree: selector) }
         },
+        UIMenu(
+          options: .displayInline,
+          children: [
+            UIAction(
+              title: String(localized: "session.sheets.markdownNote", defaultValue: "Markdown Note"),
+              image: Lucide.fileText.image(size: 18)
+            ) { [weak self] _ in self?.run { try await api.createMarkdownNote(worktree: selector) } },
+          ]),
       ])
   }
 
@@ -353,6 +364,18 @@ final class SessionViewController: UIViewController {
         present(alert, animated: true)
       }
     }
+  }
+
+  // While this workspace is on screen, its own pushes don't alert (Settings › Notifications › Suppress while
+  // focused).
+  override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    PushCenter.viewing = (hostKey: session.host.id.uuidString, worktreeId: worktreeId, executionHost: nil)
+  }
+
+  override func viewWillDisappear(_ animated: Bool) {
+    super.viewWillDisappear(animated)
+    if PushCenter.viewing?.worktreeId == worktreeId { PushCenter.viewing = nil }
   }
 
   /// Text size for what is on screen: the terminal's font in a terminal tab, the chat's text otherwise.
@@ -404,7 +427,7 @@ private final class UnsupportedTabViewController: UIViewController {
     let label = TextLabel(
       sessionTab == nil
         ? String(localized: "session.openingWorkspace", defaultValue: "Opening workspace")
-        : String(localized: "session.tabUnsupported", defaultValue: "This tab can't be opened on the phone yet"),
+        : String(localized: "orcaios.session.tabUnsupported", defaultValue: "This tab can't be opened on the phone yet"),
       size: Typography.bodySize, color: Palette.textSecondary, alignment: .center, lines: 0)
     view.addSubview(label)
     NSLayoutConstraint.activate([

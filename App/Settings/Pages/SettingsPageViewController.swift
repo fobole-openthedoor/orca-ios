@@ -5,11 +5,14 @@ class SettingsPageViewController: UITableViewController {
   struct Section {
     var header: String?
     var footer: String?
+    /// A footer the page draws itself, in place of `footer`'s grey text.
+    var footerView: UIView?
     var rows: [Row]
 
-    init(header: String? = nil, footer: String? = nil, rows: [Row]) {
+    init(header: String? = nil, footer: String? = nil, footerView: UIView? = nil, rows: [Row]) {
       self.header = header
       self.footer = footer
+      self.footerView = footerView
       self.rows = rows
     }
   }
@@ -37,6 +40,8 @@ class SettingsPageViewController: UITableViewController {
     case button(title: String, destructive: Bool = false, enabled: Bool = true, action: () -> Void)
     /// A status line: an icon in its colour, a title and a detail.
     case status(icon: Lucide, color: UIColor, title: String, detail: String?, detailColor: UIColor? = nil)
+    /// An outside link: a leading glyph and a title, no chevron (the official ListRow with only `onPress`).
+    case link(image: UIImage, title: String, accessibilityLabel: String? = nil, action: () -> Void)
     case spinner(String)
     /// A cell the page owns and keeps, such as a text field that must keep its focus across reloads.
     case custom(UITableViewCell)
@@ -66,6 +71,10 @@ class SettingsPageViewController: UITableViewController {
 
   override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? { sections[section].footer }
 
+  override func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? { sections[section].footerView }
+
+  override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat { UITableView.automaticDimension }
+
   override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
     let row = sections[indexPath.section].rows[indexPath.row]
     switch row {
@@ -84,6 +93,7 @@ class SettingsPageViewController: UITableViewController {
     }
     let cell = tableView.dequeueReusableCell(withIdentifier: "row", for: indexPath)
     cell.backgroundColor = Palette.bgRaised
+    cell.accessibilityTraits.remove(.selected)
     cell.accessoryType = .none
     cell.accessoryView = nil
     cell.selectionStyle = .none
@@ -92,6 +102,8 @@ class SettingsPageViewController: UITableViewController {
     content.secondaryTextProperties.color = Palette.textSecondary
     content.imageProperties.tintColor = Palette.textSecondary
     content.imageToTextPadding = 16
+    // A disabled row fades as a whole (feedback.disabledOpacity), as the official ListRow does.
+    var dimmed = false
     switch row {
     case .value(let icon, let title, let value, let subtitle, let navigates, let enabled, let action):
       if subtitle != nil { content = subtitleContent() }
@@ -99,14 +111,22 @@ class SettingsPageViewController: UITableViewController {
       content.text = title
       content.secondaryText = subtitle ?? value
       if subtitle != nil, let value { content.text = title; cell.accessoryView = valueLabel(value) }
-      cell.accessoryType = navigates ? .disclosureIndicator : .none
+      if navigates {
+        // The system chevron sits outside the content and accessory views, so a faded row draws its own.
+        if enabled { cell.accessoryType = .disclosureIndicator } else { cell.accessoryView = chevron() }
+      }
       cell.selectionStyle = action != nil && enabled ? .default : .none
-      content.textProperties.color = enabled ? Palette.textPrimary : Palette.textMuted
+      dimmed = !enabled
     case .menu(let icon, let title, let value, let options, let enabled):
       content.image = icon?.image(size: 20, strokeWidth: 1.8)
       content.text = title
       cell.accessoryView = menuButton(value: value, options: options, enabled: enabled)
-      content.textProperties.color = enabled ? Palette.textPrimary : Palette.textMuted
+      dimmed = !enabled
+    case .link(let image, let title, let label, _):
+      content.image = image
+      content.text = title
+      cell.selectionStyle = .default
+      cell.accessibilityLabel = label
     case .toggle(let title, let subtitle, let isOn, let enabled, let onChange):
       if subtitle != nil { content = subtitleContent() }
       content.text = title
@@ -117,13 +137,21 @@ class SettingsPageViewController: UITableViewController {
       toggle.accessibilityLabel = title
       toggle.addAction(UIAction { [weak toggle] _ in onChange(toggle?.isOn ?? false) }, for: .valueChanged)
       cell.accessoryView = toggle
+      dimmed = !enabled
     case .check(let title, let subtitle, let checked, let enabled, _):
       if subtitle != nil { content = subtitleContent() }
       content.text = title
       content.secondaryText = subtitle
-      content.textProperties.color = enabled ? Palette.textPrimary : Palette.textMuted
-      cell.accessoryType = checked ? .checkmark : .none
+      // The official radio row's tick: Lucide Check in the text colour, not the system's blue checkmark.
+      if checked {
+        let tick = UIImageView(image: Lucide.check.image(size: 17, strokeWidth: 2.4).withRenderingMode(.alwaysTemplate))
+        tick.tintColor = Palette.textPrimary
+        cell.accessoryView = tick
+      }
+      // The system checkmark said "selected" on its own; a drawn tick has to say it.
+      if checked { cell.accessibilityTraits.insert(.selected) }
       cell.selectionStyle = enabled ? .default : .none
+      dimmed = !enabled
     case .button(let title, let destructive, let enabled, _):
       content = .cell()
       content.text = title
@@ -146,7 +174,10 @@ class SettingsPageViewController: UITableViewController {
     case .segmented, .slider, .custom:
       break
     }
+    if case .link = row {} else { cell.accessibilityLabel = nil }
     cell.contentConfiguration = content
+    cell.contentView.alpha = dimmed ? Feedback.disabledOpacity : 1
+    cell.accessoryView?.alpha = dimmed ? Feedback.disabledOpacity : 1
     return cell
   }
 
@@ -155,10 +186,13 @@ class SettingsPageViewController: UITableViewController {
     switch sections[indexPath.section].rows[indexPath.row] {
     case .value(_, _, _, _, _, let enabled, let action) where enabled:
       action?()
-    case .check(_, _, _, let enabled, let action) where enabled:
-      UISelectionFeedbackGenerator().selectionChanged()
+    case .check(_, _, let checked, let enabled, let action) where enabled:
+      // Picking a new option ticks; re-tapping the picked one doesn't.
+      if !checked { UISelectionFeedbackGenerator().selectionChanged() }
       action()
     case .button(_, _, let enabled, let action) where enabled:
+      action()
+    case .link(_, _, _, let action):
       action()
     default:
       break
@@ -169,6 +203,7 @@ class SettingsPageViewController: UITableViewController {
     switch sections[indexPath.section].rows[indexPath.row] {
     case .value(_, _, _, _, _, let enabled, let action): enabled && action != nil
     case .check(_, _, _, let enabled, _), .button(_, _, let enabled, _): enabled
+    case .link: true
     default: false
     }
   }
@@ -188,6 +223,13 @@ class SettingsPageViewController: UITableViewController {
     content.textToSecondaryTextVerticalPadding = 3
     content.imageToTextPadding = 16
     return content
+  }
+
+  private func chevron() -> UIImageView {
+    let view = UIImageView(
+      image: UIImage(systemName: "chevron.forward", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)))
+    view.tintColor = .tertiaryLabel
+    return view
   }
 
   private func valueLabel(_ text: String) -> UILabel {
@@ -299,7 +341,8 @@ final class StackedControlCell: UITableViewCell {
 
   func showSegments(title: String, items: [String], selected: Int, enabled: Bool, onChange: @escaping (Int) -> Void) {
     titleLabel.text = title
-    titleLabel.textColor = enabled ? Palette.textPrimary : Palette.textMuted
+    titleLabel.textColor = Palette.textPrimary
+    contentView.alpha = enabled ? 1 : Feedback.disabledOpacity
     valueLabel.isHidden = true
     sliderRow.isHidden = true
     segments.isHidden = false
@@ -319,6 +362,7 @@ final class StackedControlCell: UITableViewCell {
   ) {
     titleLabel.text = title
     titleLabel.textColor = Palette.textPrimary
+    contentView.alpha = 1
     valueLabel.isHidden = false
     valueLabel.text = value
     segments.isHidden = true

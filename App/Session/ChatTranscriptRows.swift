@@ -509,9 +509,15 @@ final class WorkItemView: UIView {
       label.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.xs),
       label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.xs),
     ])
+    rails = TimelineRails(in: self, iconSize: 14, centeredOn: icon.centerYAnchor)
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  private var rails: TimelineRails?
+
+  /// Joins this note to the activity above and below it.
+  func connect(up: Bool, down: Bool) { rails?.show(up: up, down: down) }
 
   func show(_ item: TranscriptItem) {
     switch item.body {

@@ -71,6 +71,13 @@
         "hours": "{{count}}h",
         "days": "{{count}}d",
         "weeks": "{{count}}w"
+      },
+      "session": {
+        "tabUnsupported": "This tab can't be opened on the phone yet"
+      },
+      "language": {
+        "restartTitle": "Reopen Orca to change the language",
+        "restartMessage": "Close Orca from the app switcher and open it again. Until then, Orca keeps its current language."
       }
     }
   },
@@ -146,6 +153,13 @@
         "hours": "{{count}} 小时",
         "days": "{{count}} 天",
         "weeks": "{{count}} 周"
+      },
+      "session": {
+        "tabUnsupported": "这个标签页暂时不能在手机上打开"
+      },
+      "language": {
+        "restartTitle": "重新打开 Orca 以切换语言",
+        "restartMessage": "在多任务界面关闭 Orca 后再打开。在此之前，Orca 仍使用当前语言。"
       }
     },
     "overrides": {
@@ -243,6 +257,13 @@
         "hours": "{{count}} 小時",
         "days": "{{count}} 天",
         "weeks": "{{count}} 週"
+      },
+      "session": {
+        "tabUnsupported": "這個分頁暫時不能在手機上開啟"
+      },
+      "language": {
+        "restartTitle": "重新開啟 Orca 以切換語言",
+        "restartMessage": "在 App 切換器中關閉 Orca 後再開啟。在此之前，Orca 仍使用目前的語言。"
       }
     }
   }

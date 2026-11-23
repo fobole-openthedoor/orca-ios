@@ -104,7 +104,42 @@ enum ToolCategory: CaseIterable {
 
 /// One quiet activity line: a muted icon, the words, a spinner while it runs,
 /// and a chevron when it opens. A step waiting on the person turns amber.
+/// The thread down a turn's activity (connected rows, as iGhostVT draws them): a hairline above and below a
+/// row's icon, drawn where the row before or after it is also activity, so a run of calls, thoughts and notes
+/// reads as one line with its steps on it. Opened thoughts and calls continue it on their own rails.
+final class TimelineRails {
+  private let up = UIView()
+  private let down = UIView()
+
+  /// Adds the rails to `view`, centred on an icon `iconSize` wide at the row's leading margin and on `anchor`.
+  init(in view: UIView, iconSize: CGFloat, centeredOn anchor: NSLayoutYAxisAnchor) {
+    for rail in [up, down] {
+      rail.backgroundColor = Palette.borderSubtle
+      rail.isHidden = true
+      rail.translatesAutoresizingMaskIntoConstraints = false
+      view.addSubview(rail)
+    }
+    let x = Spacing.lg + 7
+    NSLayoutConstraint.activate([
+      up.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: x),
+      up.widthAnchor.constraint(equalToConstant: 1),
+      up.topAnchor.constraint(equalTo: view.topAnchor),
+      up.bottomAnchor.constraint(equalTo: anchor, constant: -(iconSize / 2 + 4)),
+      down.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: x),
+      down.widthAnchor.constraint(equalToConstant: 1),
+      down.topAnchor.constraint(equalTo: anchor, constant: iconSize / 2 + 4),
+      down.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+    ])
+  }
+
+  func show(up joinsAbove: Bool, down joinsBelow: Bool) {
+    up.isHidden = !joinsAbove
+    down.isHidden = !joinsBelow
+  }
+}
+
 final class ActivityRowView: UIView {
+  private var rails: TimelineRails?
   private let icon = LucideView(.wrench, size: 15, strokeWidth: 2, color: Palette.textMuted)
   private let label = TextLabel(size: ChatProse.metaSize, color: Palette.textSecondary, lines: 1)
   private let detail = TextLabel(size: ChatProse.metaSize, color: Palette.textMuted, lines: 1)
@@ -130,9 +165,13 @@ final class ActivityRowView: UIView {
       row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
       row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
     ])
+    rails = TimelineRails(in: self, iconSize: 15, centeredOn: row.centerYAnchor)
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  /// Joins this row to the activity above and below it.
+  func connect(up: Bool, down: Bool) { rails?.show(up: up, down: down) }
 
   func show(icon glyph: Lucide, text: String, detail extra: String? = nil, running: Bool, attention: Bool = false, opens: Bool = true, expanded: Bool = false) {
     icon.icon = glyph

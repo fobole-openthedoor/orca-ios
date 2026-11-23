@@ -134,6 +134,29 @@ public struct HostAPI: Sendable {
     _ = try await connection.request("session.tabs.createTerminal", ["worktree": .string(selector)])
   }
 
+  /// A browser tab on a blank page (`browser.tabCreate`), shown on the desktop as the workspace's new tab.
+  public func createBrowserTab(worktree selector: String, url: String = "about:blank") async throws {
+    _ = try await connection.request(
+      "browser.tabCreate", ["worktree": .string(selector), "url": .string(url), "activate": true])
+  }
+
+  /// A new Markdown note opened as a tab, as the official New tab sheet makes one: `untitled.md`, or the first
+  /// free `untitled-N.md`, created with `files.createFile` and opened with `files.open`.
+  public func createMarkdownNote(worktree selector: String) async throws {
+    for attempt in 1...100 {
+      let path = attempt == 1 ? "untitled.md" : "untitled-\(attempt).md"
+      do {
+        _ = try await connection.request(
+          "files.createFile",
+          ["worktree": .string(selector), "relativePath": .string(path), "expectedExecutionHostId": "local"])
+      } catch let error as RPCError where error.message.lowercased().contains("exist") && attempt < 100 {
+        continue
+      }
+      _ = try await connection.request("files.open", ["worktree": .string(selector), "relativePath": .string(path)])
+      return
+    }
+  }
+
   /// Starts an agent in an existing workspace. The operation id makes a lost reply safe to replay:
   /// call again with the same id, never a new one, after an ambiguous outcome.
   public func launchAgent(_ agent: String, worktree selector: String, prompt: String?, operationId: String) async throws -> JSONValue {
