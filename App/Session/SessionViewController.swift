@@ -1,0 +1,343 @@
+import OrcaCore
+import UIKit
+
+/// A workspace's session (session/MobileSessionRouteScreen.tsx): the system navigation bar with the branch
+/// as subtitle, the official tab strip, and the active tab's content (a chat for agent sessions).
+final class SessionViewController: UIViewController {
+  private let session: HostSession
+  private let worktreeId: String
+  private let strip = SessionTabStrip()
+  private let content = UIView()
+  private var tabs = SessionTabs()
+  private var tabsTask: Task<Void, Never>?
+  private var shownTabId: String?
+  private var chats: [String: ChatViewController] = [:]
+  private var current: UIViewController?
+  /// The host has answered with its tabs, so none means none rather than not yet.
+  private var tabsLoaded = false
+
+  init(session: HostSession, worktreeId: String) {
+    self.session = session
+    self.worktreeId = worktreeId
+    super.init(nibName: nil, bundle: nil)
+    hidesBottomBarWhenPushed = true
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  deinit { tabsTask?.cancel() }
+
+  private var selector: String { "id:\(worktreeId)" }
+
+  /// The bot whose home this workspace is, if any.
+  private var bot: Bot? { session.bots.bots.first { $0.homeWorktreeId == worktreeId } }
+  private lazy var botTitle = BotTitleView()
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    view.backgroundColor = Palette.bgBase
+    navigationItem.largeTitleDisplayMode = .never
+    let more = UIBarButtonItem(image: Lucide.ellipsis.image(size: 20, strokeWidth: 2), menu: moreMenu())
+    if bot != nil {
+      // A bot's home: its items instead of source control, and its face beside its name.
+      let items = UIBarButtonItem(image: Lucide.listChecks.image(size: 20, strokeWidth: 2), style: .plain, target: nil, action: nil)
+      items.accessibilityLabel = String(localized: "session.header.items", defaultValue: "Items")
+      navigationItem.rightBarButtonItems = [more, items]
+      navigationItem.titleView = botTitle
+    } else {
+      let branch = UIBarButtonItem(image: Lucide.gitBranch.image(size: 20, strokeWidth: 2), style: .plain, target: nil, action: nil)
+      branch.accessibilityLabel = String(localized: "session.header.sourceControl", defaultValue: "Source control")
+      navigationItem.rightBarButtonItems = [more, branch]
+    }
+
+    strip.tabsMenu = { [weak self] in self?.tabsMenu() ?? UIMenu() }
+    strip.newTabMenu = { [weak self] in self?.newTabMenu() ?? UIMenu() }
+    content.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(content)
+    view.addSubview(strip)
+    NSLayoutConstraint.activate([
+      strip.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+      strip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      strip.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      content.topAnchor.constraint(equalTo: strip.bottomAnchor),
+      content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      content.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+    ])
+    let api = session.api
+    let selector = selector
+    Task { await api.activate(worktree: selector) }
+    tabsTask = Task { [weak self] in
+      let subscription = await api.tabs(worktree: selector)
+      do {
+        for try await frame in subscription.events {
+          self?.apply(SessionTabs(frame))
+        }
+      } catch {}
+    }
+  }
+
+  override func updateProperties() {
+    super.updateProperties()
+    let worktree = session.worktree(id: worktreeId)
+    title = worktree?.displayName
+    let status = HostConnectionPresentation(session.connectionState)
+    let subtitle = NSMutableAttributedString(
+      string: "● ", attributes: [.foregroundColor: status.dot, .font: UIFont.systemFont(ofSize: 11)])
+    let branch = (worktree?.branch ?? "").replacingOccurrences(of: "refs/heads/", with: "")
+    subtitle.append(NSAttributedString(string: status.connected ? branch : status.label, attributes: [.foregroundColor: Palette.textSecondary]))
+    navigationItem.attributedSubtitle = AttributedString(subtitle)
+    if let bot {
+      // The title view carries the bot's own line; the branch is the bot's business.
+      navigationItem.attributedSubtitle = nil
+      botTitle.show(bot: bot, status: BotRowConfiguration.statusWord(bot, home: worktree), dot: status.dot)
+    }
+    updateStrip()
+  }
+
+  private func apply(_ next: SessionTabs) {
+    tabs = next
+    tabsLoaded = true
+    if next.removed {
+      navigationController?.popViewController(animated: true)
+      return
+    }
+    let active = next.tabs.first { $0.id == next.activeTabId } ?? next.tabs.first
+    show(active)
+    updateStrip()
+  }
+
+  private func updateStrip() {
+    let active = tabs.tabs.first { $0.id == shownTabId }
+    let agentState = session.worktree(id: worktreeId)?.agents.first?.state
+    strip.show(tab: active, tabCount: tabs.tabs.count, agentState: agentState, botHome: bot != nil)
+  }
+
+  private func show(_ tab: SessionTab?) {
+    guard tab?.id != shownTabId || (tab == nil && tabsLoaded && !(current is NoTabsViewController)) else { return }
+    shownTabId = tab?.id
+    let next: UIViewController
+    switch tab?.kind {
+    case .agentSession(let sessionId, _):
+      if let existing = chats[sessionId] {
+        next = existing
+      } else {
+        let worktree = session.worktree(id: worktreeId)
+        let model = ChatSessionModel(
+          api: session.api, sessionId: sessionId, capabilities: session.status?.capabilities ?? [],
+          connectionId: worktree.flatMap { session.repo(id: $0.repoId)?.connectionId })
+        let chat = ChatViewController(model: model)
+        let agentType: String? = { if case .agentSession(_, let agent) = tab?.kind { return agent } else { return nil } }()
+        chat.onActivity = { [weak self] working, detail in
+          guard let self, let worktree = self.session.worktree(id: self.worktreeId) else { return }
+          AgentActivityCenter.shared.reportChat(
+            hostId: self.session.host.id, hostName: self.session.name, worktree: worktree, agentType: agentType,
+            working: working, detail: detail)
+        }
+        chats[sessionId] = chat
+        next = chat
+      }
+    case .terminal(let handle?):
+      next = TerminalTabController(
+        api: session.api, handle: handle,
+        sendsQueryReplies: session.status?.supports(HostCapability.terminalQueryReply) ?? false,
+        colors: tab?.terminalColors)
+    case nil where tabsLoaded:
+      let api = session.api
+      let selector = selector
+      next = NoTabsViewController { [weak self] in self?.run { try await api.createTerminalTab(worktree: selector) } }
+    default:
+      next = UnsupportedTabViewController(tab: tab)
+    }
+    (current as? WorkspaceContent)?.close()
+    if let current {
+      current.willMove(toParent: nil)
+      current.view.removeFromSuperview()
+      current.removeFromParent()
+    }
+    addChild(next)
+    content.addSubview(next.view)
+    next.view.pin(to: content)
+    next.didMove(toParent: self)
+    current = next
+  }
+
+  /// The open tabs, the shown one checked; the shown one can also be closed.
+  private func tabsMenu() -> UIMenu {
+    let api = session.api
+    let selector = selector
+    let open = tabs.tabs.map { tab in
+      UIAction(title: tab.title.isEmpty ? String(localized: "session.header.terminalTitle", defaultValue: "Terminal") : tab.title,
+        image: Self.icon(for: tab), state: tab.id == shownTabId ? .on : .off
+      ) { [weak self] _ in
+        self?.show(tab)
+        self?.updateStrip()
+        Task { await api.activateTab(tab.id, worktree: selector) }
+      }
+    }
+    var children: [UIMenuElement] = [UIMenu(options: .displayInline, children: open)]
+    if let shown = shownTabId {
+      children.append(
+        UIAction(
+          title: String(localized: "session.bulkTabClose.confirm", defaultValue: "Close tab"),
+          image: Lucide.x.image(size: 18), attributes: .destructive
+        ) { [weak self] _ in self?.run { try await api.closeTab(shown, worktree: selector) } })
+    }
+    return UIMenu(children: children)
+  }
+
+  /// A terminal, or a chat with an agent.
+  private func newTabMenu() -> UIMenu {
+    let api = session.api
+    let selector = selector
+    return UIMenu(
+      title: String(localized: "session.tabStrip.newTab", defaultValue: "New tab"),
+      children: [
+        UIAction(
+          title: String(localized: "session.header.terminalTitle", defaultValue: "Terminal"),
+          image: Lucide.squareTerminal.image(size: 18)
+        ) { [weak self] _ in self?.run { try await api.createTerminalTab(worktree: selector) } },
+        UIAction(title: "Claude", image: AgentMark.claude.image(size: 18)) { [weak self] _ in
+          self?.run { try await api.createChat(agent: "claude", worktree: selector) }
+        },
+        UIAction(title: "Codex", image: AgentMark.codex.image(size: 18)) { [weak self] _ in
+          self?.run { try await api.createChat(agent: "codex", worktree: selector) }
+        },
+      ])
+  }
+
+  private static func icon(for tab: SessionTab) -> UIImage? {
+    switch tab.kind {
+    case .agentSession(_, let agent): return AgentMark.icon(for: agent)?.image(size: 18)
+    case .browser: return Lucide.globe.image(size: 18)
+    case .file, .markdown: return Lucide.fileText.image(size: 18)
+    default: return Lucide.squareTerminal.image(size: 18)
+    }
+  }
+
+  /// A tab write; the tabs subscription shows its result, and a refusal is said.
+  private func run(_ write: @escaping () async throws -> Void) {
+    Task {
+      do {
+        try await write()
+      } catch {
+        let message = (error as? RPCError)?.message ?? error.localizedDescription
+        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
+        present(alert, animated: true)
+      }
+    }
+  }
+
+  private func moreMenu() -> UIMenu {
+    UIMenu(children: [
+      UIAction(
+        title: String(localized: "session.headerMore.fileExplorer", defaultValue: "File explorer"),
+        image: Lucide.folderTree.image(size: 18)) { _ in },
+      UIAction(
+        title: String(localized: "session.headerMore.agentHistory", defaultValue: "Agent History"),
+        image: Lucide.history.image(size: 18)) { _ in },
+      UIAction(
+        title: String(localized: "session.headerMore.textSize", defaultValue: "Text size"),
+        image: Lucide.aLargeSmall.image(size: 18)) { _ in },
+    ])
+  }
+}
+
+/// A tab this client cannot open yet.
+private final class UnsupportedTabViewController: UIViewController {
+  private let sessionTab: SessionTab?
+
+  init(tab: SessionTab?) {
+    sessionTab = tab
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    view.backgroundColor = Palette.bgBase
+    let label = TextLabel(
+      sessionTab == nil
+        ? String(localized: "session.openingWorkspace", defaultValue: "Opening workspace")
+        : String(localized: "session.tabUnsupported", defaultValue: "This tab can't be opened on the phone yet"),
+      size: Typography.bodySize, color: Palette.textSecondary, alignment: .center, lines: 0)
+    view.addSubview(label)
+    NSLayoutConstraint.activate([
+      label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+      label.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+      label.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: Spacing.xl),
+    ])
+  }
+}
+
+/// A bot home's title: its face beside its name, then its state under them (MobileSessionTitleBlock.tsx).
+private final class BotTitleView: UIView {
+  private let avatar = BotAvatarView(size: 20)
+  private let name = TextLabel(size: 17, weight: .semibold)
+  private let status = UILabel()
+
+  init() {
+    super.init(frame: .zero)
+    let top = UIStackView(arrangedSubviews: [avatar, name])
+    top.spacing = 6
+    top.alignment = .center
+    let column = UIStackView(arrangedSubviews: [top, status])
+    column.axis = .vertical
+    column.alignment = .center
+    column.spacing = 1
+    column.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(column)
+    column.pin(to: self)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  func show(bot: Bot, status word: String, dot: UIColor) {
+    avatar.show(bot)
+    name.text = bot.name
+    let line = NSMutableAttributedString(
+      string: "●  ", attributes: [.foregroundColor: dot, .font: UIFont.systemFont(ofSize: 11)])
+    line.append(NSAttributedString(string: word, attributes: [.foregroundColor: Palette.textSecondary, .font: UIFont.systemFont(ofSize: 13)]))
+    status.attributedText = line
+    accessibilityLabel = "\(bot.name), \(word)"
+    isAccessibilityElement = true
+  }
+}
+
+/// A workspace with no tabs (MobileSessionContentState.tsx): says so, and makes one.
+private final class NoTabsViewController: UIViewController {
+  private let onCreate: () -> Void
+
+  init(onCreate: @escaping () -> Void) {
+    self.onCreate = onCreate
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    view.backgroundColor = Palette.bgBase
+    let icon = LucideView(.squareTerminal, size: 34, strokeWidth: 1.6, color: Palette.textMuted)
+    let title = TextLabel(
+      String(localized: "session.activeContent.noTabs", defaultValue: "No tabs in this session"), size: 17,
+      weight: .semibold, alignment: .center)
+    var configuration = UIButton.Configuration.prominentGlass()
+    configuration.title = String(localized: "session.activeContent.createTab", defaultValue: "Create Tab")
+    configuration.baseBackgroundColor = Palette.accentBlue
+    let create = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.onCreate() })
+    let stack = UIStackView(arrangedSubviews: [icon, title, create])
+    stack.axis = .vertical
+    stack.alignment = .center
+    stack.spacing = Spacing.md
+    stack.setCustomSpacing(Spacing.lg, after: title)
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(stack)
+    NSLayoutConstraint.activate([
+      stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+      stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+    ])
+  }
+}

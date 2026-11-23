@@ -1,0 +1,32 @@
+{
+  "en": {
+    "orcaios": {
+      "push": {
+        "gatewayFooter": "Pushes reach this app through the gateway in the orca-ios repository. Start the desktop with ORCA_PUSH_GATEWAY_URL set to it; without that, alerts and Live Activities update only while this app is open.",
+        "accepted": "The desktop sent the test. Check for the notification.",
+        "notAccepted": "The desktop didn’t send the test: {{reason}}",
+        "noDesktop": "Connect a desktop and try again."
+      }
+    }
+  },
+  "zh": {
+    "orcaios": {
+      "push": {
+        "gatewayFooter": "推送经 orca-ios 仓库里的推送网关送到这个 App。启动桌面时把 ORCA_PUSH_GATEWAY_URL 设为网关地址；不设置的话，通知和实时活动只在 App 打开时更新。",
+        "accepted": "桌面已发出测试推送，请留意通知。",
+        "notAccepted": "桌面没有发出测试推送：{{reason}}",
+        "noDesktop": "请先连接一台桌面再试。"
+      }
+    }
+  },
+  "zh-Hant": {
+    "orcaios": {
+      "push": {
+        "gatewayFooter": "推播經 orca-ios 儲存庫裡的推播閘道送到這個 App。啟動桌面時把 ORCA_PUSH_GATEWAY_URL 設為閘道位址；不設定的話，通知和即時動態只在 App 開啟時更新。",
+        "accepted": "桌面已送出測試推播，請留意通知。",
+        "notAccepted": "桌面沒有送出測試推播：{{reason}}",
+        "noDesktop": "請先連接一台桌面再試。"
+      }
+    }
+  }
+}

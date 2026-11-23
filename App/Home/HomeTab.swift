@@ -1,0 +1,88 @@
+import UIKit
+
+enum HomeTab: String, CaseIterable {
+  case feed, bots, agents, usage, automations
+
+  var title: String {
+    switch self {
+    case .feed: String(localized: "home.tabs.feed", defaultValue: "Feed")
+    case .bots: String(localized: "home.tabs.bots", defaultValue: "Bots")
+    case .agents: String(localized: "home.tabs.agents", defaultValue: "Agents")
+    case .usage: String(localized: "home.tabs.usage", defaultValue: "Usage")
+    case .automations: String(localized: "home.tabs.automations", defaultValue: "Automations")
+    }
+  }
+
+  /// The official app's glyph for each tab (home/tabs/MobileHomeTabBar.tsx).
+  var icon: Lucide {
+    switch self {
+    case .feed: .layoutList
+    case .bots: .bot
+    case .agents: .squareTerminal
+    case .usage: .gauge
+    case .automations: .calendarClock
+    }
+  }
+}
+
+/// Home (home/MobileHomeScreen.tsx) on the system tab bar: five tabs, each with its own navigation stack,
+/// loaded on first visit. Agents and Bots carry needs-you badges.
+final class HomeTabController: UITabBarController {
+  private var tabsByID: [HomeTab: UITab] = [:]
+
+  init() {
+    super.init(nibName: nil, bundle: nil)
+    tabs = HomeTab.allCases.map { homeTab in
+      let tab = UITab(
+        title: homeTab.title, image: homeTab.icon.image(size: 24, strokeWidth: 2), identifier: homeTab.rawValue
+      ) { [weak self] _ in
+        let navigation = UINavigationController(rootViewController: self?.root(for: homeTab) ?? UIViewController())
+        navigation.navigationBar.prefersLargeTitles = true
+        return navigation
+      }
+      tabsByID[homeTab] = tab
+      return tab
+    }
+    tabBarMinimizeBehavior = .onScrollDown
+    // The official bar marks the selected tab in the primary text colour, not the accent.
+    tabBar.tintColor = Palette.textPrimary
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  func setBadge(_ count: Int, on homeTab: HomeTab) {
+    tabsByID[homeTab]?.badgeValue = count > 0 ? (count > 99 ? "99+" : "\(count)") : nil
+  }
+
+  private func root(for tab: HomeTab) -> UIViewController {
+    switch tab {
+    case .feed: return FeedViewController()
+    case .bots: return BotsViewController()
+    case .usage: return UsageViewController()
+    case .automations: return AutomationsViewController()
+    case .agents:
+      let agents = AgentsViewController()
+      agents.onNeedsYouChange = { [weak self] count in self?.setBadge(count, on: .agents) }
+      return agents
+    default: return PlaceholderTabViewController(tab: tab)
+    }
+  }
+}
+
+final class PlaceholderTabViewController: UIViewController {
+  private let homeTab: HomeTab
+
+  init(tab: HomeTab) {
+    homeTab = tab
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    title = homeTab.title
+    view.backgroundColor = Palette.bgBase
+    navigationItem.largeTitleDisplayMode = .always
+  }
+}

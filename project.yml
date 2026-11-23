@@ -1,0 +1,116 @@
+name: Orca
+options:
+  createIntermediateGroups: true
+  bundleIdPrefix: com.thm
+  deploymentTarget:
+    iOS: '26.0'
+  developmentLanguage: en
+  knownRegions:
+    - en
+    - zh-Hans
+    - zh-Hant
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: '0.1.0'
+    CURRENT_PROJECT_VERSION: '1'
+    SUPPORTS_MACCATALYST: 'NO'
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: 'NO'
+    SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: 'NO'
+packages:
+  OrcaCore:
+    path: packages/OrcaCore
+  libghostty:
+    # Ghostty's engine, as iGhostVT uses it. Pinned: the package moves to Ghostty's head every week.
+    url: https://github.com/Lakr233/libghostty-spm
+    exactVersion: 2.2.2026111701
+targets:
+  Orca:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.thm.orcaios
+        PRODUCT_NAME: Orca
+        CODE_SIGN_ENTITLEMENTS: App/Orca.entitlements
+        TARGETED_DEVICE_FAMILY: '1,2'
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_FILE: App/Info.plist
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Orca
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleLocalizations: [en, zh-Hans, zh-Hant]
+        CADisableMinimumFrameDurationOnPhone: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIBackgroundModes: [remote-notification]
+        NSSupportsLiveActivities: true
+        # The gateway starts an activity by push when an agent needs you and the app isn't running.
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        ITSAppUsesNonExemptEncryption: false
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+          # The desktop is reached over plain ws:// on the LAN; everything inside is end-to-end encrypted.
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            100.64.0.0/10: { NSExceptionAllowsInsecureHTTPLoads: true }
+            fd7a:115c:a1e0::/48: { NSExceptionAllowsInsecureHTTPLoads: true }
+        # Translated in App/Resources/InfoPlist.xcstrings, from the official app's locales/*.json.
+        NSLocalNetworkUsageDescription: Orca connects to the desktop app on your LAN.
+        NSCameraUsageDescription: Allow Orca to use the camera for QR code scanning.
+        NSPhotoLibraryUsageDescription: Allow Orca to attach photos from your library to a terminal session on your paired desktop.
+        NSPhotoLibraryAddUsageDescription: Allow Orca to save images from your sessions to Photos.
+        NSMicrophoneUsageDescription: Allow Orca to use your microphone for voice dictation, transcribed on this phone or on your paired computer.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.thm.orcaios
+            CFBundleURLSchemes: [orca]
+    dependencies:
+      - package: OrcaCore
+      - package: libghostty
+        product: GhosttyTerminal
+      - package: libghostty
+        product: GhosttyTheme
+      - target: OrcaWidgets
+        embed: true
+  OrcaWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.thm.orcaios.widgets
+        PRODUCT_NAME: OrcaWidgets
+        TARGETED_DEVICE_FAMILY: '1,2'
+        INFOPLIST_FILE: Widgets/Info.plist
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: Orca
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
