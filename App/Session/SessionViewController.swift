@@ -9,6 +9,7 @@ final class SessionViewController: UIViewController {
   private let strip = SessionTabStrip()
   private let content = UIView()
   private let stripEdge = UIScrollEdgeElementContainerInteraction()
+  private let stripBackdrop = FrostedBand()
   private var tabs = SessionTabs()
   private var tabsTask: Task<Void, Never>?
   private var shownTabId: String?
@@ -83,11 +84,16 @@ final class SessionViewController: UIViewController {
     strip.addInteraction(stripEdge)
     content.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(content)
+    view.addSubview(stripBackdrop)
     view.addSubview(strip)
     NSLayoutConstraint.activate([
       strip.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
       strip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       strip.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      stripBackdrop.topAnchor.constraint(equalTo: view.topAnchor),
+      stripBackdrop.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      stripBackdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      stripBackdrop.bottomAnchor.constraint(equalTo: strip.bottomAnchor, constant: FrostedBand.fade / 2),
       // Under the bar and the strip: a chat scrolls beneath both and the soft edge fades it.
       content.topAnchor.constraint(equalTo: view.topAnchor),
       content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -271,6 +277,7 @@ final class SessionViewController: UIViewController {
     // A chat starts below the strip and scrolls under it; the strip joins the bar's soft edge.
     next.additionalSafeAreaInsets.top = chat != nil ? SessionTabStrip.height : 0
     stripEdge.scrollView = chat
+    stripBackdrop.isHidden = chat == nil
     next.didMove(toParent: self)
     current = next
   }
@@ -661,5 +668,38 @@ private final class NoTabsViewController: UIViewController {
       stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
       stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
     ])
+  }
+}
+
+/// A dark frosted band behind the navigation bar and the tab strip: what scrolls under them blurs and
+/// darkens, then the band fades out below the strip instead of ending on a line.
+final class FrostedBand: UIView {
+  static let fade: CGFloat = 28
+
+  private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+  private let shade = UIView()
+  private let fadeMask = CAGradientLayer()
+
+  init() {
+    super.init(frame: .zero)
+    translatesAutoresizingMaskIntoConstraints = false
+    isUserInteractionEnabled = false
+    shade.backgroundColor = Palette.bgBase.withAlphaComponent(0.7)
+    for view in [blur, shade] {
+      view.frame = bounds
+      view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+      addSubview(view)
+    }
+    fadeMask.colors = [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
+    layer.mask = fadeMask
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    fadeMask.frame = bounds
+    let height = max(bounds.height, 1)
+    fadeMask.locations = [0, NSNumber(value: Double((height - Self.fade) / height)), 1]
   }
 }

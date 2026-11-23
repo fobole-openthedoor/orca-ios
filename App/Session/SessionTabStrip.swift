@@ -11,10 +11,20 @@ final class SessionTabStrip: UIView {
   var onSelect: ((SessionTab) -> Void)?
   var onClose: ((SessionTab) -> Void)?
 
-  private let capsule = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+  private let capsule = UIVisualEffectView(effect: SessionTabStrip.darkGlass())
+  private let addGlass = UIVisualEffectView(effect: SessionTabStrip.darkGlass())
   private let scroll = UIScrollView()
   private let chips = UIStackView()
-  private let addButton = UIButton(configuration: .glass())
+  private let addButton = UIButton(configuration: .plain())
+
+  /// Glass tinted toward the page's ground: the chat scrolling under the strip reads as a frosted blur
+  /// rather than words behind the tabs.
+  private static func darkGlass() -> UIGlassEffect {
+    let glass = UIGlassEffect(style: .regular)
+    glass.tintColor = Palette.bgBase.withAlphaComponent(0.6)
+    glass.isInteractive = true
+    return glass
+  }
   private var tabs: [SessionTab] = []
   private var shownId: String?
   private var agentState: String?
@@ -50,18 +60,25 @@ final class SessionTabStrip: UIView {
     addButton.accessibilityLabel = String(localized: "session.tabStrip.newTab", defaultValue: "New tab")
     addButton.translatesAutoresizingMaskIntoConstraints = false
 
+    addGlass.cornerConfiguration = .capsule()
+    addGlass.translatesAutoresizingMaskIntoConstraints = false
     addSubview(capsule)
-    addSubview(addButton)
+    addSubview(addGlass)
+    addGlass.contentView.addSubview(addButton)
     NSLayoutConstraint.activate([
       heightAnchor.constraint(equalToConstant: Self.height),
       capsule.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.md),
-      capsule.trailingAnchor.constraint(equalTo: addButton.leadingAnchor, constant: -Spacing.sm),
+      capsule.trailingAnchor.constraint(equalTo: addGlass.leadingAnchor, constant: -Spacing.sm),
       capsule.centerYAnchor.constraint(equalTo: centerYAnchor),
       capsule.heightAnchor.constraint(equalToConstant: 40),
-      addButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.md),
-      addButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-      addButton.widthAnchor.constraint(equalToConstant: 40),
-      addButton.heightAnchor.constraint(equalToConstant: 40),
+      addGlass.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.md),
+      addGlass.centerYAnchor.constraint(equalTo: centerYAnchor),
+      addGlass.widthAnchor.constraint(equalToConstant: 40),
+      addGlass.heightAnchor.constraint(equalToConstant: 40),
+      addButton.leadingAnchor.constraint(equalTo: addGlass.contentView.leadingAnchor),
+      addButton.trailingAnchor.constraint(equalTo: addGlass.contentView.trailingAnchor),
+      addButton.topAnchor.constraint(equalTo: addGlass.contentView.topAnchor),
+      addButton.bottomAnchor.constraint(equalTo: addGlass.contentView.bottomAnchor),
       scroll.leadingAnchor.constraint(equalTo: capsule.contentView.leadingAnchor, constant: 4),
       scroll.trailingAnchor.constraint(equalTo: capsule.contentView.trailingAnchor, constant: -4),
       scroll.topAnchor.constraint(equalTo: capsule.contentView.topAnchor),
