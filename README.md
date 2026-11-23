@@ -1,43 +1,95 @@
+<div align="center">
+
+<img src="docs/images/icon.png" width="128" alt="orca-ios icon">
+
 # orca-ios
 
-A native iPhone client for [Orca](https://github.com/stablyai/orca), written in Swift and UIKit for iOS 26.
+Community-maintained iPhone client for [Orca](https://github.com/stablyai/orca).
 
-The layout, copy and colours follow the official Orca mobile app screen for screen; the chrome uses the system's own Liquid Glass controls (tab bar, navigation bar, sheets, menus). Strings come from the official app's locales, so every screen reads as it does there, in English, Simplified Chinese and Traditional Chinese.
+[![CI](https://github.com/huami1314/orca-ios/actions/workflows/ci.yml/badge.svg)](https://github.com/huami1314/orca-ios/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/huami1314/orca-ios?include_prereleases&label=release)](https://github.com/huami1314/orca-ios/releases)
+[![iOS](https://img.shields.io/badge/iOS-26%2B-000000?logo=apple)](https://github.com/huami1314/orca-ios)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## What's in it
+**English** · [简体中文](README_ZH-CN.md)
 
-- Pairing by QR code, pasted code or `orca://pair` link, end-to-end encrypted like the official app
-- Feed, Bots, Agents, Usage and Automations tabs
-- A desktop's workspaces with Workspace options synced to the desktop (grouping, sort, filters)
-- Agent chats with the official transcript layout, and terminals drawn by Ghostty
-- Bots: their Home Chat, and making a new one, blank, from the official templates, from a shared link, or brought over from OpenClaw, Hermes or OpenBot
-- New workspaces, and new terminal or agent chat tabs
-- Terminal key row with Esc, Tab and latching Shift, Ctrl and Alt
-- Live Activities on the Lock Screen and in the Dynamic Island while an agent works or needs you
-- Push notifications and remote Live Activity updates through a self-hosted gateway (below)
+</div>
 
-## Build
+<p align="center">
+  <img src="docs/images/preview.png" alt="Screenshots: thoughts and commands, a command's output, an answer with code, a quoted follow-up, a /btw side question, a Live Activity on the Lock Screen, and Picture in Picture over Safari">
+</p>
 
-Needs Xcode 26 and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+## Features
+
+| | Feature | Details |
+| --- | --- | --- |
+| **System** | Live Activities | Shown on the Lock Screen and in the Dynamic Island while an agent works; the light tells working, needs you and done apart |
+| | Picture in Picture | A chat or terminal keeps running in a floating window after you leave the app; opens on its own while an agent works |
+| | Push notifications | Arrive through the push gateway even with the app closed; tapping one opens its workspace |
+| **Chat** | Paste and drop files | Paste or drag photos, videos and documents into the composer; they upload as soon as they're added, and send waits for them |
+| | Quote | Select text in a reply and quote it into the next message, shown with a bar |
+| | `/btw` | Ask a side question without interrupting the chat; the answer opens in a half sheet and goes away when closed |
+| | Streaming | Thoughts come in word by word, and a light haptic marks the end of a reply |
+| | Tool calls | Commands and file edits open in place in two levels; terminal output keeps its ANSI colours |
+| | Sending while working | Tap send to steer or to queue, hold it for the other |
+| | Background tasks | Background agents, shells and queued messages share one scrolling bar where you can check or stop them |
+| | Context ring | The composer shows how much context is used; tap for the breakdown |
+| | Composer | One line until you type, then a card; pull up for a full-screen editor; `/` commands, `@` files, drafts kept per chat |
+| | Photos | The photo picker opens in place from the composer, videos included |
+| | File paths | Paths in a reply open a preview when tapped |
+| **Interface** | Liquid Glass | Navigation bars, tab bar, menus and sheets are system controls with Liquid Glass |
+| | Terminal | [Ghostty](https://github.com/ghostty-org/ghostty), via [libghostty-spm](https://github.com/Lakr233/libghostty-spm) by [Lakr233](https://github.com/Lakr233), with Esc, Tab, Ctrl and Alt keys |
+| | Tabs | Hide the bottom tabs you don't use |
+| | Cache | Chats, workspaces and images are cached, so the last view is there when the app opens |
+| | Languages | English, Simplified Chinese and Traditional Chinese |
+
+## Push notifications
+
+Notifications reach this app through the community push gateway at `https://orca-push.huami.dev`. On the Mac running Orca:
 
 ```sh
+launchctl setenv ORCA_PUSH_GATEWAY_URL https://orca-push.huami.dev
+```
+
+Then restart Orca. The welcome screen in the app has a prompt you can copy to an AI agent to do this for you.
+
+> [!NOTE]
+> A desktop sends notifications through one gateway at a time. With this one set, the official Orca app on the same desktop stops receiving them. Unset the variable and restart Orca to switch back.
+
+To run your own gateway, see [`gateway/`](gateway/README.md) (Node.js or Docker) or `gateway-worker/` (Cloudflare Workers).
+
+## Building
+
+Requires Xcode 26 and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+
+```sh
+git clone https://github.com/huami1314/orca-ios.git
+cd orca-ios
 xcodegen
 open Orca.xcodeproj
 ```
 
-- `scripts/sim.sh <simulator udid> <screenshot.png>` builds, installs and launches on a simulator.
-- `scripts/ipa.sh [out.ipa]` builds an unsigned Release IPA. Sign it with a profile for `com.thm.orcaios` (and `com.thm.orcaios.widgets` for the Live Activity extension) that includes Push Notifications.
+| Command | Does |
+| --- | --- |
+| `scripts/sim.sh <udid> <shot.png>` | Builds, installs and launches on a simulator, then takes a screenshot |
+| `scripts/ipa.sh [out.ipa]` | Builds an unsigned Release IPA |
+| `cd packages/OrcaCore && swift test` | Runs the protocol tests (pairing, encryption, RPC) |
 
-`packages/OrcaCore` holds the protocol (pairing, E2EE, RPC) and has its own tests: `cd packages/OrcaCore && swift test`.
+## Contributing
 
-## Push notifications
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first; commits follow [Conventional Commits](https://www.conventionalcommits.org).
 
-The official Orca push service only delivers to the official app. For this app, run the gateway in [`gateway/`](gateway/README.md) with your own APNs key and start the desktop with `ORCA_PUSH_GATEWAY_URL` pointing at it. Without it, everything else works, and notifications and Live Activities update only while the app is open.
+## License
 
-## Regenerating resources
+[MIT](LICENSE). See [NOTICE.md](NOTICE.md) for the relationship with Orca and third-party licenses.
 
-- Bot templates: `node scripts/generate-bot-templates.mjs <path to orca>` (uses the gateway's esbuild).
-- Strings: `node scripts/generate-strings.mjs <path to orca/mobile>`; strings the official app doesn't have live in `scripts/strings-extra.json`.
-- Icons: `node scripts/generate-lucide-icons.mjs <path to orca/mobile> <lucide-react-native icons dir>`.
+## Acknowledgements
 
-Design notes are in `docs/design/`, protocol notes in `docs/protocol/`.
+- [Orca](https://github.com/stablyai/orca)
+- [Ghostty](https://github.com/ghostty-org/ghostty) and [libghostty-spm](https://github.com/Lakr233/libghostty-spm) by [Lakr233](https://github.com/Lakr233)
+- [MarkdownView](https://github.com/Lakr233/MarkdownView) by [Lakr233](https://github.com/Lakr233)
+- [Lucide](https://github.com/lucide-icons/lucide)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=huami1314/orca-ios&type=Date)](https://star-history.com/#huami1314/orca-ios&Date)
