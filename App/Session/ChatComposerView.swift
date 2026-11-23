@@ -227,11 +227,22 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   func textViewDidEndEditing(_ textView: UITextView) { updateCollapsed(animated: true) }
 
   /// One line when nothing is being written; the card otherwise.
+  /// At rest the + is a bare glyph inside the bar; while writing it sits on its own glass.
+  private func styleAttach(collapsed: Bool) {
+    var configuration: UIButton.Configuration = collapsed ? .plain() : .glass()
+    configuration.image = Lucide.plus.image(size: 20, strokeWidth: 2)
+    configuration.baseForegroundColor = Palette.textPrimary
+    configuration.cornerStyle = .capsule
+    configuration.contentInsets = .init(top: 10, leading: 10, bottom: 10, trailing: 10)
+    attach.configuration = configuration
+  }
+
   private func updateCollapsed(animated: Bool) {
     // Resting means not being written in: a draft rests too, as one line of its words.
     let collapse = !textView.isFirstResponder && fullScreenProgress == 0
     guard collapse != isCollapsed || expandedSet.first?.isActive == collapse else { return }
     isCollapsed = collapse
+    styleAttach(collapsed: collapse)
     let change = {
       NSLayoutConstraint.deactivate(collapse ? self.expandedSet + [self.textTop, self.textUnderChips] : self.collapsedSet)
       NSLayoutConstraint.activate(collapse ? self.collapsedSet : self.expandedSet)
