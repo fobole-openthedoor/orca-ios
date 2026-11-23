@@ -227,7 +227,9 @@ final class ChatViewController: UIViewController {
     snapshot.appendSections([0])
     snapshot.appendItems(projection.lines)
     snapshot.reconfigureItems(projection.lines)
-    dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+    // A turn ending folds its thoughts and calls into one line: animated, so they gather rather than vanish.
+    let folding = lastWorking == true && !model.isWorking && fadesNewLines
+    dataSource.apply(snapshot, animatingDifferences: folding) { [weak self] in
       guard let self else { return }
       if self.followsBottom {
         self.scrollToBottom(animated: false)
@@ -832,7 +834,11 @@ final class ChatViewController: UIViewController {
         let text = group.live
           ? String(localized: "chat.turnStatus.thinking", defaultValue: "Thinking")
           : "Thought for " + Self.shortDuration(group.seconds ?? 1)
-        view.show(icon: .brain, text: text, running: group.live, opens: !group.live, expanded: self.openThoughts.contains(key))
+        // While it thinks, its newest words stream beside it; settled, it folds to its time.
+        let latest = group.live ? group.items.last.flatMap(Self.latestThought) : nil
+        view.show(
+          icon: .brain, text: text, detail: latest, running: group.live, opens: !group.live,
+          expanded: self.openThoughts.contains(key))
       case .prompt(let id):
         guard let item = self.projection.items[id] else { return }
         let waiting = ChatProjection.isWaiting(item)
@@ -986,6 +992,8 @@ final class ChatViewController: UIViewController {
     super.viewDidAppear(animated)
     if followsBottom { scrollToBottom(animated: false) }
     watchSendTip()
+    // What was there on opening just shows; what arrives after fades in.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.fadesNewLines = true }
   }
 
   /// The send hint, once: shortly after the first chat settles on screen, unless something else is up.
@@ -1006,6 +1014,36 @@ final class ChatViewController: UIViewController {
       }
       popover.popoverPresentationController?.permittedArrowDirections = .down
       self.present(popover, animated: true)
+    }
+  }
+
+  /// The last thing a thought said: its final non-empty line, without markdown emphasis.
+  private static func latestThought(_ item: TranscriptItem) -> String? {
+    guard case .message(let message) = item.body else { return nil }
+    let line = message.text.split(whereSeparator: \.isNewline).last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    return line.map { String($0).replacingOccurrences(of: "**", with: "").trimmingCharacters(in: .whitespaces) }
+  }
+
+  /// Lines already shown once; a line seen for the first time after the chat has loaded fades in rather
+  /// than popping, so a turn's new thoughts, calls and words arrive smoothly.
+  private var shownLines: Set<ChatLine> = []
+  private var fadesNewLines = false
+
+  func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+    guard let line = dataSource.itemIdentifier(for: indexPath) else { return }
+    let new = shownLines.insert(line).inserted
+    guard new, fadesNewLines else {
+      // A reused cell may carry a fade cut short.
+      cell.contentView.layer.removeAllAnimations()
+      cell.contentView.alpha = 1
+      cell.contentView.transform = .identity
+      return
+    }
+    cell.contentView.alpha = 0
+    cell.contentView.transform = CGAffineTransform(translationX: 0, y: 6)
+    UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+      cell.contentView.alpha = 1
+      cell.contentView.transform = .identity
     }
   }
 
