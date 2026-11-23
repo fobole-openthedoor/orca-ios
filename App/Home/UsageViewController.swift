@@ -269,7 +269,7 @@ private final class AccountCard: UIView {
     for (window, label) in [
       (provider.usage?.session, "5h"),
       (provider.usage?.weekly, "7d"),
-      (provider.usage?.fableWeekly, "Fable"),
+      (provider.usage?.fableWeekly, "FB"),
     ] {
       guard let window else { continue }
       column.addArrangedSubview(UsageBarRow(label: label, window: window))

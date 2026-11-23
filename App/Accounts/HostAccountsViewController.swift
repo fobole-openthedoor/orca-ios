@@ -431,7 +431,7 @@ private final class UsageWindowsView: UIStackView {
         (Self.length(usage?.weekly?.windowMinutes ?? 10_080), usage?.weekly, false),
       ]
       if let fable = usage?.fableWeekly {
-        sections.append((String(localized: "accounts.screen.fableWindow", defaultValue: "Fable"), fable, false))
+        sections.append(("FB", fable, false))
       }
       if let monthly = usage?.monthly {
         sections.append(
