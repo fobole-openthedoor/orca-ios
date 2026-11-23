@@ -72,6 +72,9 @@ final class AgentStatusDot: UIView {
 
 struct WorkspaceRowConfiguration: UIContentConfiguration {
   let worktree: Worktree
+  /// The project heading above the row, when the list groups by project: a main checkout named the same
+  /// reads as its branch (or "Project folder") instead of repeating the heading.
+  var projectName: String? = nil
 
   func makeContentView() -> UIView & UIContentView { WorkspaceRowView(configuration: self) }
   func updated(for state: UIConfigurationState) -> WorkspaceRowConfiguration { self }
@@ -127,7 +130,14 @@ final class WorkspaceRowView: UIView, UIContentView {
   private func apply() {
     guard let worktree = (configuration as? WorkspaceRowConfiguration)?.worktree else { return }
     indicator.set(status: worktree.displayStatus)
-    name.text = worktree.displayName.isEmpty ? worktree.repo : worktree.displayName
+    let title = worktree.displayName.isEmpty ? worktree.repo : worktree.displayName
+    let projectName = (configuration as? WorkspaceRowConfiguration)?.projectName
+    if worktree.isMainWorktree, let projectName, title == projectName {
+      let branch = worktree.branch.replacingOccurrences(of: "refs/heads/", with: "")
+      name.text = branch.isEmpty ? String(localized: "orcaios.host.projectFolder", defaultValue: "Project folder") : branch
+    } else {
+      name.text = title
+    }
     name.font = .systemFont(ofSize: 14, weight: worktree.unread ? .bold : .semibold)
 
     glyphs.arrangedSubviews.forEach { $0.removeFromSuperview() }

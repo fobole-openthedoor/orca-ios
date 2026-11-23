@@ -84,6 +84,9 @@
         "onLeave": "Open when leaving",
         "commands": "Show each command",
         "open": "Open now"
+      },
+      "host": {
+        "projectFolder": "Project folder"
       }
     }
   },
@@ -172,6 +175,9 @@
         "onLeave": "离开时自动打开",
         "commands": "显示每条命令",
         "open": "立即打开"
+      },
+      "host": {
+        "projectFolder": "项目目录"
       }
     },
     "overrides": {
@@ -282,6 +288,9 @@
         "onLeave": "離開時自動開啟",
         "commands": "顯示每條命令",
         "open": "立即開啟"
+      },
+      "host": {
+        "projectFolder": "專案目錄"
       }
     }
   }

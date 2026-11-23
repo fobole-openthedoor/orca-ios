@@ -251,7 +251,10 @@ final class HostViewController: UIViewController {
   private func configureDataSource() {
     let worktreeCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
       guard let self, let worktree = self.session.worktree(id: id) else { return }
-      cell.contentConfiguration = WorkspaceRowConfiguration(worktree: worktree)
+      // Grouped by project, the heading already names the project.
+      let projectName =
+        self.workspaceView.groupBy == "repo" ? (self.session.repo(id: worktree.repoId)?.displayName ?? worktree.repo) : nil
+      cell.contentConfiguration = WorkspaceRowConfiguration(worktree: worktree, projectName: projectName)
       var background = UIBackgroundConfiguration.listCell()
       background.backgroundColor = Palette.bgBase
       cell.backgroundConfiguration = background

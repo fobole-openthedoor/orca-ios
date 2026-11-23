@@ -90146,6 +90146,29 @@
         }
       }
     },
+    "orcaios.host.projectFolder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project folder"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目目录"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "專案目錄"
+          }
+        }
+      }
+    },
     "orcaios.imageViewer.unavailable": {
       "extractionState": "manual",
       "localizations": {
