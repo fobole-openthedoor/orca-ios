@@ -475,8 +475,8 @@ private final class UsageWindowsView: UIStackView {
   /// 5h and 7d in this language; other lengths as desktop writes them (formatWindowLabel).
   private static func length(_ minutes: Int) -> String {
     switch minutes {
-    case 300: return String(localized: "accounts.screen.sessionWindow", defaultValue: "5h")
-    case 10_080: return String(localized: "accounts.screen.weeklyWindow", defaultValue: "7d")
+    case 300: return "5h"  // As the usage tab writes it, at the user's request.
+    case 10_080: return "7d"
     case ..<60: return "\(minutes)m"
     case let value where value % 10_080 == 0: return "\(value / 10_080)wk"
     case let value where value % 1_440 == 0: return "\(value / 1_440)d"
@@ -580,20 +580,20 @@ private final class UsageBarView: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  /// "Resets in 3h 54m", whole units rounded down; "Resets now" once it's due.
+  /// "3 小时 54 分钟后重置", whole units rounded down, in the same words as the usage tab.
   private static func countdown(_ milliseconds: Double) -> String {
-    guard milliseconds > 0 else { return "Resets now" }
-    let minutes = Int(milliseconds / 60_000)
-    let duration: String
-    if minutes < 60 {
-      duration = "\(minutes)m"
-    } else if minutes < 24 * 60 {
-      duration = minutes % 60 > 0 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes / 60)h"
-    } else {
-      let hours = minutes / 60 % 24
-      duration = hours > 0 ? "\(minutes / 1440)d \(hours)h" : "\(minutes / 1440)d"
+    let minutes = max(0, Int(milliseconds / 60_000))
+    guard minutes >= 60 else {
+      return String(format: String(localized: "orcaios.usage.resetsInMinutes", defaultValue: "Resets in %1$@m"), "\(minutes)")
     }
-    return "Resets in \(duration)"
+    guard minutes >= 24 * 60 else {
+      return String(
+        format: String(localized: "orcaios.usage.resetsInHours", defaultValue: "Resets in %1$@h %2$@m"), "\(minutes / 60)",
+        "\(minutes % 60)")
+    }
+    return String(
+      format: String(localized: "orcaios.usage.resetsInDays", defaultValue: "Resets in %1$@d %2$@h"), "\(minutes / (24 * 60))",
+      "\(minutes / 60 % 24)")
   }
 }
 
