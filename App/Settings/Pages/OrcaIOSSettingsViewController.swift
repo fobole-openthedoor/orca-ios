@@ -38,6 +38,17 @@ final class OrcaIOSSettingsViewController: SettingsPageViewController {
           }
         ]),
       Section(
+        header: String(localized: "orcaios.settings.tabsHeading", defaultValue: "TABS"),
+        footer: String(
+          localized: "orcaios.settings.tabsFooter", defaultValue: "Hide the tabs you don't use. Feed always shows."),
+        rows: HomeTab.allCases.filter(\.canHide).map { tab in
+          .toggle(title: tab.title, isOn: !HomeTab.hidden.contains(tab)) { on in
+            var hidden = HomeTab.hidden
+            if on { hidden.remove(tab) } else { hidden.insert(tab) }
+            HomeTab.hidden = hidden
+          }
+        }),
+      Section(
         header: String(localized: "orcaios.settings.pipHeading", defaultValue: "PICTURE IN PICTURE"),
         footer: String(
           localized: "orcaios.settings.pipFooter",

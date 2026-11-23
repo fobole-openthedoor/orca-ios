@@ -109,7 +109,9 @@
         "activityHeading": "LIVE ACTIVITIES",
         "activityFooter": "A working agent shows on the Lock Screen and in the Dynamic Island until it stops.",
         "activityToggle": "Show working agents",
-        "showTips": "Show tips again"
+        "showTips": "Show tips again",
+        "tabsHeading": "TABS",
+        "tabsFooter": "Hide the tabs you don't use. Feed always shows."
       },
       "browser": {
         "loadFailure": {
@@ -253,7 +255,9 @@
         "activityHeading": "实时活动",
         "activityFooter": "智能体工作时显示在锁定屏幕和灵动岛上，停下后消失。",
         "activityToggle": "显示工作中的智能体",
-        "showTips": "重新显示操作提示"
+        "showTips": "重新显示操作提示",
+        "tabsHeading": "底部标签",
+        "tabsFooter": "隐藏不常用的标签，「动态」始终显示。"
       },
       "browser": {
         "loadFailure": {
@@ -418,7 +422,9 @@
         "activityHeading": "即時動態",
         "activityFooter": "代理工作時顯示在鎖定畫面和動態島上，停下後消失。",
         "activityToggle": "顯示工作中的代理",
-        "showTips": "重新顯示操作提示"
+        "showTips": "重新顯示操作提示",
+        "tabsHeading": "底部標籤",
+        "tabsFooter": "隱藏不常用的標籤，「動態」始終顯示。"
       },
       "browser": {
         "loadFailure": {

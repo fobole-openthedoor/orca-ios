@@ -18,6 +18,19 @@ enum HomeTab: String, CaseIterable {
     .font: UIFont.systemFont(ofSize: 22, weight: .bold), .kern: -0.4, .foregroundColor: Palette.textPrimary,
   ]
 
+  /// Settings › Orca iOS can hide a tab the person doesn't use; Feed, the way in to everything, always stays.
+  var canHide: Bool { self != .feed }
+
+  static let hiddenChanged = Notification.Name("orca.tabs.hiddenChanged")
+
+  static var hidden: Set<HomeTab> {
+    get { Set((UserDefaults.standard.stringArray(forKey: "orca.tabs.hidden") ?? []).compactMap(HomeTab.init).filter(\.canHide)) }
+    set {
+      UserDefaults.standard.set(newValue.filter(\.canHide).map(\.rawValue), forKey: "orca.tabs.hidden")
+      NotificationCenter.default.post(name: hiddenChanged, object: nil)
+    }
+  }
+
   /// The official app's glyph for each tab (home/tabs/MobileHomeTabBar.tsx).
   var icon: Lucide {
     switch self {
@@ -34,10 +47,12 @@ enum HomeTab: String, CaseIterable {
 /// loaded on first visit. Agents and Bots carry needs-you badges.
 final class HomeTabController: UITabBarController {
   private var tabsByID: [HomeTab: UITab] = [:]
+  /// Every tab, hidden or not; the bar shows the ones Settings leaves on.
+  private var allTabs: [UITab] = []
 
   init() {
     super.init(nibName: nil, bundle: nil)
-    tabs = HomeTab.allCases.map { homeTab in
+    allTabs = HomeTab.allCases.map { homeTab in
       let tab = UITab(
         title: homeTab.title, image: homeTab.icon.image(size: 24, strokeWidth: 2), identifier: homeTab.rawValue
       ) { [weak self] _ in
@@ -51,6 +66,10 @@ final class HomeTabController: UITabBarController {
       tabsByID[homeTab] = tab
       return tab
     }
+    applyHidden()
+    NotificationCenter.default.addObserver(forName: HomeTab.hiddenChanged, object: nil, queue: .main) { [weak self] _ in
+      MainActor.assumeIsolated { self?.applyHidden() }
+    }
     tabBarMinimizeBehavior = .onScrollDown
     // The official bar marks the selected tab in the primary text colour, not the accent.
     tabBar.tintColor = Palette.textPrimary
@@ -58,8 +77,25 @@ final class HomeTabController: UITabBarController {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  /// Switches to a tab, back at its root, and lets it show one desktop.
+  /// Hides the tabs Settings hides; one on screen as it goes hands over to Feed first.
+  private func applyHidden() {
+    let hidden = HomeTab.hidden
+    if let selected = selectedTab, let current = HomeTab(rawValue: selected.identifier), hidden.contains(current) {
+      selectedTab = tabsByID[.feed]
+    }
+    let shown = allTabs.filter { HomeTab(rawValue: $0.identifier).map { !hidden.contains($0) } ?? true }
+    if shown.map(\.identifier) != tabs.map(\.identifier) { setTabs(shown, animated: view.window != nil) }
+  }
+
+  /// Switches to a tab, back at its root, and lets it show one desktop. A hidden tab's page opens over the
+  /// tab on screen instead.
   func open(_ homeTab: HomeTab, hostId: PairedHost.ID? = nil) {
+    if HomeTab.hidden.contains(homeTab) {
+      let page = root(for: homeTab)
+      if let hostId, let scoped = page as? HostScoped { scoped.show(hostId: hostId) }
+      (selectedTab?.viewController as? UINavigationController)?.pushViewController(page, animated: true)
+      return
+    }
     guard let tab = tabsByID[homeTab] else { return }
     selectedTab = tab
     let navigation = tab.viewController as? UINavigationController

@@ -91158,6 +91158,52 @@
         }
       }
     },
+    "orcaios.settings.tabsFooter": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide the tabs you don't use. Feed always shows."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隐藏不常用的标签，「动态」始终显示。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隱藏不常用的標籤，「動態」始終顯示。"
+          }
+        }
+      }
+    },
+    "orcaios.settings.tabsHeading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TABS"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "底部标签"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "底部標籤"
+          }
+        }
+      }
+    },
     "orcaios.settings.title": {
       "extractionState": "manual",
       "localizations": {
