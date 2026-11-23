@@ -395,28 +395,60 @@ final class ChatViewController: UIViewController {
 
   /// Rewind to here, once confirmed: the message comes back to the composer to edit and send again.
   /// A background task's row opens the call that started it: a subagent's task and what it returned, or a
-  /// shell's command and its output so far. Matched by call id, else by the label the strip shows.
+  /// shell's command and its output so far. Matched by call id, by the id a background shell's output names,
+  /// or by the label the strip shows; older pages are read in until it turns up. Without a match the task's
+  /// own facts show.
   private func openBackgroundTask(_ task: BackgroundTask) {
+    Task {
+      var match = backgroundTaskCall(task)
+      var pages = 0
+      while match == nil, model.transcript.hasOlder, pages < 8 {
+        await model.loadOlder()
+        pages += 1
+        match = backgroundTaskCall(task)
+      }
+      let sheet: UIViewController
+      if let (id, call) = match {
+        let model = self.model
+        sheet = ToolOutputViewController.sheet(call: call) {
+          guard let full = await model.fullItem(id), case .toolCall(let whole) = full.body else { return nil }
+          return whole
+        }
+      } else {
+        sheet = ToolOutputViewController.sheet(call: Self.placeholderCall(for: task), load: nil)
+      }
+      present(sheet, animated: true)
+    }
+  }
+
+  private func backgroundTaskCall(_ task: BackgroundTask) -> (String, TranscriptItem.ToolCall)? {
     let label = task.label.trimmingCharacters(in: .whitespacesAndNewlines)
-    let match = model.transcript.items.reversed().first { item in
-      guard case .toolCall(let call) = item.body else { return false }
-      if call.callId == task.id { return true }
-      guard !label.isEmpty else { return false }
-      return ["description", "command", "prompt"].contains { call.input[$0]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) == label }
+    for item in model.transcript.items.reversed() {
+      guard case .toolCall(let call) = item.body else { continue }
+      if call.callId == task.id { return (item.id, call) }
+      // "Command running in background with ID: b3jmij2mn."
+      if let output = call.output, output.contains("ID: \(task.id)") { return (item.id, call) }
+      if !label.isEmpty,
+        ["description", "command", "prompt"].contains(where: {
+          call.input[$0]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) == label
+        })
+      {
+        return (item.id, call)
+      }
     }
-    guard let item = match, case .toolCall(let call) = item.body else {
-      let alert = UIAlertController(title: label.isEmpty ? task.kind : label, message: nil, preferredStyle: .alert)
-      alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
-      present(alert, animated: true)
-      return
+    return nil
+  }
+
+  /// What the strip knows of a task whose starting call is out of reach: its label, kind and running time.
+  private static func placeholderCall(for task: BackgroundTask) -> TranscriptItem.ToolCall {
+    var facts = [task.kind]
+    if let started = task.startedAt, started > 0 {
+      facts.append(WorkSummaryView.duration(max(1, Int(Date().timeIntervalSince1970 - started / 1000))))
     }
-    let model = self.model
-    let id = item.id
-    present(
-      ToolOutputViewController.sheet(call: call) {
-        guard let full = await model.fullItem(id), case .toolCall(let whole) = full.body else { return nil }
-        return whole
-      }, animated: true)
+    if let tokens = task.totalTokens, tokens > 0 { facts.append("\(ChatDockView.compact(tokens)) tokens") }
+    return TranscriptItem.ToolCall(
+      name: task.label.isEmpty ? task.kind : task.label, input: .string(facts.joined(separator: " · ")),
+      output: nil)
   }
 
   /// Fills the suggestion panel for what is being typed: the agent's slash commands, or workspace files.

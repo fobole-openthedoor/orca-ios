@@ -14,6 +14,8 @@ final class ChatDockView: UIView {
   var onQueued: ((QueuedMessage, QueuedAction) -> Void)?
 
   private let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+  /// The segments scroll sideways when they outgrow the screen; the glass is as wide as they are otherwise.
+  private let scroll = UIScrollView()
   private let row = UIStackView()
   private var tasks: [BackgroundTask] = []
   private var stopsAll = false
@@ -29,16 +31,30 @@ final class ChatDockView: UIView {
     row.spacing = 2
     row.alignment = .center
     row.translatesAutoresizingMaskIntoConstraints = false
-    glass.contentView.addSubview(row)
+    scroll.showsHorizontalScrollIndicator = false
+    scroll.alwaysBounceHorizontal = false
+    scroll.translatesAutoresizingMaskIntoConstraints = false
+    glass.contentView.addSubview(scroll)
+    scroll.addSubview(row)
+    // As wide as the segments, until the screen runs out; then the row scrolls inside.
+    let hug = glass.widthAnchor.constraint(equalTo: row.widthAnchor, constant: 12)
+    hug.priority = .defaultHigh
     NSLayoutConstraint.activate([
       glass.topAnchor.constraint(equalTo: topAnchor),
       glass.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm),
       glass.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
       glass.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Spacing.lg),
       glass.heightAnchor.constraint(equalToConstant: 40),
-      row.leadingAnchor.constraint(equalTo: glass.contentView.leadingAnchor, constant: 6),
-      row.trailingAnchor.constraint(equalTo: glass.contentView.trailingAnchor, constant: -6),
-      row.centerYAnchor.constraint(equalTo: glass.contentView.centerYAnchor),
+      hug,
+      scroll.leadingAnchor.constraint(equalTo: glass.contentView.leadingAnchor, constant: 6),
+      scroll.trailingAnchor.constraint(equalTo: glass.contentView.trailingAnchor, constant: -6),
+      scroll.topAnchor.constraint(equalTo: glass.contentView.topAnchor),
+      scroll.bottomAnchor.constraint(equalTo: glass.contentView.bottomAnchor),
+      row.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+      row.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+      row.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+      row.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+      row.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
     ])
     redraw()
   }
@@ -218,7 +234,6 @@ final class ChatDockView: UIView {
     let button = segment(
       icon: .goal, title: status, color: goal.status == "active" ? Palette.textPrimary : Palette.statusAmber,
       menu: UIMenu(title: heading, children: actions))
-    button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     return button
   }
 

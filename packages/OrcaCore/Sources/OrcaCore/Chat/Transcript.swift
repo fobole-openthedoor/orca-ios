@@ -32,6 +32,16 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     public var exitCode: Int?
     public var durationMs: Double?
 
+    /// A call drawn from what the client knows, for a task whose own row isn't loaded.
+    public init(name: String, input: JSONValue, output: String?) {
+      self.name = name
+      self.input = input
+      callId = nil
+      state = "completed"
+      self.output = output
+      outputTruncated = false
+    }
+
     init(_ json: JSONValue) {
       name = json["name"]?.stringValue ?? ""
       input = json["input"] ?? .null
