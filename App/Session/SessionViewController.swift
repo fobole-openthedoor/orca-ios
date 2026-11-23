@@ -230,7 +230,15 @@ final class SessionViewController: UIViewController {
       do {
         resolved = try await api.resolvePath(worktreeId: worktreeId, pathText: path)
       } catch {
-        // A desktop older than path resolution: read it as a path inside this workspace.
+        // Only a relative path can stand in for itself on a desktop that can't resolve paths; `~/…` or an
+        // absolute path read as one would name a file that isn't there. Say why instead.
+        guard !path.hasPrefix("~"), !path.hasPrefix("/") else {
+          let message = (error as? RPCError).map { $0.message.isEmpty ? $0.code : $0.message } ?? error.localizedDescription
+          let alert = UIAlertController(title: path, message: message, preferredStyle: .alert)
+          alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
+          self?.present(alert, animated: true)
+          return
+        }
         resolved = .worktree(worktreeId: worktreeId, relativePath: self?.relativeToWorkspace(path) ?? path, isDirectory: false)
       }
       guard let self else { return }
