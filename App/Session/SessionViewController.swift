@@ -419,19 +419,21 @@ final class SessionViewController: UIViewController {
   private func pipFrame() -> PiPFrame? {
     let worktree = session.worktree(id: worktreeId)
     let name = bot?.name ?? worktree?.displayName ?? ""
-    let state = worktree?.displayStatus ?? "idle"
-    let working = state == "working" || state == "monitoring"
-    let word =
+    // Working means the main agent is running a turn now; background tasks left running ("monitoring") are not
+    // work to watch, so they neither say "Working" nor open picture in picture on leaving.
+    let word = { (working: Bool) in
       working
-      ? String(localized: "sidebar.cardSlot.working", defaultValue: "Working")
-      : String(localized: "bots.row.idle", defaultValue: "Idle")
+        ? String(localized: "sidebar.cardSlot.working", defaultValue: "Working")
+        : String(localized: "bots.row.idle", defaultValue: "Idle")
+    }
     if let chat = current as? ChatViewController {
       let tail = chat.pipLines()
-      return PiPFrame(title: name, status: word, working: working || tail.working, lines: tail.lines, terminal: false)
+      return PiPFrame(title: name, status: word(tail.working), working: tail.working, lines: tail.lines, terminal: false)
     }
+    let working = worktree?.displayStatus == "working"
     if let terminal = current as? TerminalTabController {
       return PiPFrame(
-        title: name, status: word, working: working, lines: terminal.pipLines().map { ($0, .terminal) }, terminal: true)
+        title: name, status: word(working), working: working, lines: terminal.pipLines().map { ($0, .terminal) }, terminal: true)
     }
     return nil
   }

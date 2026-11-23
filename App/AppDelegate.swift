@@ -64,6 +64,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   }
 
   func sceneWillEnterForeground(_ scene: UIScene) {
+    PiPCenter.shared.appBecameActive()
     if background != .invalid {
       UIApplication.shared.endBackgroundTask(background)
       background = .invalid
@@ -75,6 +76,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   }
 
   func sceneDidBecomeActive(_ scene: UIScene) {
+    PiPCenter.shared.appBecameActive()
     AppModel.shared.nudgeAll()
   }
 

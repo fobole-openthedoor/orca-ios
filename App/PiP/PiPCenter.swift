@@ -33,7 +33,7 @@ final class PiPCenter: NSObject {
     get { UserDefaults.standard.object(forKey: "orca.pip.auto") as? Bool ?? true }
     set {
       UserDefaults.standard.set(newValue, forKey: "orca.pip.auto")
-      shared.controller?.canStartPictureInPictureAutomaticallyFromInline = newValue
+      shared.updateAutoStart()
     }
   }
 
@@ -86,7 +86,6 @@ final class PiPCenter: NSObject {
       let controller = AVPictureInPictureController(contentSource: content)
       controller.delegate = self
       controller.requiresLinearPlayback = true
-      controller.canStartPictureInPictureAutomaticallyFromInline = Self.startsOnLeave
       self.controller = controller
     }
     // The system only starts automatically from "playing" media, so the audio session plays (silently,
@@ -113,6 +112,20 @@ final class PiPCenter: NSObject {
     silence.start()
   }
 
+  /// Leaving opens the window only while the agent is working: there is nothing to watch otherwise.
+  private func updateAutoStart() {
+    let wanted = Self.startsOnLeave && (last?.working ?? false)
+    if controller?.canStartPictureInPictureAutomaticallyFromInline != wanted {
+      controller?.canStartPictureInPictureAutomaticallyFromInline = wanted
+    }
+  }
+
+  /// Back in the app, the window goes: the session it showed is on screen again.
+  func appBecameActive() {
+    guard isActive else { return }
+    controller?.stopPictureInPicture()
+  }
+
   func start() {
     draw(force: true)
     controller?.startPictureInPicture()
@@ -136,6 +149,7 @@ final class PiPCenter: NSObject {
     guard force || frame != last || now.timeIntervalSince(lastDrawn) > 4 else { return }
     last = frame
     lastDrawn = now
+    updateAutoStart()
     guard let buffer = PiPRenderer.sampleBuffer(for: frame, size: Self.size) else { return }
     if layer.status == .failed { layer.flush() }
     layer.enqueue(buffer)
