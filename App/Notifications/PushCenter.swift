@@ -278,24 +278,32 @@ final class PushCenter: NSObject {
 
 extension PushCenter: UNUserNotificationCenterDelegate {
   nonisolated func userNotificationCenter(
-    _ center: UNUserNotificationCenter, willPresent notification: UNNotification
-  ) async -> UNNotificationPresentationOptions {
-    let userInfo = notification.request.content.userInfo
+    _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
     // userInfo is a plain property list; it is only read on the main actor to compare against the screen.
-    nonisolated(unsafe) let info = userInfo
-    let suppress = await MainActor.run { PushCenter.suppressesWhileViewing(info) }
-    return suppress ? [] : [.banner, .list, .sound]
+    nonisolated(unsafe) let info = notification.request.content.userInfo
+    DispatchQueue.main.async {
+      completionHandler(PushCenter.suppressesWhileViewing(info) ? [] : [.banner, .list, .sound])
+    }
   }
 
-  /// A tapped notification opens the workspace it is about.
-  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+  /// A tapped notification opens its workspace. The completion-handler form, answered on the main thread:
+  /// the async form finishes off it, and UIKit aborts when told the tap was handled from another thread.
+  nonisolated func userNotificationCenter(
+    _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
     let orca = response.notification.request.content.userInfo["orca"] as? [String: Any]
-    guard let host = orca?["host"] as? String, let worktree = orca?["worktreeId"] as? String,
-      var components = URLComponents(string: "orca://open")
-    else { return }
-    components.queryItems = [URLQueryItem(name: "host", value: host), URLQueryItem(name: "worktree", value: worktree)]
-    guard let url = components.url else { return }
-    await MainActor.run { NotificationCenter.default.post(name: .orcaOpenURL, object: url) }
+    let host = orca?["host"] as? String
+    let worktree = orca?["worktreeId"] as? String
+    DispatchQueue.main.async {
+      if let host, let worktree, var components = URLComponents(string: "orca://open") {
+        components.queryItems = [URLQueryItem(name: "host", value: host), URLQueryItem(name: "worktree", value: worktree)]
+        if let url = components.url { NotificationCenter.default.post(name: .orcaOpenURL, object: url) }
+      }
+      completionHandler()
+    }
   }
 }
 

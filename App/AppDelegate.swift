@@ -1,3 +1,4 @@
+import UserNotifications
 import TipKit
 import OrcaCore
 import UIKit
@@ -9,6 +10,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
   ) -> Bool {
     ScrollEdges.install()
     try? Tips.configure()
+    // Before launch finishes: a tap that launched the app is delivered to whoever is the delegate by then.
+    UNUserNotificationCenter.current().delegate = PushCenter.shared
     return true
   }
 
@@ -108,13 +111,21 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     presenter.present(UINavigationController(rootViewController: pairing), animated: true)
   }
 
-  private func openWorkspace(_ url: URL) {
+  private func openWorkspace(_ url: URL, attempt: Int = 0) {
     let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
     guard let hostText = items.first(where: { $0.name == "host" })?.value, let hostId = UUID(uuidString: hostText),
       let worktreeId = items.first(where: { $0.name == "worktree" })?.value,
-      let session = AppModel.shared.session(for: hostId),
       let tabs = window?.rootViewController as? HomeTabController
     else { return }
+    // Opened from a notification at launch, the paired desktops are still loading: try again shortly.
+    guard let session = AppModel.shared.session(for: hostId) else {
+      if attempt < 20 {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.openWorkspace(url, attempt: attempt + 1) }
+      }
+      return
+    }
+    // The first-launch welcome page closes first.
+    if let welcome = tabs.presentedViewController as? WelcomeViewController { WelcomeViewController.seen = true; welcome.dismiss(animated: false) }
     tabs.presentedViewController?.dismiss(animated: false)
     tabs.selectedTab = tabs.tabs.first
     guard let navigation = tabs.selectedViewController as? UINavigationController else { return }
