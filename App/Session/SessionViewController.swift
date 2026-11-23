@@ -189,7 +189,12 @@ final class SessionViewController: UIViewController {
   private func updateStrip() {
     let active = tabs.tabs.first { $0.id == shownTabId }
     let agentState = shownState(session.worktree(id: worktreeId))
-    strip.show(tabs: tabs.tabs, shownId: active?.id, agentState: agentState, botHome: bot != nil)
+    // A /btw fork lives in its sheet, not the strip.
+    let listed = tabs.tabs.filter { tab in
+      if case .agentSession(let id, _) = tab.kind { return !sideSessions.contains(id) }
+      return true
+    }
+    strip.show(tabs: listed, shownId: active?.id, agentState: agentState, botHome: bot != nil)
   }
 
   private func show(_ tab: SessionTab?) {
@@ -243,9 +248,16 @@ final class SessionViewController: UIViewController {
           guard let self else { return }
           let api = self.session.api
           let selector = self.selector
+          let worktree = self.session.worktree(id: self.worktreeId)
+          let model = { (id: String) in
+            ChatSessionModel(
+              api: api, sessionId: id, capabilities: self.session.status?.capabilities ?? [],
+              connectionId: worktree.flatMap { self.session.repo(id: $0.repoId)?.connectionId })
+          }
           self.run {
-            try await api.createChat(
+            let side = try await api.createChat(
               agent: agentType ?? "claude", worktree: selector, forkFrom: (sessionId, itemId), firstMessage: question)
+            self.presentSideAnswer(question: question, model: model(side))
           }
         }
         chats[sessionId] = chat
@@ -296,6 +308,55 @@ final class SessionViewController: UIViewController {
     stripEdge.scrollView = chat
     next.didMove(toParent: self)
     current = next
+  }
+
+  // MARK: Side questions
+
+  /// A `/btw` answer in a half sheet over the chat, read once: closing it closes the fork's tab too.
+  private func presentSideAnswer(question: String, model: ChatSessionModel) {
+    let chat = ChatViewController(model: model)
+    chat.readOnly = true
+    chat.imageLoader = ChatImageLoader(api: session.api, worktreeId: worktreeId)
+    chat.title = question
+    let navigation = UINavigationController(rootViewController: chat)
+    navigation.navigationBar.prefersLargeTitles = false
+    chat.navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self, weak navigation] _ in
+      navigation?.dismiss(animated: true)
+      self?.closeSideChat(model.sessionId)
+    })
+    if let sheet = navigation.sheetPresentationController {
+      sheet.detents = [.medium(), .large()]
+      sheet.prefersGrabberVisible = true
+      sheet.prefersScrollingExpandsWhenScrolledToEdge = false
+    }
+    let sideId = model.sessionId
+    sideSessions.insert(sideId)
+    updateStrip()
+    sideCloser = SheetCloser { [weak self] in self?.closeSideChat(sideId) }
+    navigation.presentationController?.delegate = sideCloser
+    present(navigation, animated: true)
+  }
+
+  private var sideCloser: SheetCloser?
+  /// /btw forks, kept out of the strip until their tab is closed.
+  private var sideSessions: Set<String> = []
+
+  /// The side chat's tab goes once its answer has been read.
+  private func closeSideChat(_ sessionId: String) {
+    sideCloser = nil
+    let api = session.api
+    let selector = selector
+    let tabId = tabs.tabs.first { if case .agentSession(sessionId, _) = $0.kind { true } else { false } }?.id
+    Task {
+      var id = tabId
+      // The tab may not have reached the strip yet when the sheet closed fast.
+      if id == nil { try? await Task.sleep(for: .seconds(1)) }
+      id = id ?? self.tabs.tabs.first { if case .agentSession(sessionId, _) = $0.kind { true } else { false } }?.id
+      if let id { try? await api.closeTab(id, worktree: selector) }
+      // Closed (or never listed): it may show in the strip again if the close didn't take.
+      self.sideSessions.remove(sessionId)
+      self.updateStrip()
+    }
   }
 
   // MARK: Panels
@@ -759,3 +820,10 @@ private final class NoTabsViewController: UIViewController {
   }
 }
 
+
+/// Calls back when a sheet is swiped away.
+final class SheetCloser: NSObject, UIAdaptivePresentationControllerDelegate {
+  private let closed: () -> Void
+  init(_ closed: @escaping () -> Void) { self.closed = closed }
+  func presentationControllerDidDismiss(_ presentationController: UIPresentationController) { closed() }
+}

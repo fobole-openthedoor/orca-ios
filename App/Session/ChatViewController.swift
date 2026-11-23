@@ -46,6 +46,8 @@ final class ChatViewController: UIViewController {
   var onOpenPath: ((String) -> Void)?
   /// Fork from a response: a new chat holding this one through that item.
   var onFork: ((String) -> Void)?
+  /// Shows the conversation only: no composer or toolbar (a `/btw` answer's sheet).
+  var readOnly = false
   /// `/btw question`: fork through the newest finished answer and ask there, beside this chat.
   var onSideQuestion: ((_ question: String, _ throughItemId: String) -> Void)?
   /// Reads the images messages point at from the workspace's host.
@@ -227,13 +229,20 @@ final class ChatViewController: UIViewController {
     }
     model.start()
     Task { await model.loadOptions() }
+    if readOnly {
+      composer.isHidden = true
+      dock.isHidden = true
+      quoteBar.isHidden = true
+    }
   }
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
     // The transcript scrolls under the composer; its last row stops above it.
     // The docked strips sit over the transcript's tail too.
-    let top = !dock.isHidden ? dock.frame.minY : !quoteBar.isHidden ? quoteBar.frame.minY : composer.frame.minY
+    let top =
+      readOnly ? view.bounds.height - view.safeAreaInsets.bottom
+      : !dock.isHidden ? dock.frame.minY : !quoteBar.isHidden ? quoteBar.frame.minY : composer.frame.minY
     let bottom = view.bounds.height - top + Spacing.sm - view.safeAreaInsets.bottom
     if collection.contentInset.bottom != bottom {
       collection.contentInset.bottom = bottom

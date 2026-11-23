@@ -122,10 +122,12 @@ public struct HostAPI: Sendable {
   /// `forkFrom` starts it as a copy of another chat through one of its items.
   /// A new chat; with `forkFrom` it holds that one through the item, and `firstMessage` goes in as its first
   /// question (`/btw`, on hosts with `agentSession.create.message.v1`).
+  /// Returns the new chat's session id.
+  @discardableResult
   public func createChat(
     agent: String, worktree selector: String, forkFrom: (sessionId: String, throughItemId: String)? = nil,
     firstMessage: String? = nil
-  ) async throws {
+  ) async throws -> String {
     var fields: [String: JSONValue] = ["worktree": .string(selector), "agent": .string(agent)]
     if let forkFrom {
       fields["forkFrom"] = ["sessionId": .string(forkFrom.sessionId), "throughItemId": .string(forkFrom.throughItemId)]
@@ -133,14 +135,16 @@ public struct HostAPI: Sendable {
     if let firstMessage, let body = ChatMessageBody.send(text: firstMessage, filePaths: [], imagePaths: []) {
       fields["firstMessage"] = ["clientMessageId": .string(AgentSessionMutation.newOperationId()), "body": body]
     }
+    let sessionId = UUID().uuidString.lowercased()
     let mutation = AgentSessionMutation(
-      method: "agentSession.create", sessionId: UUID().uuidString.lowercased(), fields: fields, expectedRuntimeFence: nil)
+      method: "agentSession.create", sessionId: sessionId, fields: fields, expectedRuntimeFence: nil)
     let result = try await connection.request("agentSession.create", mutation.params, timeout: .seconds(15))
     if result["ok"]?.boolValue == false {
       throw RPCError(
         code: result["error"]?["code"]?.stringValue ?? "refused",
         message: result["error"]?["message"]?.stringValue ?? "", data: nil)
     }
+    return sessionId
   }
 
   public func createTerminalTab(worktree selector: String) async throws {
