@@ -102,7 +102,20 @@ final class NewWorkspaceViewController: UITableViewController {
     tableView.register(FormSectionHeader.self, forHeaderFooterViewReuseIdentifier: "header")
     tableView.keyboardDismissMode = .interactive
     tableView.sectionHeaderTopPadding = 0
-    tableView.tableFooterView = makeFooter()
+    // The create button stays on the sheet's floor, as the official's does, above the home indicator.
+    let footer = makeFooter()
+    footer.translatesAutoresizingMaskIntoConstraints = false
+    if let host = navigationController?.view {
+      host.addSubview(footer)
+      NSLayoutConstraint.activate([
+        footer.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+        footer.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+        footer.bottomAnchor.constraint(equalTo: host.keyboardLayoutGuide.topAnchor),
+      ])
+      tableView.contentInset.bottom = footer.frame.height
+    } else {
+      tableView.tableFooterView = footer
+    }
     refresh()
     loadTargets()
   }
@@ -194,6 +207,10 @@ final class NewWorkspaceViewController: UITableViewController {
     }
   }
 
+  override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+    (cell as? StartFieldCell)?.unclip()
+  }
+
   // MARK: Footer
 
   private func makeFooter() -> UIView {
@@ -220,7 +237,7 @@ final class NewWorkspaceViewController: UITableViewController {
     stack.directionalLayoutMargins = .init(top: Spacing.xl, leading: Spacing.lg + 4, bottom: Spacing.lg, trailing: Spacing.lg + 4)
     createButton.heightAnchor.constraint(equalToConstant: 48).isActive = true
     let size = stack.systemLayoutSizeFitting(CGSize(width: 390, height: 0))
-    stack.frame = CGRect(x: 0, y: 0, width: 0, height: size.height + 40)
+    stack.frame = CGRect(x: 0, y: 0, width: 0, height: size.height)
     return stack
   }
 
@@ -645,6 +662,21 @@ private final class StartFieldCell: UITableViewCell {
   private let title = UILabel()
   private let clear = UIButton(type: .system)
   private var onClear: (() -> Void)?
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    // The grouped list rounds and clips every cell to its section's large corners, which would cut the
+    // bordered field's own corners off; the bare field keeps its corners.
+    if !box.isHidden { unclip() }
+  }
+
+  func unclip() {
+    for layer in [layer, contentView.layer] {
+      layer.cornerRadius = 0
+      layer.mask = nil
+      layer.masksToBounds = false
+    }
+  }
 
   override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
     super.init(style: style, reuseIdentifier: reuseIdentifier)
