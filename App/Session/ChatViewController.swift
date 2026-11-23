@@ -156,11 +156,17 @@ final class ChatViewController: UIViewController {
     view.setNeedsLayout()
     presentNewPrompt()
     updateModelChip()
+    // The newest words of the current turn: its latest answer, else what was asked, never the last turn's reply.
     let latest = projection.lines.reversed().lazy.compactMap { line -> String? in
-      if case .answer(let id) = line, let item = self.projection.items[id], case .message(let message) = item.body {
-        return message.text
+      switch line {
+      case .answer(let id), .user(let id):
+        if let item = self.projection.items[id], case .message(let message) = item.body, !message.text.isEmpty {
+          return message.text
+        }
+        return nil
+      case .pending(let id): return self.projection.pending[id]?.text
+      default: return nil
       }
-      return nil
     }.first
     let report = (model.isWorking, latest.map { String($0.prefix(160)) })
     if lastReported.map({ $0.0 != report.0 || $0.1 != report.1 }) ?? true {

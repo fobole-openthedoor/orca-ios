@@ -86,7 +86,9 @@ final class AgentActivityCenter {
   private static func isWorking(_ state: String) -> Bool { state == "working" || state == "monitoring" }
 
   private func update(key: String, host: String, hostId: UUID, worktree: Worktree, agent: Worktree.Agent) {
-    let detail = [agent.lastAssistantMessage, agent.title].compactMap { $0 }
+    // What it is working on: this turn's prompt or task; the last reply belongs to the turn before, and
+    // the agent's title is often just the workspace's name.
+    let detail = [agent.prompt, agent.taskTitle ?? "", agent.lastAssistantMessage ?? ""]
       .map { $0.replacingOccurrences(of: "\n", with: " ") }.first { !$0.isEmpty } ?? worktree.displayName
     let since = lastStates[key]?.since
       ?? Date(timeIntervalSince1970: (agent.updatedAt ?? Date().timeIntervalSince1970 * 1000) / 1000)
@@ -132,7 +134,7 @@ final class AgentActivityCenter {
     guard working else { return }
     var agent = Worktree.Agent.placeholder(agentType: agentType)
     agent.state = "working"
-    agent.lastAssistantMessage = detail
+    agent.prompt = detail ?? ""
     agent.updatedAt = Date().timeIntervalSince1970 * 1000
     update(key: worktree.id, host: hostName, hostId: hostId, worktree: worktree, agent: agent)
   }
