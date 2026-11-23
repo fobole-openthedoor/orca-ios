@@ -500,16 +500,39 @@ public struct SSHConnectionState: Sendable, Equatable {
 extension HostAPI {
   /// Makes a workspace from the New workspace form, trying the next name when the host says one is taken
   /// (worktree-create-retry.ts).
-  public func createWorkspace(_ request: WorkspaceCreateRequest) async throws -> WorkspaceCreateResult {
+  ///
+  /// With an agent, a host that has `agent.launch.v2` gets `agent.launch` (create-worktree target), which opens
+  /// the agent as a chat when the desktop prefers chats; `worktree.create` with `startupAgent` only ever starts
+  /// it in a terminal (worktree-create-retry.ts). An approved setup goes through `worktree.create` unless the
+  /// host's launch receipt can report a skipped setup.
+  public func createWorkspace(_ request: WorkspaceCreateRequest, capabilities: [String] = []) async throws
+    -> WorkspaceCreateResult
+  {
+    let launches =
+      request.agent != nil && capabilities.contains("agent.launch.v2")
+      && (request.approvedSetupHash == nil || capabilities.contains("agent.launch.setup-trust-mismatch.v1"))
     var lastError: Error?
     for attempt in 0..<WorkspaceCreateRetry.maxAttempts {
       let params = request.params(attempt: attempt)
       do {
-        let reply = try await connection.request("worktree.create", params, timeout: .seconds(60))
-        guard let id = reply["worktree"]?["id"]?.stringValue else {
+        let reply: JSONValue
+        let worktreeId: String?
+        let displayName: String
+        if launches, let agent = request.agent, case .object(var create) = params {
+          for field in Self.reservedLaunchCreateFields { create[field] = nil }
+          reply = try await connection.request(
+            "agent.launch", ["agent": .string(agent), "target": ["kind": "create-worktree", "create": .object(create)]],
+            timeout: .seconds(60))
+          worktreeId = reply["worktreeId"]?.stringValue
+          displayName = ""
+        } else {
+          reply = try await connection.request("worktree.create", params, timeout: .seconds(60))
+          worktreeId = reply["worktree"]?["id"]?.stringValue
+          displayName = reply["worktree"]?["displayName"]?.stringValue?.trimmingCharacters(in: .whitespaces) ?? ""
+        }
+        guard let id = worktreeId else {
           throw RPCError(code: "create_failed", message: "Failed to create workspace", data: nil)
         }
-        let displayName = reply["worktree"]?["displayName"]?.stringValue?.trimmingCharacters(in: .whitespaces) ?? ""
         let warning = reply["warning"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return WorkspaceCreateResult(
           worktreeId: id, name: displayName.isEmpty ? (params["name"]?.stringValue ?? request.name) : displayName,
@@ -520,6 +543,12 @@ extension HostAPI {
     }
     throw lastError ?? RPCError(code: "create_failed", message: "Failed to create workspace", data: nil)
   }
+
+  /// Startup fields `agent.launch` refuses in its create payload (agent-launch-intent.ts).
+  static let reservedLaunchCreateFields = [
+    "startupAgent", "startupCommand", "startupPrompt", "startupDraft", "startupLaunchConfig", "startupEnv",
+    "startupCommandDelivery", "launchSource",
+  ]
 
   /// A project's branches matching a search (`repo.searchRefs`); an empty query lists recent ones.
   public func searchBranches(repoId: String, query: String, limit: Int = 20) async throws -> [BranchRef] {

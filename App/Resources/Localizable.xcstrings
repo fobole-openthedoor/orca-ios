@@ -89564,19 +89564,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca iOS is maintained by the community, with huami1314 as its core maintainer. It is not made or endorsed by Orca's authors. Its license (MIT) and its privacy policy and terms follow Orca's."
+            "value": "A community project, not official. License and policies follow Orca."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca iOS 由社区维护，核心维护者是 huami1314。它不是 Orca 官方出品，也未经官方认可。许可证（MIT）以及隐私政策和服务条款都继承自 Orca。"
+            "value": "社区项目，非官方出品。许可证与政策继承 Orca。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca iOS 由社群維護，核心維護者是 huami1314。它不是 Orca 官方出品，也未經官方認可。授權（MIT）以及隱私權政策和服務條款都沿用 Orca。"
+            "value": "社群專案，非官方出品。授權與政策沿用 Orca。"
           }
         }
       }
@@ -89633,19 +89633,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A community iPhone client for Orca · maintained by huami1314"
+            "value": "A community iPhone client for Orca"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca 的社区版 iPhone 客户端 · huami1314 维护"
+            "value": "Orca 的社区版 iPhone 客户端"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca 的社群版 iPhone 用戶端 · huami1314 維護"
+            "value": "Orca 的社群版 iPhone 用戶端"
           }
         }
       }
@@ -91843,19 +91843,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A native iPhone client for Orca, maintained by the community. It is not made or endorsed by Orca's authors; please report problems to this project, not to Orca."
+            "value": "Native iPhone client for Orca.\nCommunity-made, not official."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca 的原生 iPhone 客户端，由社区维护。它不是 Orca 官方出品，也未经官方认可；遇到问题请反馈给本项目，不要找 Orca 官方。"
+            "value": "Orca 的原生 iPhone 客户端。\n社区打造，非官方出品。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca 的原生 iPhone 用戶端，由社群維護。它不是 Orca 官方出品，也未經官方認可；遇到問題請回報給本專案，不要找 Orca 官方。"
+            "value": "Orca 的原生 iPhone 用戶端。\n社群打造，非官方出品。"
           }
         }
       }
@@ -91958,19 +91958,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This app follows its upstream project, Orca: it is released under the MIT License like Orca, and follows Orca's privacy policy and terms."
+            "value": "License (MIT) and privacy policy follow upstream Orca."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "本软件继承上游项目 Orca：和 Orca 一样以 MIT 许可证发布，并沿用 Orca 的隐私政策和服务条款。"
+            "value": "许可证（MIT）与隐私政策继承上游 Orca。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "本軟體沿用上游專案 Orca：和 Orca 一樣以 MIT 授權發布，並沿用 Orca 的隱私權政策和服務條款。"
+            "value": "授權（MIT）與隱私權政策沿用上游 Orca。"
           }
         }
       }
@@ -92073,19 +92073,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca's own push service only reaches the official app. To get notifications here, your desktop has to send them through the community push gateway. Copy the prompt below and send it to an AI on that computer (an agent in Orca works); it will set this up."
+            "value": "Orca's push only reaches the official app.\nSend this prompt to an AI on your computer to switch it to the community gateway."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca 官方的推送服务只发给官方 App。要在这个 App 里收到通知，需要让你的电脑改用社区推送网关。复制下面的提示词，发给那台电脑上的 AI（Orca 里的智能体就行），它会帮你配置好。"
+            "value": "官方推送只发给官方 App。\n把下面的提示词发给电脑上的 AI，它会帮你改用社区推送网关。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "Orca 官方的推播服務只發給官方 App。要在這個 App 收到通知，需要讓你的電腦改用社群推播閘道。複製下面的提示詞，傳給那台電腦上的 AI（Orca 裡的代理就行），它會幫你設定好。"
+            "value": "官方推播只發給官方 App。\n把下面的提示詞傳給電腦上的 AI，它會幫你改用社群推播閘道。"
           }
         }
       }

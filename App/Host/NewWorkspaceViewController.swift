@@ -488,7 +488,7 @@ final class NewWorkspaceViewController: UITableViewController {
             return
           }
         }
-        let result = try await api.createWorkspace(request)
+        let result = try await api.createWorkspace(request, capabilities: Array(session.status?.capabilities ?? []))
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         if let mismatch = result.setupMismatch {
           // The host skipped setup: the created branch's differs from the one approved. Ask before running it there.
