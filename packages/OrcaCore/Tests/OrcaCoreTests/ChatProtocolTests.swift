@@ -50,6 +50,133 @@ import Testing
   }
 }
 
+@Suite struct ChatAgentTests {
+  @Test func readsSubagentGroupsAndAppliesLiveReports() throws {
+    var transcript = ChatTranscript()
+    transcript.apply([
+      "type": "snapshot",
+      "page": [
+        "liveCursor": ["epoch": "one", "sequence": 5],
+        "items": [[
+          "itemId": "roster", "sequence": 1, "revision": 1,
+          "body": ["kind": "message", "role": "system", "blocks": [[
+            "type": "subagent-group", "groupId": "group", "agents": [
+              ["id": "review", "label": "Review", "state": "working", "operation": ["toolName": "Read", "input": "README.md"]],
+              ["id": "build", "label": "Build", "state": "idle"],
+            ],
+          ]]],
+        ], [
+          "itemId": "child-turn", "agentId": "review", "sequence": 5,
+          "body": ["kind": "turn", "turnId": "child", "state": "running"],
+        ]],
+      ],
+    ])
+    #expect(transcript.subagents.map(\.id) == ["review", "build"])
+    #expect(transcript.subagents.first?.operation == "Read README.md")
+    #expect(transcript.runningTurnId == nil)
+    #expect(!transcript.isWorking)
+
+    transcript.apply([
+      "type": "batch", "batch": [
+        "cursor": ["epoch": "one", "sequence": 6],
+        "items": [[
+          "itemId": "report", "revision": 1, "sequence": 6,
+          "body": ["kind": "message", "role": "system", "blocks": [
+            ["type": "text", "text": "Ran subagent Review"],
+            ["type": "subagent", "id": "review", "state": "completed", "label": "Review",
+             "lastMessage": "Review complete", "tokens": 400, "parentId": "parent"],
+          ]],
+        ]],
+      ],
+    ])
+    let review = try #require(transcript.subagents.first { $0.id == "review" })
+    #expect(transcript.subagents.count == 2)
+    #expect(review.state == "completed")
+    #expect(review.lastMessage == "Review complete")
+    #expect(review.tokens == 400)
+    #expect(review.parentId == "parent")
+    if case .message(let message) = transcript.items.last?.body {
+      #expect(message.isSubagentNotice)
+    } else {
+      Issue.record("Expected a subagent notice")
+    }
+  }
+
+  @Test func retainsOffPageAgentNamesButDropsRevisedAndRemovedRows() {
+    let offPage: JSONValue = [
+      "itemId": "old-roster", "sequence": 2, "revision": 1,
+      "entry": ["id": "helper", "state": "completed", "label": "Helper"],
+    ]
+    var transcript = ChatTranscript()
+    transcript.apply([
+      "type": "snapshot", "page": [
+        "liveCursor": ["epoch": "one", "sequence": 10], "hasOlder": true,
+        "window": ["oldest": nil, "nextCursor": ["epoch": "one", "sequence": 8]],
+        "subagentRoster": [offPage],
+        "backgroundTasks": ["state": "monitoring", "tasks": [["id": "sh", "kind": "command"]]],
+      ],
+    ])
+    #expect(transcript.subagents.first?.label == "Helper")
+    #expect(transcript.oldestCursor?.sequence == 8)
+    #expect(transcript.backgroundTasks.map(\.id) == ["sh"])
+
+    transcript.apply([
+      "type": "batch", "batch": [
+        "cursor": ["epoch": "one", "sequence": 11],
+        "items": [["itemId": "old-roster", "sequence": 2, "revision": 2, "body": ["kind": "status", "text": "revised"]]],
+      ],
+    ])
+    transcript.prepend(page: ["epoch": "one", "subagentRoster": [offPage]])
+    #expect(transcript.subagents.isEmpty)
+    transcript.apply([
+      "type": "batch",
+      "batch": ["cursor": ["epoch": "one", "sequence": 12], "removedItemIds": ["old-roster"]],
+    ])
+    transcript.prepend(page: ["epoch": "one", "subagentRoster": [offPage]])
+    #expect(transcript.subagents.isEmpty)
+
+    transcript.apply(["type": "reset", "page": ["liveCursor": ["epoch": "two", "sequence": 0]]])
+    transcript.prepend(page: ["epoch": "one", "subagentRoster": [offPage]])
+    #expect(transcript.backgroundTasks.isEmpty)
+    #expect(transcript.subagents.isEmpty)
+  }
+
+  @Test func attributesWorkerMailAndReadsItsUTF16Ranges() throws {
+    let item = try #require(TranscriptItem([
+      "itemId": "mail",
+      "body": [
+        "kind": "message", "role": "user",
+        "blocks": [["type": "text", "text": "🤖\nDone\nTests passed"]],
+        "from": [
+          "kind": "agent", "senders": [["name": "Reviewer"]],
+          "orchestration": [
+            "message": "mail-notice",
+            "messages": [["content": ["subject": [3, 7], "body": [8, 20]]]],
+          ],
+        ],
+      ],
+    ]))
+    guard case .message(let message) = item.body else { Issue.record("Expected a message"); return }
+    #expect(message.agentSenders == ["Reviewer"])
+    #expect(message.agentMailText == "Done\n\nTests passed")
+    #expect(message.text == "🤖\nDone\nTests passed")
+    #expect(TranscriptItem(["itemId": "start", "body": [
+      "kind": "agent-start", "dispatchId": "dispatch", "worker": ["name": "Reviewer"], "task": "Review code",
+    ]])?.body == .agentStarted(dispatchId: "dispatch", name: "Reviewer", task: "Review code"))
+  }
+
+  @Test func keepsAWorkerWaitingDistinctFromWorkingAndRetainsItsReport() throws {
+    let waiting = try #require(ChatWorker(["dispatchId": "worker", "state": "working", "pendingQuestion": true]))
+    #expect(!waiting.isWorking)
+    #expect(waiting.displayState == "waiting")
+    let running = try #require(ChatWorker(["dispatchId": "worker", "state": "working"]))
+    #expect(running.isWorking)
+    let completed = try #require(ChatWorker(["dispatchId": "worker", "state": "completed", "summary": "Done"]))
+    #expect(!completed.isWorking)
+    #expect(completed.summary == "Done")
+  }
+}
+
 @Suite struct TerminalFrameTests {
   static func frame(_ opcode: UInt8, stream: UInt32 = 5, _ payload: [UInt8] = []) -> TerminalFrame {
     let header: [UInt8] = [0x74, 1, opcode, 0, UInt8(stream), 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0]

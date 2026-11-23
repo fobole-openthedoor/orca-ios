@@ -12,6 +12,8 @@ public final class HostSession {
   public private(set) var connectionState: ConnectionState = .disconnected
   public private(set) var status: HostStatus?
   public private(set) var worktrees: [Worktree] = []
+  /// A catalog read succeeded on the current connection. Disk and previous connection data don't qualify.
+  public private(set) var hasLiveWorktrees = false
   public private(set) var repos: [Repo] = []
   /// The host's bots; empty on a host without them.
   public private(set) var bots = BotsListing()
@@ -106,6 +108,7 @@ public final class HostSession {
         }
         let wasConnected = self.connectionState == .connected
         self.connectionState = state
+        if state != .connected { self.hasLiveWorktrees = false }
         self.path = await connection.path
         if state == .connected, !wasConnected {
           self.lastConnectedAt = Date()
@@ -213,11 +216,14 @@ public final class HostSession {
 
   private func load() async {
     var catalog = catalog
+    let connectedAt = lastConnectedAt
     do {
       async let repos = api.reposReply()
       async let bots = api.botsReply()
       try await api.refresh(&catalog)
+      guard connectionState == .connected, lastConnectedAt == connectedAt, !Task.isCancelled else { return }
       self.catalog = catalog
+      if !hasLiveWorktrees { hasLiveWorktrees = true }
       if worktrees != catalog.worktrees {
         worktrees = catalog.worktrees
       }
@@ -234,6 +240,8 @@ public final class HostSession {
       loadError = nil
       saveToCache()
     } catch {
+      guard connectionState == .connected, lastConnectedAt == connectedAt, !Task.isCancelled else { return }
+      hasLiveWorktrees = false
       loadError = Self.describe(error)
     }
     isLoading = false

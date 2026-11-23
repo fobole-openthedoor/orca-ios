@@ -55,6 +55,64 @@ import Testing
     #expect(worktree.linkedPR?.number == 12)
     #expect(worktree.selector == "id:a")
   }
+
+  @Test func groupsWorkersAndUsesTheAgentsListVerdict() throws {
+    let parent = try #require(Worktree.Agent(["paneKey": "lead:l", "state": "done"]))
+    let worker = try #require(Worktree.Agent([
+      "paneKey": "worker:l", "parentPaneKey": "lead:l", "state": "working",
+      "activity": ["listed": true, "childOf": "lead:l", "status": "blocked", "title": "Review"],
+    ]))
+    let independent = try #require(Worktree.Agent([
+      "paneKey": "new:l", "parentPaneKey": "worker:l", "activity": ["listed": true],
+    ]))
+    let panes = [independent, worker, parent]
+    let workspace = Worktree.Agent.lineage(panes)
+    #expect(workspace.map(\.entry.paneKey) == ["lead:l"])
+    #expect(workspace.first?.children.first?.children.first?.entry.paneKey == "new:l")
+    let agents = Worktree.Agent.lineage(panes, forAgentsTab: true)
+    #expect(agents.map(\.entry.paneKey) == ["new:l", "lead:l"])
+    #expect(agents.last?.children.first?.entry.listState == "blocked")
+    #expect(agents.last?.children.first?.entry.listTitle == "Review")
+  }
+
+  @Test func keepsUnlinkedAndCyclicPanesVisible() {
+    let agents: [JSONValue] = [
+      ["paneKey": "missing", "parentPaneKey": "unknown"],
+      ["paneKey": "self", "parentPaneKey": "self"],
+      ["paneKey": "a", "parentPaneKey": "b"],
+      ["paneKey": "b", "parentPaneKey": "a"],
+      ["paneKey": "a", "parentPaneKey": "missing"],
+    ]
+    let roots = Worktree.Agent.lineage(agents.compactMap(Worktree.Agent.init))
+    #expect(roots.map(\.entry.paneKey) == ["missing", "self", "a", "b"])
+    #expect(roots.allSatisfy { $0.children.isEmpty })
+  }
+
+  @Test func readsLiveProviderChildrenAndKeepsTheirOwnStatusSeparate() throws {
+    let parent = try #require(Worktree.Agent([
+      "paneKey": "lead:l", "state": "working", "mainAgent": ["state": "done"],
+      "children": [
+        ["id": "child", "kind": "agent", "parentChildWorkId": "owner", "state": "working",
+         "description": "Review", "operation": ["toolName": "Read", "input": "README.md"]],
+        ["id": "owner", "kind": "agent", "state": "done", "membership": "settled", "outcome": "succeeded"],
+        ["id": "shell", "kind": "command", "state": "working"],
+        ["id": "old", "kind": "agent", "state": "done", "membership": "settled", "outcome": "succeeded"],
+      ],
+      "subagents": [["id": "legacy", "state": "working"]],
+    ]))
+    #expect(parent.state == "working")
+    #expect(parent.mainState == "done")
+    #expect(parent.childLineage.map(\.entry.id) == ["owner"])
+    #expect(parent.childLineage.first?.children.first?.entry.label == "Review")
+    #expect(parent.childLineage.first?.children.first?.entry.detail == "Read · README.md")
+
+    let legacy = try #require(Worktree.Agent([
+      "paneKey": "legacy:l", "subagentObservation": "unverifiable",
+      "subagents": [["id": "helper", "state": "working", "description": "Tests"]],
+    ]))
+    #expect(legacy.childLineage.first?.entry.label == "Tests")
+    #expect(legacy.childLineage.first?.entry.state == "unverifiable")
+  }
 }
 
 @Suite struct SessionTabsTests {
@@ -77,6 +135,69 @@ import Testing
     #expect(tabs.tabs[3].kind == .terminal(handle: nil))
     #expect(tabs.tabs[4].kind == .unknown(type: "hologram"))
     #expect(tabs.activeTabId == "chat")
+    #expect(tabs.agentTab(sessionId: "s-12345678", paneKey: "term:leaf")?.id == "chat")
+    #expect(tabs.agentTab(sessionId: nil, paneKey: "term:leaf")?.id == "term")
+    #expect(tabs.agentTab(sessionId: "gone", paneKey: "invalid") == nil)
+  }
+}
+
+@Suite struct WorkingAgentTests {
+  @Test func collectsOnlyConfirmedActiveIdentitiesAcrossHosts() throws {
+    let sharedPane = "tab:leaf"
+    let workspace = try #require(Worktree([
+      "worktreeId": "w", "repoId": "r", "displayName": "Client",
+      "agents": [
+        ["paneKey": .string(sharedPane), "state": "working", "agentType": "codex", "displayName": "Review",
+         "conversationName": "Private conversation title", "address": "orca_session_id:review"],
+        ["paneKey": "child-owner", "state": "working", "mainAgent": ["state": "done"],
+         "address": "orca_session_id:owner",
+         "children": [["id": "c1", "kind": "agent", "state": "working", "description": "Private task",
+                       "lastMessage": "Private reply", "providerId": "provider-child"]]],
+        ["paneKey": "monitor", "state": "working", "workingMode": "monitoring"],
+        ["paneKey": "waiting", "state": "waiting"],
+        ["paneKey": "lost", "state": "working", "activity": ["listed": true, "status": "unverifiable"]],
+        ["paneKey": "legacy", "state": "working", "taskTitle": "Private task",
+         "conversationName": "Private conversation title", "prompt": "Private prompt", "orcaSessionId": "terminal-session"],
+      ],
+    ]))
+    let archived = try #require(Worktree([
+      "worktreeId": "old", "repoId": "r", "isArchived": true,
+      "agents": [["paneKey": "archived", "state": "working"]],
+    ]))
+    let hostA = UUID()
+    let hostB = UUID()
+    let first = WorkingAgent.inCatalog([workspace, archived, workspace], host: hostA)
+    let second = WorkingAgent.inCatalog([workspace], host: hostB)
+    #expect(first.map(\.id.pane) == ["child-owner", "legacy", sharedPane])
+    #expect(first.first?.isSubagent == true)
+    #expect(first.compactMap(\.name) == ["Review"])
+    #expect(first.map(\.structuredSessionId) == ["owner", nil, "review"])
+    #expect(first.map(\.journalAgentId) == ["provider-child", nil, nil])
+    #expect(Set((first + second).map(\.id)).count == 6)
+  }
+
+  @Test func rotatesTwoAtATimeWithoutRepeatingTheLastPage() {
+    let host = UUID()
+    let a = WorkingAgent.ID(host: host, pane: "a", child: nil)
+    let b = WorkingAgent.ID(host: host, pane: "b", child: nil)
+    let other = UUID()
+    let c = WorkingAgent.ID(host: other, pane: "a", child: nil)
+    let d = WorkingAgent.ID(host: other, pane: "b", child: nil)
+    let e = WorkingAgent.ID(host: other, pane: "c", child: nil)
+    let agents = [a, b, c, d, e]
+    var rotation = WorkingAgentRotation()
+    #expect(rotation.page(in: agents, at: 0, rotating: true) == 0..<2)
+    #expect(rotation.page(in: agents, at: 3.9, rotating: true) == 0..<2)
+    #expect(rotation.page(in: agents, at: 4, rotating: true) == 2..<4)
+    #expect(rotation.page(in: agents, at: 8, rotating: true) == 4..<5)
+    #expect(rotation.page(in: agents, at: 12, rotating: true) == 0..<2)
+
+    #expect(rotation.page(in: [b, c], at: 13, rotating: true) == 0..<2)
+    #expect(rotation.page(in: [b, c], at: 20, rotating: true) == 0..<2)
+    #expect(rotation.page(in: [b, c, d], at: 21, rotating: true) == 0..<2)
+    #expect(rotation.page(in: [b, c, d], at: 29, rotating: false) == 0..<2)
+    #expect(rotation.page(in: [d], at: 30, rotating: true) == 0..<1)
+    #expect(rotation.page(in: [], at: 31, rotating: true).isEmpty)
   }
 }
 

@@ -89742,6 +89742,52 @@
         }
       }
     },
+    "orcaios.agents.subagent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subagent"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子代理"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子代理"
+          }
+        }
+      }
+    },
+    "orcaios.agents.worker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca worker"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "协作代理"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "協作代理"
+          }
+        }
+      }
+    },
     "orcaios.automation.deleteFailed": {
       "extractionState": "manual",
       "localizations": {
@@ -90478,6 +90524,29 @@
         }
       }
     },
+    "orcaios.chat.workers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca workers"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca 协作代理"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca 協作代理"
+          }
+        }
+      }
+    },
     "orcaios.chat.sendWhileWorking": {
       "extractionState": "manual",
       "localizations": {
@@ -90951,6 +91020,29 @@
         }
       }
     },
+    "orcaios.pip.compact": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Two-line mode"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "双行模式"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "雙行模式"
+          }
+        }
+      }
+    },
     "orcaios.pip.commands": {
       "extractionState": "manual",
       "localizations": {
@@ -90970,6 +91062,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "顯示每條命令"
+          }
+        }
+      }
+    },
+    "orcaios.pip.noWorkingAgents": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No agents working"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有代理在工作"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "沒有代理在工作"
           }
         }
       }
@@ -91039,6 +91154,123 @@
           "stringUnit": {
             "state": "translated",
             "value": "子母畫面"
+          }
+        }
+      }
+    },
+    "orcaios.pip.statusUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent status unavailable"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂时无法获取代理状态"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暫時無法取得代理狀態"
+          }
+        }
+      }
+    },
+    "orcaios.pip.workingAgents": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld working"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld working"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 个工作中"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hant": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 個工作中"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "orcaios.pip.workingHosts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld host"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld hosts"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 台主机"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hant": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 台主機"
+                }
+              }
+            }
           }
         }
       }
@@ -91302,19 +91534,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Opens only while the agent works. The session's ⋯ menu opens it at any time."
+            "value": "Two-line mode cycles through working agents on your paired desktops. The session's ⋯ menu opens Picture in Picture at any time."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "只在智能体工作时自动打开；会话的 ⋯ 菜单随时可以手动打开。"
+            "value": "双行模式轮换显示各台已配对主机上正在工作的代理。可从会话的 ⋯ 菜单手动打开画中画。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "只在代理工作時自動開啟；工作階段的 ⋯ 選單隨時可以手動開啟。"
+            "value": "雙行模式輪換顯示各台已配對主機上正在工作的代理。可從工作階段的 ⋯ 選單手動開啟子母畫面。"
           }
         }
       }

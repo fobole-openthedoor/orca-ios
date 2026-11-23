@@ -76,7 +76,8 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     case toolResult(output: String, isError: Bool, callId: String?)
     /// An image by host path or by URL; exactly one is set.
     case image(path: String?, url: String?)
-    case subagent(label: String, state: String)
+    case subagent(ChatSubagent)
+    case subagentGroup([ChatSubagent])
     case other(type: String)
 
     init(_ json: JSONValue) {
@@ -93,7 +94,9 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
       case "image-ref":
         self = .image(path: json["path"]?.stringValue, url: json["url"]?.stringValue)
       case "subagent":
-        self = .subagent(label: json["label"]?.stringValue ?? "", state: json["state"]?.stringValue ?? "")
+        self = ChatSubagent(json).map(Block.subagent) ?? .other(type: type)
+      case "subagent-group":
+        self = .subagentGroup((json["agents"]?.arrayValue ?? []).compactMap(ChatSubagent.init))
       default:
         self = .other(type: type)
       }
@@ -110,6 +113,29 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     public var commandName: String?
     /// Who Orca delivered it for: `bot-created` is Orca's own first turn to a new bot, drawn as a notice.
     public var origin: String? = nil
+    /// Orca delivers worker mail through the user role, with the original sender attached.
+    public var agentSenders: [String]? = nil
+    /// Mail's human-readable fields, when the host supplies their ranges in the canonical message.
+    public var agentMailText: String? = nil
+
+    public var subagents: [ChatSubagent] {
+      blocks.flatMap { block -> [ChatSubagent] in
+        return switch block {
+        case .subagent(let agent): [agent]
+        case .subagentGroup(let agents): agents
+        default: []
+        }
+      }
+    }
+
+    public var isSubagentNotice: Bool {
+      role == "system" && !subagents.isEmpty && blocks.allSatisfy { block in
+        switch block {
+        case .text, .subagent, .subagentGroup: true
+        default: false
+        }
+      }
+    }
 
     /// The message's text blocks joined, which is what copy and the bubble use.
     public var text: String {
@@ -234,6 +260,7 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     case approval(Prompt)
     case question(Prompt)
     case status(text: String, tone: String?)
+    case agentStarted(dispatchId: String, name: String, task: String)
     case turn(Turn)
     case other(kind: String)
   }
@@ -246,6 +273,8 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
   public var observedAt: Double
   /// Set on a subagent's row; nil for the session's own agent.
   public var agentId: String?
+  public var parentAgentId: String?
+  public var producerKind: String?
   /// The text was cut for the wire; the whole item is read on demand.
   public var shortened: Bool
   public var body: Body
@@ -269,6 +298,8 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     sequenceIndex = json["sequenceIndex"]?.intValue ?? 0
     observedAt = json["observedAt"]?.doubleValue ?? 0
     agentId = json["agentId"]?.stringValue
+    parentAgentId = json["parentAgentId"]?.stringValue
+    producerKind = json["producerKind"]?.stringValue
     let rawBody = json["body"]
     clearsContext = rawBody?["contextClear"] != nil && rawBody?["contextClear"] != .null
     switch rawBody?["threadGoal"]?["state"]?.stringValue {
@@ -293,12 +324,18 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
       let role = json["role"]?.stringValue ?? "assistant"
       // A reasoning row says so itself; an assistant row is live until it carries a completion time.
       let streaming = json["state"]?.stringValue.map { $0 == "running" } ?? (role == "assistant" && json["completedAt"] == nil)
+      let blocks = (json["blocks"]?.arrayValue ?? []).map(Block.init)
+      let source = json["from"]
       return .message(Message(
         role: role,
-        blocks: (json["blocks"]?.arrayValue ?? []).map(Block.init),
+        blocks: blocks,
         isStreaming: streaming,
         commandName: json["command"]?["name"]?.stringValue,
-        origin: json["origin"]?.stringValue))
+        origin: json["origin"]?.stringValue,
+        agentSenders: source.flatMap { source in
+          guard source["kind"]?.stringValue == "agent" else { return nil }
+          return (source["senders"]?.arrayValue ?? []).compactMap { $0["name"]?.stringValue ?? $0["agent"]?.stringValue }
+        }, agentMailText: mailText(source, blocks: blocks)))
     case "tool-call":
       return .toolCall(ToolCall(json))
     case "diff":
@@ -311,6 +348,12 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
       return .question(prompt(json, title: json["question"]?.stringValue ?? "", detail: nil))
     case "status":
       return .status(text: json["text"]?.stringValue ?? "", tone: json["tone"]?.stringValue)
+    case "agent-start":
+      let worker = json["worker"]
+      return .agentStarted(
+        dispatchId: json["dispatchId"]?.stringValue ?? "",
+        name: worker?["name"]?.stringValue ?? worker?["agent"]?.stringValue ?? json["agent"]?.stringValue ?? "",
+        task: json["task"]?.stringValue ?? "")
     case "turn":
       return .turn(Turn(
         turnId: json["turnId"]?.stringValue ?? "", state: json["state"]?.stringValue ?? "",
@@ -318,6 +361,32 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     default:
       return .other(kind: kind)
     }
+  }
+
+  private static func mailText(_ source: JSONValue?, blocks: [Block]) -> String? {
+    guard source?["kind"]?.stringValue == "agent", source?["orchestration"]?["message"]?.stringValue == "mail-notice",
+      let messages = source?["orchestration"]?["messages"]?.arrayValue, !messages.isEmpty,
+      blocks.count == 1, case .text(let canonical, _) = blocks[0] else { return nil }
+    // The host counts UTF-16 units. If any message is clipped or from an older host, keep the canonical text.
+    func field(_ value: JSONValue) -> String? {
+      guard let bounds = value.arrayValue, bounds.count == 2, let start = bounds[0].intValue, let end = bounds[1].intValue,
+        start >= 0, end >= start, end <= canonical.utf16.count,
+        let range = Range(NSRange(location: start, length: end - start), in: canonical) else { return nil }
+      return String(canonical[range])
+    }
+    var reports: [String] = []
+    for message in messages {
+      guard let content = message["content"], let subject = content["subject"].flatMap(field) else { return nil }
+      var parts = [subject]
+      for key in ["body", "payload"] {
+        if let range = content[key] {
+          guard let text = field(range) else { return nil }
+          parts.append(text)
+        }
+      }
+      reports.append(parts.filter { !$0.isEmpty }.joined(separator: "\n\n"))
+    }
+    return reports.joined(separator: "\n\n")
   }
 
   private static func prompt(_ json: JSONValue, title: String, detail: String?) -> Prompt {
@@ -391,6 +460,7 @@ public struct ChatTranscript: Sendable, Equatable {
   public private(set) var activity: String?
   /// Work the agent left running in the background (agents, shells, monitors), as the host last listed it.
   public private(set) var backgroundTasks: [BackgroundTask] = []
+  public private(set) var subagents: [ChatSubagent] = []
   /// Messages waiting for the running turn to end (agent-session-queued-message-wire.ts), in send order.
   public private(set) var queuedMessages: [QueuedMessage] = []
   public private(set) var stopsBackgroundTasks = false
@@ -400,6 +470,15 @@ public struct ChatTranscript: Sendable, Equatable {
   public private(set) var ended = false
 
   private var byId: [String: TranscriptItem] = [:]
+  private var removedItemIds: Set<String> = []
+  private struct SubagentRosterRow: Sendable, Equatable {
+    var sequence: Int
+    var sequenceIndex: Int
+    var revision: Int
+    var agents: [ChatSubagent]
+  }
+  /// A page can name agents whose starting rows are outside its window.
+  private var subagentRoster: [String: SubagentRosterRow] = [:]
 
   public init() {}
 
@@ -407,13 +486,18 @@ public struct ChatTranscript: Sendable, Equatable {
   public mutating func apply(_ frame: JSONValue) {
     switch frame["type"]?.stringValue {
     case "snapshot", "reset":
-      byId = [:]
+      clearRows()
       submissions = [:]
       oldestCursor = nil
+      cursor = nil
+      hasOlder = false
       // A snapshot restates the live state; anything a cache restored before it is dropped.
-      hostWorking = nil
+      clearExtras()
+      ended = false
       if let page = frame["page"] {
         merge(page: page, replacingWindow: true)
+      } else {
+        rebuild()
       }
       noteFence(frame["fence"])
       noteExtras(frame)
@@ -424,12 +508,15 @@ public struct ChatTranscript: Sendable, Equatable {
       if let next = TranscriptCursor(batch["cursor"]) {
         if let cursor, cursor.epoch != next.epoch {
           // The journal was renumbered; nothing held is comparable any more.
-          byId = [:]
+          clearRows()
+          clearExtras()
+          submissions = [:]
           oldestCursor = nil
+          hasOlder = false
         }
         cursor = next
       }
-      upsert(batch)
+      upsert(batch, live: true)
       noteFence(frame["fence"])
       noteExtras(frame)
       rebuild()
@@ -449,12 +536,25 @@ public struct ChatTranscript: Sendable, Equatable {
   /// the fence and cursor a write would cite are the host's to say again, so they are dropped until its
   /// snapshot arrives.
   public mutating func forgetLiveState() {
+    clearExtras()
     hostWorking = false
+    fence = nil
+    cursor = nil
+  }
+
+  private mutating func clearExtras() {
+    hostWorking = nil
+    activity = nil
     backgroundTasks = []
     stopsBackgroundTasks = false
     queuedMessages = []
-    fence = nil
-    cursor = nil
+    actionablePromptIds = nil
+  }
+
+  private mutating func clearRows() {
+    byId.removeAll()
+    removedItemIds.removeAll()
+    subagentRoster.removeAll()
   }
 
   /// The fence a mutation reply reported.
@@ -466,7 +566,7 @@ public struct ChatTranscript: Sendable, Equatable {
 
   /// The running turn, which Stop names.
   public var runningTurnId: String? {
-    for item in items.reversed() {
+    for item in items.reversed() where item.agentId == nil {
       if case .turn(let turn) = item.body {
         return turn.state == "running" ? turn.turnId : nil
       }
@@ -491,17 +591,34 @@ public struct ChatTranscript: Sendable, Equatable {
   }
 
   private mutating func merge(page: JSONValue, replacingWindow: Bool) {
+    if !replacingWindow, let epoch = page["epoch"]?.stringValue,
+      let currentEpoch = cursor?.epoch ?? oldestCursor?.epoch, epoch != currentEpoch { return }
     upsert(page)
+    for named in page["subagentRoster"]?.arrayValue ?? [] {
+      let revision = named["revision"]?.intValue ?? 0
+      guard let id = named["itemId"]?.stringValue, let sequence = named["sequence"]?.intValue,
+        let agent = named["entry"].flatMap(ChatSubagent.init), !removedItemIds.contains(id),
+        (byId[id]?.revision ?? -1) < revision, (subagentRoster[id]?.revision ?? -1) <= revision else { continue }
+      if var held = subagentRoster[id], held.revision == revision {
+        // Each page can name a different subset of the same legacy group.
+        if !held.agents.contains(where: { $0.id == agent.id }) {
+          held.agents.append(agent)
+          subagentRoster[id] = held
+        }
+      } else {
+        subagentRoster[id] = .init(
+          sequence: sequence, sequenceIndex: named["sequenceIndex"]?.intValue ?? 0, revision: revision, agents: [agent])
+      }
+    }
     noteFence(page["fence"])
     let window = page["window"]
     if replacingWindow {
       cursor = TranscriptCursor(page["liveCursor"]) ?? TranscriptCursor(window?["newest"]) ?? TranscriptCursor(window?["nextCursor"])
-      hostWorking = page["working"]?.boolValue
-      actionablePromptIds = (page["actionablePromptIds"]?.arrayValue).map { Set($0.compactMap(\.stringValue)) }
+      noteExtras(page)
     }
     // Only a page that reaches further back moves the paging position.
     if page["direction"]?.stringValue != "after" {
-      if let oldest = TranscriptCursor(window?["oldest"]) ?? (replacingWindow ? nil : TranscriptCursor(window?["nextCursor"])) {
+      if let oldest = TranscriptCursor(window?["oldest"]) ?? TranscriptCursor(window?["nextCursor"]) {
         oldestCursor = oldest
       }
       hasOlder = page["hasOlder"]?.boolValue ?? false
@@ -509,15 +626,19 @@ public struct ChatTranscript: Sendable, Equatable {
     rebuild()
   }
 
-  private mutating func upsert(_ container: JSONValue) {
+  private mutating func upsert(_ container: JSONValue, live: Bool = false) {
     for item in (container["items"]?.arrayValue ?? []).compactMap(TranscriptItem.init) {
-      if let held = byId[item.id], held.revision > item.revision {
-        continue
-      }
+      guard (live || !removedItemIds.contains(item.id)), (byId[item.id]?.revision ?? -1) <= item.revision else { continue }
+      if live { removedItemIds.remove(item.id) }
       byId[item.id] = item
+      if let roster = subagentRoster[item.id], roster.revision <= item.revision {
+        subagentRoster[item.id] = nil
+      }
     }
     for id in (container["removedItemIds"]?.arrayValue ?? []).compactMap(\.stringValue) {
+      removedItemIds.insert(id)
       byId[id] = nil
+      subagentRoster[id] = nil
     }
     for submission in (container["submissions"]?.arrayValue ?? []).compactMap(TranscriptSubmission.init) {
       submissions[submission.clientMessageId] = submission
@@ -554,6 +675,27 @@ public struct ChatTranscript: Sendable, Equatable {
   private mutating func rebuild() {
     // Journal order, never arrival or clock order.
     items = byId.values.sorted { ($0.sequence, $0.sequenceIndex, $0.id) < ($1.sequence, $1.sequenceIndex, $1.id) }
+    var roster = subagentRoster
+    for item in items where roster[item.id] == nil {
+      guard case .message(let message) = item.body else { continue }
+      let agents = message.subagents
+      if !agents.isEmpty {
+        roster[item.id] = .init(sequence: item.sequence, sequenceIndex: item.sequenceIndex, revision: item.revision, agents: agents)
+      }
+    }
+    let ordered = roster.sorted {
+      ($0.value.sequence, $0.value.sequenceIndex, $0.key) < ($1.value.sequence, $1.value.sequenceIndex, $1.key)
+    }
+    var seen = Set<String>()
+    let newestFirst = ordered.reversed().flatMap { $0.value.agents.reversed() }
+    subagents = Array(newestFirst.filter { seen.insert($0.id).inserted }.reversed())
+    for item in items {
+      if let id = item.agentId, item.producerKind != "background", seen.insert(id).inserted {
+        var agent = ChatSubagent(id: id)
+        agent.parentId = item.parentAgentId
+        subagents.append(agent)
+      }
+    }
   }
 }
 

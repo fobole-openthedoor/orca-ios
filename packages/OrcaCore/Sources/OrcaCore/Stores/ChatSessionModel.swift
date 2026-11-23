@@ -54,6 +54,7 @@ public final class ChatSessionModel {
   public private(set) var isLoadingOlder = false
   public private(set) var options: ChatOptions?
   public private(set) var commands: [ChatCommand] = []
+  public private(set) var workers: [ChatWorker] = []
   /// A Stop is on its way to the host.
   public private(set) var isStopping = false
 
@@ -65,6 +66,7 @@ public final class ChatSessionModel {
   /// The SSH connection of the workspace's project, which image uploads name.
   @ObservationIgnored private let connectionId: String?
   @ObservationIgnored private var streamTask: Task<Void, Never>?
+  @ObservationIgnored private var workersTask: Task<Void, Never>?
 
   public init(api: HostAPI, sessionId: String, capabilities: Set<String>, connectionId: String?) {
     self.api = api
@@ -83,12 +85,6 @@ public final class ChatSessionModel {
   /// What one subagent wrote and ran, in order.
   public func subagentItems(_ agentId: String) -> [TranscriptItem] {
     transcript.items.filter { $0.agentId == agentId && Self.isDrawable($0) }
-  }
-
-  /// The subagents with rows in the loaded journal.
-  public var subagentIds: [String] {
-    var seen = Set<String>()
-    return transcript.items.compactMap(\.agentId).filter { seen.insert($0).inserted }
   }
 
   /// The thread's goal as of now (agent-session-goal-check-display.ts): the newest goal transition in the
@@ -168,6 +164,44 @@ public final class ChatSessionModel {
   public func stop() {
     streamTask?.cancel()
     streamTask = nil
+    stopWatchingWorkers()
+  }
+
+  /// Orca's dispatched workers have their own lifecycle outside the provider's journal.
+  public func watchWorkers() {
+    guard workersTask == nil else { return }
+    let api = self.api
+    let sessionId = self.sessionId
+    workersTask = Task { [weak self] in
+      while !Task.isCancelled {
+        do {
+          let reply = try await api.connection.request("orchestration.sessionWorkers", ["session": .string(sessionId)], timeout: .seconds(8))
+          guard !Task.isCancelled else { return }
+          if let rows = reply["workers"]?.arrayValue {
+            let workers = rows.compactMap(ChatWorker.init)
+            if self?.workers != workers { self?.workers = workers }
+          }
+        } catch let error as RPCError where ["method_not_found", "forbidden"].contains(error.code) {
+          return
+        } catch {
+          // A reconnect can recover this read. Keep the last reported state in the meantime.
+        }
+        let active = self?.workers.contains(where: { $0.state == "working" || $0.state == "unverifiable" }) ?? false
+        guard self != nil, (try? await Task.sleep(for: .seconds(active ? 4 : 12))) != nil else { return }
+      }
+    }
+  }
+
+  public func stopWatchingWorkers() {
+    workersTask?.cancel()
+    workersTask = nil
+  }
+
+  public func workerReport(_ dispatchId: String) async -> String? {
+    let reply = try? await api.connection.request(
+      "orchestration.workerDockResult",
+      ["party": .string("orca_session_id:" + sessionId), "dispatch": .string(dispatchId)], timeout: .seconds(8))
+    return reply?["body"]?.stringValue
   }
 
   /// Reads the model choices and the slash commands. Both are best effort: a chat works without them.
@@ -348,7 +382,8 @@ public final class ChatSessionModel {
     // A little slack for clock skew between the phone and the desktop.
     let earliest = send.createdAt - 5_000
     return transcript.items.contains { item in
-      guard item.observedAt >= earliest, case .message(let message) = item.body, message.role == "user" else {
+      guard item.agentId == nil, item.observedAt >= earliest, case .message(let message) = item.body,
+        message.role == "user", message.agentSenders == nil else {
         return false
       }
       let words = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -588,7 +623,7 @@ public final class ChatSessionModel {
       return !message.blocks.isEmpty || message.commandName != nil
     case .status(let text, _):
       return !text.isEmpty
-    case .toolCall, .diff, .approval, .question:
+    case .toolCall, .diff, .approval, .question, .agentStarted:
       return true
     case .turn, .other:
       return false

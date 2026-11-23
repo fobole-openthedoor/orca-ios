@@ -44,6 +44,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     window.tintColor = Palette.accentBlue
     window.makeKeyAndVisible()
     self.window = window
+    PiPCenter.shared.attachCompact(to: window)
     // First launch: who makes this app, notifications, and its license, before anything else.
     if !WelcomeViewController.seen {
       let welcome = WelcomeViewController()

@@ -10,6 +10,7 @@ final class ChatViewController: UIViewController {
   let model: ChatSessionModel
   /// The row on screen when an older page was asked for, and how far below the top it sat.
   private var olderAnchor: (line: ChatLine, y: CGFloat)?
+  private var lastInvisiblePage: TranscriptCursor?
 
   private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: Self.layout())
   /// Runs under the navigation bar and the tab strip, which blur it with the soft scroll edge.
@@ -182,6 +183,8 @@ final class ChatViewController: UIViewController {
     }
     composer.onError = { [weak self] message in self?.say(message) }
     dock.onOpen = { [weak self] task in self?.openBackgroundTask(task) }
+    dock.onSubagent = { [weak self] agent in self?.openSubagent(agent) }
+    dock.onWorker = { [weak self] worker in self?.openWorker(worker.id) }
     dock.onQueued = { [weak self] message, action in
       guard let self else { return }
       Task {
@@ -277,9 +280,18 @@ final class ChatViewController: UIViewController {
       DispatchQueue.main.async { [weak self] in self?.buzzIfDone() }
     }
     lastWorking = model.isWorking
-    dock.show(
-      tasks: model.transcript.backgroundTasks, stopsAll: model.transcript.stopsBackgroundTasks, goal: model.goal,
-      queued: model.transcript.queuedMessages)
+    if !readOnly {
+      dock.show(
+        tasks: model.transcript.backgroundTasks, subagents: model.transcript.subagents.map(currentSubagent),
+        workers: model.workers, stopsAll: model.transcript.stopsBackgroundTasks, goal: model.goal,
+        queued: model.transcript.queuedMessages)
+    }
+    if projection.lines.isEmpty, model.transcript.hasOlder, let cursor = model.transcript.oldestCursor,
+      cursor != lastInvisiblePage, !model.isLoadingOlder {
+      lastInvisiblePage = cursor
+      let model = model
+      Task { await model.loadOlder() }
+    }
     view.setNeedsLayout()
     presentNewPrompt()
     updateModelChip()
@@ -447,7 +459,87 @@ final class ChatViewController: UIViewController {
     }
   }
 
-  /// Rewind to here, once confirmed: the message comes back to the composer to edit and send again.
+  private func currentSubagent(_ entry: ChatSubagent) -> ChatSubagent {
+    var agent = entry
+    if let task = model.transcript.backgroundTasks.first(where: { $0.kind == "agent" && $0.id == agent.id }) {
+      if agent.label.isEmpty { agent.label = task.label }
+      if agent.state == "unverifiable", let state = task.state { agent.state = state }
+      if agent.tokens == nil { agent.tokens = task.totalTokens }
+      if agent.startedAt == nil { agent.startedAt = task.startedAt }
+    }
+    if agent.state == "working", model.transcript.cursor == nil { agent.state = "unverifiable" }
+    return agent
+  }
+
+  private func subagent(itemId: String, agentId: String) -> ChatSubagent? {
+    if let current = model.transcript.subagents.first(where: { $0.id == agentId }) {
+      return currentSubagent(current)
+    }
+    guard let item = projection.items[itemId], case .message(let message) = item.body else { return nil }
+    return message.subagents.first { $0.id == agentId }.map(currentSubagent)
+  }
+
+  private func openSubagent(_ fallback: ChatSubagent) {
+    let detail = { [weak self] in
+      guard let self else {
+        return TranscriptItem.ToolCall(name: ChatDockView.name(fallback), input: .null, output: fallback.lastMessage)
+      }
+      let agent = self.currentSubagent(self.model.transcript.subagents.first { $0.id == fallback.id } ?? fallback)
+      var facts = [ChatDockView.agentState(agent.state)]
+      let model = [agent.agentType, agent.model, agent.effort].compactMap { $0 }.joined(separator: " · ")
+      if !model.isEmpty { facts.append(model) }
+      if let tokens = agent.tokens, tokens > 0 {
+        facts.append(String(format: String(localized: "chat.subagentGroup.tokens", defaultValue: "%@ tokens"), ChatDockView.compact(tokens)))
+      }
+      if let start = agent.startedAt, let end = agent.settledAt, end > start {
+        facts.append(WorkSummaryView.duration(max(1, Int((end - start) / 1000))))
+      }
+      let transcript = Self.transcriptText(self.model.subagentItems(agent.id))
+      let report = agent.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let output = [agent.operation, !report.isEmpty && !transcript.contains(report) ? report : nil, transcript]
+        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+      return TranscriptItem.ToolCall(name: ChatDockView.name(agent), input: .string(facts.joined(separator: " · ")), output: output)
+    }
+    present(ToolOutputViewController.sheet(call: detail(), load: nil, live: detail), animated: true)
+  }
+
+  private func openWorker(_ id: String, name: String = "", task: String = "") {
+    let model = self.model
+    let detail = {
+      let worker = model.workers.first { $0.id == id }
+      let title = worker.flatMap { $0.title.isEmpty ? nil : $0.title }
+        ?? (name.isEmpty ? worker?.agent ?? ChatDockView.unnamedAgent : name)
+      let facts = [worker.map { ChatDockView.agentState($0.displayState) }, worker?.agent, task.isEmpty ? nil : task]
+        .compactMap { $0 }.joined(separator: "\n")
+      var call = TranscriptItem.ToolCall(name: title, input: .string(facts), output: worker?.summary)
+      call.outputTruncated = !id.isEmpty && worker?.state != "working" && worker?.state != "unverifiable"
+      return call
+    }
+    present(ToolOutputViewController.sheet(call: detail(), load: {
+      guard let report = await model.workerReport(id), !report.isEmpty else { return nil }
+      var full = detail()
+      full.output = report
+      full.outputTruncated = false
+      return full
+    }, alwaysLoad: true, live: detail), animated: true)
+  }
+
+  private static func senderName(_ message: TranscriptItem.Message) -> String {
+    let names = (message.agentSenders ?? []).filter { !$0.isEmpty }
+    return names.isEmpty ? ChatDockView.unnamedAgent : names.joined(separator: ", ")
+  }
+
+  private func openAgentMail(_ item: TranscriptItem) {
+    guard case .message(let message) = item.body else { return }
+    var call = TranscriptItem.ToolCall(name: Self.senderName(message), input: .null, output: message.agentMailText ?? message.text)
+    call.outputTruncated = item.shortened
+    let model = self.model
+    present(ToolOutputViewController.sheet(call: call) {
+      guard let full = await model.fullItem(item.id), case .message(let message) = full.body else { return nil }
+      return TranscriptItem.ToolCall(name: Self.senderName(message), input: .null, output: message.agentMailText ?? message.text)
+    }, animated: true)
+  }
+
   /// A background task's row opens the call that started it: a subagent's task and what it returned, or a
   /// shell's command and its output so far. Matched by call id, by the id a background shell's output names,
   /// or by the label the strip shows; older pages are read in until it turns up. Without a match the task's
@@ -588,6 +680,11 @@ final class ChatViewController: UIViewController {
     saveDraft()
   }
 
+  override func viewDidDisappear(_ animated: Bool) {
+    super.viewDidDisappear(animated)
+    model.stopWatchingWorkers()
+  }
+
   @objc private func saveDraft() {
     ChatDraftStore.save(model.sessionId, text: composer.draftText, attachments: composer.attachments)
   }
@@ -595,7 +692,7 @@ final class ChatViewController: UIViewController {
   /// The chat for picture in picture: what the agent is doing now, then its newest words, calls and thoughts.
   func pipLines() -> (working: Bool, lines: [(text: String, style: PiPFrame.Style)]) {
     var lines: [(text: String, style: PiPFrame.Style)] = []
-    let items = Array(model.transcript.items.suffix(24).filter { $0.agentId == nil })
+    let items = Array(model.transcript.items.reversed().lazy.filter { $0.agentId == nil }.prefix(24).reversed())
     let detailed = PiPCenter.showsCommands
     var index = 0
     while index < items.count {
@@ -622,6 +719,10 @@ final class ChatViewController: UIViewController {
           let live = model.isWorking && index == items.count - 1
           lines.append((live ? String(localized: "chat.turnStatus.thinking", defaultValue: "Thinking") : "Thought", .muted))
         }
+      case .message(let message) where message.agentSenders != nil:
+        lines.append((Self.senderName(message) + " · " + Self.plain(message.agentMailText ?? message.text), .body))
+      case .message(let message) where message.isSubagentNotice:
+        break
       case .message(let message) where message.role == "user":
         let words = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !words.isEmpty { lines.append(("› " + String(words.prefix(160)), .muted)) }
@@ -634,10 +735,17 @@ final class ChatViewController: UIViewController {
       }
       index += 1
     }
+    let subagent = model.transcript.subagents.reversed().first { currentSubagent($0).state == "working" }.map(currentSubagent)
+    let worker = model.workers.first(where: \.isWorking)
     if let activity = model.transcript.activity, model.isWorking, !activity.isEmpty {
       lines.append(("… " + activity, .muted))
+    } else if let subagent, !model.isWorking || lines.isEmpty {
+      let detail = subagent.operation ?? subagent.lastMessage
+      lines.append(([ChatDockView.name(subagent), detail].compactMap { $0 }.joined(separator: " · "), .body))
+    } else if let worker, !model.isWorking || lines.isEmpty {
+      lines.append((worker.title.isEmpty ? worker.agent ?? ChatDockView.unnamedAgent : worker.title, .body))
     }
-    return (model.isWorking, lines)
+    return (model.isWorking || subagent != nil || worker != nil, lines)
   }
 
   /// Markdown read as plain words: markers and fences dropped, list items as bullets, a table's rows as
@@ -681,7 +789,7 @@ final class ChatViewController: UIViewController {
   /// line do; the person's words, the agent's words and cards break it.
   private static func onThread(_ line: ChatLine?) -> Bool {
     switch line {
-    case .run, .thoughts, .thoughtText, .call, .viewedImages, .prompt, .workItem, .working: true
+    case .run, .thoughts, .thoughtText, .call, .viewedImages, .prompt, .workItem, .subagent, .agentStarted, .working: true
     default: false
     }
   }
@@ -978,6 +1086,20 @@ final class ChatViewController: UIViewController {
           text = Self.receipt(item)
         }
         view.show(icon: waiting ? .messageSquareMore : .check, text: text, detail: Self.promptTitle(item), running: false, attention: waiting, opens: waiting)
+      case .subagent(let itemId, let agentId):
+        guard let agent = self.subagent(itemId: itemId, agentId: agentId) else { return }
+        let detail = [ChatDockView.agentState(agent.state), agent.operation ?? agent.lastMessage]
+          .compactMap { $0 }.joined(separator: " · ")
+        view.show(icon: .bot, text: ChatDockView.name(agent), detail: detail, running: agent.state == "working")
+      case .agentStarted(let id):
+        guard let item = self.projection.items[id], case .agentStarted(let dispatch, let name, let task) = item.body else { return }
+        let worker = self.model.workers.first { $0.id == dispatch }
+        view.show(
+          icon: .workflow, text: name.isEmpty ? ChatDockView.unnamedAgent : name,
+          detail: worker.map { ChatDockView.agentState($0.displayState) + " · " + task } ?? task, running: worker?.isWorking == true)
+      case .agentMail(let id):
+        guard let item = self.projection.items[id], case .message(let message) = item.body else { return }
+        view.show(icon: .messageSquareText, text: Self.senderName(message), detail: message.agentMailText ?? message.text, running: false)
       case .working:
         view.show(icon: .circleDot, text: String(localized: "chat.turnStatus.working", defaultValue: "Working…"), running: true, opens: false)
       default: break
@@ -1027,7 +1149,8 @@ final class ChatViewController: UIViewController {
       case .work: collection.dequeueConfiguredReusableCell(using: work, for: indexPath, item: line)
       case .workItem: collection.dequeueConfiguredReusableCell(using: workItem, for: indexPath, item: line)
       case .answer: collection.dequeueConfiguredReusableCell(using: answer, for: indexPath, item: line)
-      case .run, .thoughts, .prompt, .working: collection.dequeueConfiguredReusableCell(using: activity, for: indexPath, item: line)
+      case .run, .thoughts, .prompt, .subagent, .agentStarted, .agentMail, .working:
+        collection.dequeueConfiguredReusableCell(using: activity, for: indexPath, item: line)
       case .thoughtText: collection.dequeueConfiguredReusableCell(using: thoughtText, for: indexPath, item: line)
       case .call: collection.dequeueConfiguredReusableCell(using: call, for: indexPath, item: line)
       case .viewedImages: collection.dequeueConfiguredReusableCell(using: viewed, for: indexPath, item: line)
@@ -1117,6 +1240,7 @@ final class ChatViewController: UIViewController {
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
+    model.watchWorkers()
     if followsBottom { scrollToBottom(animated: false) }
     watchSendTip()
     // What was there on opening just shows; what arrives after fades in.
@@ -1329,7 +1453,7 @@ extension ChatViewController: UICollectionViewDelegate {
 
   func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
     switch dataSource.itemIdentifier(for: indexPath) {
-    case .work, .run, .call: return true
+    case .work, .run, .call, .subagent, .agentStarted, .agentMail: return true
     // A live thought opens too, and its words stream in under it.
     case .thoughts: return true
     case .prompt(let id): return projection.items[id].map(ChatProjection.isWaiting) ?? false
@@ -1370,6 +1494,14 @@ extension ChatViewController: UICollectionViewDelegate {
       dataSource.apply(snapshot, animatingDifferences: true)
     case .prompt(let id):
       if let item = projection.items[id] { presentPrompt(item) }
+    case .subagent(let itemId, let agentId):
+      if let agent = subagent(itemId: itemId, agentId: agentId) { openSubagent(agent) }
+    case .agentStarted(let id):
+      if let item = projection.items[id], case .agentStarted(let dispatch, let name, let task) = item.body {
+        openWorker(dispatch, name: name, task: task)
+      }
+    case .agentMail(let id):
+      if let item = projection.items[id] { openAgentMail(item) }
     default:
       break
     }

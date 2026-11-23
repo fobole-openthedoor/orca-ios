@@ -52,17 +52,25 @@ final class OrcaIOSSettingsViewController: SettingsPageViewController {
         header: String(localized: "orcaios.settings.pipHeading", defaultValue: "PICTURE IN PICTURE"),
         footer: String(
           localized: "orcaios.settings.pipFooter",
-          defaultValue: "Opens only while the agent works. The session's ⋯ menu opens it at any time."),
+          defaultValue: "Two-line mode cycles through working agents on your paired desktops. The session's ⋯ menu opens Picture in Picture at any time."),
         rows: [
           .toggle(
             title: String(localized: "orcaios.pip.onLeave", defaultValue: "Picture in Picture on leaving"),
             isOn: PiPCenter.startsOnLeave
           ) { on in PiPCenter.startsOnLeave = on },
           .toggle(
+            title: String(localized: "orcaios.pip.compact", defaultValue: "Two-line mode"),
+            isOn: PiPCenter.usesCompactLayout
+          ) { [weak self] on in
+            PiPCenter.usesCompactLayout = on
+            self?.rebuild()
+          },
+        ] + (PiPCenter.usesCompactLayout ? [] : [
+          .toggle(
             title: String(localized: "orcaios.pip.commands", defaultValue: "Show each command in Picture in Picture"),
             isOn: PiPCenter.showsCommands
           ) { on in PiPCenter.showsCommands = on },
-        ]),
+        ])),
       Section(
         header: String(localized: "orcaios.settings.activityHeading", defaultValue: "LIVE ACTIVITIES"),
         footer: String(
