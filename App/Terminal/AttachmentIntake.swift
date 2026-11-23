@@ -1,3 +1,4 @@
+import AVFoundation
 import ImageIO
 import OrcaCore
 import UIKit
@@ -142,6 +143,7 @@ enum AttachmentIntake {
 
   /// A small preview for a chip or a pending bubble.
   static func thumbnail(for attachment: OutgoingAttachment, maxPixel: CGFloat = 320) -> UIImage? {
+    if isVideo(attachment) { return videoFrame(attachment, maxPixel: maxPixel) }
     guard attachment.kind == .image, let source = CGImageSourceCreateWithData(attachment.data as CFData, nil) else {
       return nil
     }
@@ -151,5 +153,21 @@ enum AttachmentIntake {
       kCGImageSourceThumbnailMaxPixelSize: maxPixel,
     ]
     return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map { UIImage(cgImage: $0) }
+  }
+
+  static func isVideo(_ attachment: OutgoingAttachment) -> Bool {
+    UTType(filenameExtension: (attachment.name as NSString).pathExtension)?.conforms(to: .movie) == true
+  }
+
+  /// A video's first frame, read from a scratch copy of its bytes.
+  private static func videoFrame(_ attachment: OutgoingAttachment, maxPixel: CGFloat) -> UIImage? {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension((attachment.name as NSString).pathExtension)
+    guard (try? attachment.data.write(to: url)) != nil else { return nil }
+    defer { try? FileManager.default.removeItem(at: url) }
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+    generator.appliesPreferredTrackTransform = true
+    generator.maximumSize = CGSize(width: maxPixel, height: maxPixel)
+    return (try? generator.copyCGImage(at: .zero, actualTime: nil)).map { UIImage(cgImage: $0) }
   }
 }

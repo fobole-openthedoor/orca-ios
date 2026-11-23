@@ -100,7 +100,7 @@ final class AgentActivityCenter {
     // What it is working on: this turn's prompt or task; the last reply belongs to the turn before, and
     // the agent's title is often just the workspace's name.
     let detail = [agent.prompt, agent.taskTitle ?? "", agent.lastAssistantMessage ?? ""]
-      .map { $0.replacingOccurrences(of: "\n", with: " ") }.first { !$0.isEmpty } ?? worktree.displayName
+      .map(MarkdownPreview.plain).first { !$0.isEmpty } ?? worktree.displayName
     let since = lastStates[key]?.since
       ?? Date(timeIntervalSince1970: (agent.updatedAt ?? Date().timeIntervalSince1970 * 1000) / 1000)
     let state = AgentActivityAttributes.ContentState(phase: .working, detail: String(detail.prefix(160)), since: since)

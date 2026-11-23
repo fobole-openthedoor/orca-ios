@@ -666,6 +666,18 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
       chip.addSubview(image)
       image.pin(to: chip)
       chip.widthAnchor.constraint(equalToConstant: 48).isActive = true
+      if AttachmentIntake.isVideo(attachment) {
+        let play = UIImageView(image: UIImage(systemName: "play.fill"))
+        play.tintColor = .white
+        play.layer.shadowOpacity = 0.5
+        play.layer.shadowRadius = 2
+        play.layer.shadowOffset = .zero
+        play.translatesAutoresizingMaskIntoConstraints = false
+        chip.addSubview(play)
+        NSLayoutConstraint.activate([
+          play.centerXAnchor.constraint(equalTo: chip.centerXAnchor), play.centerYAnchor.constraint(equalTo: chip.centerYAnchor),
+        ])
+      }
       let id = attachment.id
       let open = UIButton(primaryAction: UIAction { [weak self] _ in self?.openImage(id) })
       open.accessibilityLabel = String(localized: "chat.nativeChatProse.attachedImage", defaultValue: "Attached image")

@@ -158,6 +158,21 @@ import Testing
     #expect(transcript.fence == 4)
   }
 
+  @MainActor @Test func aSendWithAFileSettlesAgainstItsWordsAndPath() {
+    var transcript = ChatTranscript()
+    transcript.apply(Self.snapshot)
+    transcript.apply([
+      "type": "batch", "sessionId": "s",
+      "batch": ["cursor": Self.cursor(12), "removedItemIds": [], "submissions": [],
+                "items": [Self.item("u2", 12, body: Self.message("user", "look at this\n@\"/tmp/clip.mp4\""))]],
+    ])
+    var send = PendingSend(id: "op", text: "look at this", attachments: [], state: .sending)
+    send.createdAt = 0
+    #expect(ChatSessionModel.arrivedWithoutSubmission(send, in: transcript))
+    send.text = "look at that"
+    #expect(!ChatSessionModel.arrivedWithoutSubmission(send, in: transcript))
+  }
+
   @Test func pagesBackwardsRemovesRowsAndTracksSubmissions() {
     var transcript = ChatTranscript()
     transcript.apply(Self.snapshot)

@@ -352,7 +352,8 @@ public final class ChatSessionModel {
         return false
       }
       let words = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !text.isEmpty { return words == text }
+      // A file goes as an @path reference after the words, so the journal's text runs on past them.
+      if !text.isEmpty { return words == text || words.hasPrefix(text + "\n") || words.hasPrefix(text + " ") }
       return words.isEmpty && (message.imagePaths == send.imagePaths || message.imagePaths.count == send.imagePaths.count)
     }
   }

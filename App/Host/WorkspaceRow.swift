@@ -172,7 +172,7 @@ private final class AgentLineView: UIView {
     let mark = FilledIconView(size: 14)
     mark.icon = AgentMark.icon(for: agent.agentType)
     let summary = [agent.title, agent.lastAssistantMessage].compactMap { $0 }.filter { !$0.isEmpty }
-      .map { $0.replacingOccurrences(of: "\n", with: " ") }.joined(separator: " · ")
+      .map(MarkdownPreview.plain).joined(separator: " · ")
     let text = TextLabel(summary, size: 12, color: Palette.textSecondary)
     text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     let time = TextLabel(RelativeTime.short(agent.updatedAt), size: 11, color: Palette.textMuted)

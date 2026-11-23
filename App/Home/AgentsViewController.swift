@@ -241,7 +241,7 @@ private final class AgentCardView: UIView, UIContentView {
     dot.set(status: agent.state == "idle" ? "done" : agent.state)
     title.text = agent.title
     time.text = RelativeTime.short(agent.updatedAt)
-    detail.text = agent.lastAssistantMessage?.replacingOccurrences(of: "\n", with: " ")
+    detail.text = agent.lastAssistantMessage.map(MarkdownPreview.plain)
     detail.isHidden = (agent.lastAssistantMessage ?? "").isEmpty
     mark.icon = AgentMark.icon(for: agent.agentType)
     mark.isHidden = mark.icon == nil

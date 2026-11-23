@@ -730,13 +730,72 @@ final class ChatViewController: UIViewController {
 
   // MARK: Attach
 
+  /// Writing (the keyboard up): the system's picker as a sheet. At rest: photos open in place of the
+  /// composer, as ChatGPT's do.
   private func pickPhotos() {
-    var configuration = PHPickerConfiguration()
-    configuration.filter = .images
-    configuration.selectionLimit = 10
-    let picker = PHPickerViewController(configuration: configuration)
+    if composer.isCollapsed { showPhotoPanel() } else { presentPhotoPicker() }
+  }
+
+  private func presentPhotoPicker(preselected: [String] = []) {
+    let picker = PHPickerViewController(configuration: ChatPhotoPanel.configuration(preselected: preselected))
     picker.delegate = self
     present(picker, animated: true)
+  }
+
+  private var photoPanel: ChatPhotoPanel?
+
+  private func showPhotoPanel() {
+    guard photoPanel == nil else { return }
+    let panel = ChatPhotoPanel()
+    panel.onClose = { [weak self] in self?.hidePhotoPanel() }
+    panel.onAdd = { [weak self] results in
+      guard let self else { return }
+      let providers = results.map(\.itemProvider)
+      self.composer.adding { await AttachmentIntake.load(providers) }
+      self.hidePhotoPanel()
+    }
+    panel.onExpand = { [weak self] chosen in
+      self?.hidePhotoPanel()
+      self?.presentPhotoPicker(preselected: chosen)
+    }
+    photoPanel = panel
+    addChild(panel)
+    panel.view.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(panel.view)
+    NSLayoutConstraint.activate([
+      panel.view.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Spacing.sm),
+      panel.view.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Spacing.sm),
+      panel.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+      panel.view.heightAnchor.constraint(equalTo: view.heightAnchor, multiplier: 0.5),
+    ])
+    panel.didMove(toParent: self)
+    view.layoutIfNeeded()
+    // Grows up out of the composer.
+    panel.view.alpha = 0
+    panel.view.transform = CGAffineTransform(translationX: 0, y: 60).scaledBy(x: 0.96, y: 0.96)
+    UIView.animate(withDuration: 0.42, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0.4) {
+      panel.view.alpha = 1
+      panel.view.transform = .identity
+      self.composer.alpha = 0
+      self.dock.alpha = 0
+      self.quoteBar.alpha = 0
+    }
+  }
+
+  private func hidePhotoPanel() {
+    guard let panel = photoPanel else { return }
+    photoPanel = nil
+    UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseIn) {
+      panel.view.alpha = 0
+      panel.view.transform = CGAffineTransform(translationX: 0, y: 60).scaledBy(x: 0.96, y: 0.96)
+      self.composer.alpha = 1
+      self.dock.alpha = 1
+      self.quoteBar.alpha = 1
+    } completion: { _ in
+      panel.willMove(toParent: nil)
+      panel.view.removeFromSuperview()
+      panel.removeFromParent()
+    }
   }
 
   private func takePhoto() {

@@ -137,7 +137,7 @@ struct BotRowConfiguration: UIContentConfiguration {
       ?? statusWord(bot, home: home)
     return BotRowConfiguration(
       bot: bot, hostName: showHost ? session.name : nil,
-      latest: latest.replacingOccurrences(of: "\n", with: " "), updatedAt: agent?.updatedAt ?? home?.lastActivityAt,
+      latest: MarkdownPreview.plain(latest), updatedAt: agent?.updatedAt ?? home?.lastActivityAt,
       needsYou: session.bots.needsYou[bot.id] ?? 0)
   }
 }

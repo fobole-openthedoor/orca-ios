@@ -127,6 +127,12 @@
           "otherTitleWithoutHost": "Can't load this page",
           "thisAddress": "this address"
         }
+      },
+      "photos": {
+        "all": "All Photos",
+        "addVideos": "Add {{count}} videos",
+        "addPhotos": "Add {{count}} photos",
+        "addItems": "Add {{count}} items"
       }
     }
   },
@@ -258,6 +264,12 @@
           "otherTitleWithoutHost": "无法加载此页面",
           "thisAddress": "此地址"
         }
+      },
+      "photos": {
+        "all": "所有照片",
+        "addVideos": "添加 {{count}} 个视频",
+        "addPhotos": "添加 {{count}} 张照片",
+        "addItems": "添加 {{count}} 项"
       }
     },
     "overrides": {
@@ -411,6 +423,12 @@
           "otherTitleWithoutHost": "無法載入此頁面",
           "thisAddress": "此位址"
         }
+      },
+      "photos": {
+        "all": "所有照片",
+        "addVideos": "加入 {{count}} 段影片",
+        "addPhotos": "加入 {{count}} 張照片",
+        "addItems": "加入 {{count}} 項"
       }
     }
   }
