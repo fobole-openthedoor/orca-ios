@@ -28,6 +28,7 @@ final class ChatViewController: UIViewController {
   /// Questions this screen already opened on its own; closing one never reopens it unasked.
   private var presentedPrompts: Set<String> = []
   private var followsBottom = true
+  private var lastOpenedURL: (url: URL, at: Date)?
   /// Called when the agent starts or stops, or its latest words change: (working, latest text).
   var onActivity: ((Bool, String?) -> Void)?
   /// A file path tapped in the transcript, as written there.
@@ -325,6 +326,10 @@ final class ChatViewController: UIViewController {
 
   /// A link from the transcript, where Settings › Browser says (ask, the in-app browser, or Safari).
   private func open(_ url: URL) {
+    // One tap can arrive twice from the Markdown view; open it once.
+    let now = Date()
+    guard lastOpenedURL?.url != url || now.timeIntervalSince(lastOpenedURL!.at) > 1 else { return }
+    lastOpenedURL = (url, now)
     guard url.scheme == "http" || url.scheme == "https" else {
       UIApplication.shared.open(url)
       return

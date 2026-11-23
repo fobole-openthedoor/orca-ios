@@ -13,6 +13,7 @@ final class SessionViewController: UIViewController {
   private var shownTabId: String?
   private var chats: [String: ChatViewController] = [:]
   private var current: UIViewController?
+  private var lastOpened: (path: String, at: Date)?
   /// The host has answered with its tabs, so none means none rather than not yet.
   private var tabsLoaded = false
 
@@ -223,6 +224,10 @@ final class SessionViewController: UIViewController {
   /// A path from a chat, resolved by the desktop as the official file tap does: relative, absolute or `~/…`,
   /// in this workspace, a sibling one, or anywhere the desktop grants a read.
   private func openPath(_ path: String) {
+    // One tap can reach here twice (a link drawn as two highlight regions); open it once.
+    let now = Date()
+    guard lastOpened?.path != path || now.timeIntervalSince(lastOpened!.at) > 1 else { return }
+    lastOpened = (path, now)
     let api = session.api
     let worktreeId = worktreeId
     Task { [weak self] in
