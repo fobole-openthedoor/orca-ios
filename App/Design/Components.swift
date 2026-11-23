@@ -127,6 +127,14 @@ final class TextLabel: UILabel {
     return CGRect(origin: bounds.origin, size: CGSize(width: ceil(fitted), height: ceil(used.height)))
   }
 
+  /// The attribute under a point in this label, for tappable links and paths.
+  func attribute(_ key: NSAttributedString.Key, at point: CGPoint) -> Any? {
+    guard let layout = layout(width: bounds.width, lines: numberOfLines), let text = attributedText else { return nil }
+    let top = max(0, (bounds.height - ceil(layout.usedRect.height)) / 2)
+    guard let index = layout.characterIndex(at: CGPoint(x: point.x, y: point.y - top)), index < text.length else { return nil }
+    return text.attribute(key, at: index, effectiveRange: nil)
+  }
+
   override func drawText(in rect: CGRect) {
     guard let layout = layout(width: bounds.width, lines: numberOfLines) else { return }
     // UILabel centres its text vertically; the label is as tall as its text, so this only matters when stretched.
@@ -192,6 +200,15 @@ private final class TextLayout {
   }
 
   var usedRect: CGRect { manager.usedRect(for: container) }
+
+  /// The character drawn at a point, or nil past the text's edges.
+  func characterIndex(at point: CGPoint) -> Int? {
+    var fraction: CGFloat = 0
+    let glyph = manager.glyphIndex(for: point, in: container, fractionOfDistanceThroughGlyph: &fraction)
+    let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+    guard rect.insetBy(dx: -4, dy: -4).contains(point) else { return nil }
+    return manager.characterIndexForGlyph(at: glyph)
+  }
 
   func draw(at origin: CGPoint) {
     let range = manager.glyphRange(for: container)

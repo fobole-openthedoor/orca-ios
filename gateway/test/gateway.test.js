@@ -125,62 +125,43 @@ test('handshake, registration and plain alert', async () => {
   assert.equal(state.registrations[reg.json.registrationId].device.deviceToken, DEVICE)
 })
 
-test('Live Activity: push-to-start, update, end', async () => {
+test('Live Activity: only ends, never starts', async () => {
   const { token } = await signIn()
   const register = (extra) =>
     post('/v1/devices', { v: 1, deviceId: 'phone-la', platform: 'ios', token: blob(extra), apnsEnvironment: 'production' }, token)
   const { json: { registrationId } } = await register({ s: START })
   sent()
 
-  // needs-input without an activity token -> start via push-to-start token.
+  // needs-input without an activity: alert only, nothing push-started.
   let result = await post('/v1/send', { v: 1, registrationIds: [registrationId], notification: notification({ agentState: 'needs-input' }) }, token)
   assert.equal(result.json.results[0].status, 'queued')
-  let requests = sent()
-  const start = requests.find((r) => r.path === `/3/device/${START}`)
-  assert.ok(start, 'start push sent to push-to-start token')
-  assert.ok(requests.find((r) => r.path === `/3/device/${DEVICE}`), 'alert still sent')
-  assert.equal(start.headers['apns-push-type'], 'liveactivity')
-  assert.equal(start.headers['apns-topic'], 'com.thm.orcaios.push-type.liveactivity')
-  assert.equal(start.headers['apns-priority'], '10')
-  const aps = start.body.aps
-  assert.equal(aps.event, 'start')
-  assert.equal(aps['attributes-type'], 'AgentActivityAttributes')
-  assert.deepEqual(aps.attributes, {
-    hostName: 'My Mac',
-    workspaceName: 'repo / feature-x',
-    agentName: 'Agent',
-    deepLink: 'orca://open?host=mac-1&worktree=wt-1'
-  })
-  assert.equal(aps['content-state'].phase, 'needsYou')
-  assert.equal(aps['content-state'].detail, 'Claude needs your input second line')
-  assert.ok(Math.abs(aps['content-state'].since - (Date.now() / 1000 - APPLE_EPOCH)) < 5)
-  assert.ok(Math.abs(aps.timestamp - Date.now() / 1000) < 5)
-  assert.deepEqual(aps.alert, { title: 'repo / feature-x', body: 'Claude needs your input\nsecond line' })
+  assert.deepEqual(sent().map((r) => r.path), [`/3/device/${DEVICE}`])
 
-  // Desktop re-registers once the app reports the activity's update token.
+  // The app reported a working activity's token: needs-input ends it at once.
   await register({ s: START, a: { 'wt-1': ACTIVITY } })
-  result = await post('/v1/send', { v: 1, registrationIds: [registrationId], notification: notification({ agentState: 'needs-input' }) }, token)
-  requests = sent()
-  const update = requests.find((r) => r.path === `/3/device/${ACTIVITY}`)
-  assert.equal(update.body.aps.event, 'update')
-  assert.equal(update.body.aps['content-state'].phase, 'needsYou')
-  assert.ok(update.body.aps.alert)
+  await post('/v1/send', { v: 1, registrationIds: [registrationId], notification: notification({ agentState: 'needs-input' }) }, token)
+  let requests = sent()
+  let end = requests.find((r) => r.path === `/3/device/${ACTIVITY}`)
+  assert.equal(end.headers['apns-push-type'], 'liveactivity')
+  assert.equal(end.headers['apns-topic'], 'com.thm.orcaios.push-type.liveactivity')
+  assert.equal(end.body.aps.event, 'end')
+  assert.equal(end.body.aps['content-state'].phase, 'needsYou')
+  assert.equal(end.body.aps['content-state'].detail, 'Claude needs your input second line')
+  assert.ok(Math.abs(end.body.aps['dismissal-date'] - Date.now() / 1000) < 5)
   assert.ok(!requests.some((r) => r.path === `/3/device/${START}`))
+  assert.equal(h.gateway.store.state.registrations[registrationId].device.activityTokens['wt-1'], undefined)
 
-  // finished -> end, then the token is forgotten.
-  result = await post('/v1/send', { v: 1, registrationIds: [registrationId], notification: notification({ agentState: 'finished', body: 'Done' }) }, token)
-  requests = sent()
-  const end = requests.find((r) => r.path === `/3/device/${ACTIVITY}`)
+  // finished -> end, dismissed now.
+  await register({ s: START, a: { 'wt-1': ACTIVITY } })
+  await post('/v1/send', { v: 1, registrationIds: [registrationId], notification: notification({ agentState: 'finished', body: 'Done' }) }, token)
+  end = sent().find((r) => r.path === `/3/device/${ACTIVITY}`)
   assert.equal(end.body.aps.event, 'end')
   assert.equal(end.body.aps['content-state'].phase, 'done')
   assert.equal(end.body.aps['content-state'].detail, 'Done')
-  assert.ok(Math.abs(end.body.aps['dismissal-date'] - (Date.now() / 1000 + 600)) < 5)
-  assert.equal(h.gateway.store.state.registrations[registrationId].device.activityTokens['wt-1'], undefined)
 
   // finished with no activity token: alert only.
   await post('/v1/send', { v: 1, registrationIds: [registrationId], notification: notification({ agentState: 'finished' }) }, token)
-  requests = sent()
-  assert.deepEqual(requests.map((r) => r.path), [`/3/device/${DEVICE}`])
+  assert.deepEqual(sent().map((r) => r.path), [`/3/device/${DEVICE}`])
 })
 
 test('badge sums hosts, dismiss sends nothing', async () => {

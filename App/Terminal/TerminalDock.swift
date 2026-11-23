@@ -10,6 +10,11 @@ final class TerminalDock: UIView {
   var onPasteImage: ((Data) -> Void)?
   var onShowKeyboard: (() -> Void)?
   var onImage: (() -> Void)?
+  /// Dictated words, sent to the terminal when listening stops.
+  var onDictated: ((String) -> Void)?
+  var onError: ((String) -> Void)?
+  private var micButton: UIButton?
+  private var heard = ""
 
   /// Shift, Ctrl and Alt armed for the next key, from this row or the keyboard (terminal-dock-styles.ts keyLatched).
   enum Modifier: CaseIterable { case shift, ctrl, alt }
@@ -91,6 +96,8 @@ final class TerminalDock: UIView {
       self?.onImage?()
     }
     let mic = Self.round(.mic, label: String(localized: "chat.composer.dictate", defaultValue: "Dictate")) {}
+    mic.addAction(UIAction { [weak self] _ in self?.toggleDictation() }, for: .primaryActionTriggered)
+    micButton = mic
     let inputRow = UIStackView(arrangedSubviews: [field, image, mic])
     inputRow.spacing = Spacing.sm
     inputRow.alignment = .center
@@ -124,6 +131,35 @@ final class TerminalDock: UIView {
     } else if let text = pasteboard.string, !text.isEmpty {
       onPasteText?(text)
     }
+  }
+
+  private func toggleDictation() {
+    let dictation = Dictation.shared
+    if dictation.isListening {
+      dictation.stop()
+      return
+    }
+    heard = ""
+    setListening(true)
+    Task {
+      let refusal = await dictation.start(
+        onText: { [weak self] text in self?.heard = text },
+        onEnd: { [weak self] in
+          guard let self else { return }
+          self.setListening(false)
+          let text = self.heard.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !text.isEmpty { self.onDictated?(text) }
+        })
+      if let refusal {
+        setListening(false)
+        onError?(refusal)
+      }
+    }
+  }
+
+  private func setListening(_ listening: Bool) {
+    micButton?.configuration?.image = Lucide.mic.image(size: 17, strokeWidth: 2.4)
+    micButton?.configuration?.baseForegroundColor = listening ? Palette.statusRed : Palette.textSecondary
   }
 
   private func toggle(_ modifier: Modifier) {

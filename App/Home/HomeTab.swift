@@ -1,3 +1,4 @@
+import OrcaCore
 import UIKit
 
 enum HomeTab: String, CaseIterable {
@@ -50,6 +51,15 @@ final class HomeTabController: UITabBarController {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+  /// Switches to a tab, back at its root, and lets it show one desktop.
+  func open(_ homeTab: HomeTab, hostId: PairedHost.ID? = nil) {
+    guard let tab = tabsByID[homeTab] else { return }
+    selectedTab = tab
+    let navigation = tab.viewController as? UINavigationController
+    navigation?.popToRootViewController(animated: false)
+    if let hostId, let root = navigation?.viewControllers.first as? HostScoped { root.show(hostId: hostId) }
+  }
+
   func setBadge(_ count: Int, on homeTab: HomeTab) {
     tabsByID[homeTab]?.badgeValue = count > 0 ? (count > 99 ? "99+" : "\(count)") : nil
   }
@@ -85,4 +95,10 @@ final class PlaceholderTabViewController: UIViewController {
     view.backgroundColor = Palette.bgBase
     navigationItem.largeTitleDisplayMode = .always
   }
+}
+
+/// A tab that shows one desktop at a time and can be pointed at another.
+@MainActor
+protocol HostScoped: AnyObject {
+  func show(hostId: PairedHost.ID)
 }

@@ -154,15 +154,46 @@ final class NotificationsViewController: UITableViewController {
       }
       do {
         let result = try await session.api.testPush()
-        say(
-          result.accepted
-            ? String(localized: "orcaios.push.accepted", defaultValue: "The desktop sent the test. Check for the notification.")
-            : String(
-              format: String(localized: "orcaios.push.notAccepted", defaultValue: "The desktop didn’t send the test: %@"),
-              result.reason ?? "?"))
+        if result.accepted {
+          say(String(localized: "settings.notificationDisplayTest.accepted", defaultValue: "Orca push service accepted the request. Check for the notification."))
+          return
+        }
+        // As the official test: say why the push didn't go, then check display with a local notification.
+        let reason: String
+        switch result.reason {
+        case "not_registered":
+          reason = String(
+            localized: "settings.notificationDisplayTest.registrationPending",
+            defaultValue: "Push registration for this desktop is not ready yet. Try again shortly.")
+        case "rate_limited":
+          reason = String(localized: "settings.notificationDisplayTest.rateLimited", defaultValue: "Too many notifications. Try again shortly.")
+        default:
+          reason = String(
+            localized: "settings.notificationDisplayTest.pushServiceFailed", defaultValue: "Couldn't send through Orca push service. Try again.")
+        }
+        await localTest(reason: reason)
       } catch {
-        say(String(localized: "settings.notificationDisplayTest.sendFailed", defaultValue: "Could not send push test."))
+        await localTest(reason: String(localized: "settings.notificationDisplayTest.sendFailed", defaultValue: "Could not send push test."))
       }
+    }
+  }
+
+  private func localTest(reason: String) async {
+    let content = UNMutableNotificationContent()
+    content.title = String(localized: "settings.notificationDisplayTest.localTitle", defaultValue: "Test notification")
+    content.body = String(localized: "settings.notificationDisplayTest.localBody", defaultValue: "A local notification test from this phone.")
+    content.sound = .default
+    let request = UNNotificationRequest(
+      identifier: "orca.test", content: content, trigger: UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false))
+    do {
+      try await UNUserNotificationCenter.current().add(request)
+      say(String(
+        format: String(
+          localized: "settings.notificationDisplayTest.liveFallbackScheduled",
+          defaultValue: "%1$@ Local test scheduled. Check for the notification. Live alerts are available while Orca is running and connected."),
+        reason))
+    } catch {
+      say(reason)
     }
   }
 

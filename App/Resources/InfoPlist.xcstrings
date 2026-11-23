@@ -115,6 +115,29 @@
           }
         }
       }
+    },
+    "NSSpeechRecognitionUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca turns what you say into text on this phone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca 会在此手机上把你说的话转成文字。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca 會在此手機上把你說的話轉成文字。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

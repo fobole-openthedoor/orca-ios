@@ -18,6 +18,7 @@ final class AutomationsViewController: UIViewController {
     view.backgroundColor = Palette.bgBase
     navigationItem.largeTitleDisplayMode = .always
     let add = UIBarButtonItem(image: Lucide.plus.image(size: 20, strokeWidth: 2.2), style: .prominent, target: nil, action: nil)
+    add.primaryAction = UIAction(image: Lucide.plus.image(size: 20, strokeWidth: 2.2)) { [weak self] _ in self?.edit(nil) }
     add.tintColor = Palette.createActionFill
     add.accessibilityLabel = String(localized: "home.automationsTab.newAutomation", defaultValue: "New automation")
     navigationItem.rightBarButtonItem = add
@@ -35,6 +36,7 @@ final class AutomationsViewController: UIViewController {
     table.tableHeaderView = header
     table.backgroundColor = Palette.bgBase
     table.dataSource = self
+    table.delegate = self
     table.register(UITableViewCell.self, forCellReuseIdentifier: "automation")
     table.refreshControl = UIRefreshControl(frame: .zero, primaryAction: UIAction { [weak self] _ in self?.load() })
     view.addSubview(table)
@@ -79,6 +81,18 @@ final class AutomationsViewController: UIViewController {
         }
       })
     if session.connectionState == .connected, loadedFor != hostId { load() }
+  }
+
+  /// New (nil) or existing; a save reloads the list.
+  private func edit(_ automation: Automation?) {
+    guard let hostId, let session = model.session(for: hostId) else { return }
+    let editor = AutomationEditorViewController(session: session, automation: automation) { [weak self] in self?.load() }
+    if automation == nil {
+      let navigation = UINavigationController(rootViewController: editor)
+      present(navigation, animated: true)
+    } else {
+      navigationController?.pushViewController(editor, animated: true)
+    }
   }
 
   private func load() {
@@ -132,5 +146,20 @@ extension AutomationsViewController: UITableViewDataSource {
       }, for: .valueChanged)
     cell.accessoryView = toggle
     return cell
+  }
+}
+
+extension AutomationsViewController: HostScoped {
+  func show(hostId: PairedHost.ID) {
+    self.hostId = hostId
+    loadedFor = nil
+    setNeedsUpdateProperties()
+  }
+}
+
+extension AutomationsViewController: UITableViewDelegate {
+  func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    tableView.deselectRow(at: indexPath, animated: true)
+    edit(automations[indexPath.row])
   }
 }

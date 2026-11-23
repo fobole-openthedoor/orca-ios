@@ -140,6 +140,56 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     }
   }
 
+  /// One question of a prompt: single or multiple choice, and maybe its own words instead.
+  public struct Question: Sendable, Equatable, Identifiable {
+    public var id: String
+    public var text: String
+    public var header: String?
+    public var multiSelect: Bool
+    public var options: [PromptOption]
+    /// Present when the person may answer in their own words.
+    public var freeText: FreeText?
+    /// The provider takes a reply that leaves this one unanswered.
+    public var skippable: Bool
+
+    public init(
+      id: String, text: String, header: String?, multiSelect: Bool, options: [PromptOption], freeText: FreeText?, skippable: Bool
+    ) {
+      self.id = id
+      self.text = text
+      self.header = header
+      self.multiSelect = multiSelect
+      self.options = options
+      self.freeText = freeText
+      self.skippable = skippable
+    }
+
+    public struct FreeText: Sendable, Equatable {
+      public var placeholder: String?
+      public var multiline: Bool
+      public var allowEmpty: Bool
+    }
+  }
+
+  /// What the person answered one question with.
+  public struct Answer: Sendable, Equatable {
+    public var questionId: String
+    public var optionIds: [String]
+    public var other: String?
+
+    public init(questionId: String, optionIds: [String], other: String? = nil) {
+      self.questionId = questionId
+      self.optionIds = optionIds
+      self.other = other
+    }
+
+    var json: JSONValue {
+      var object: [String: JSONValue] = ["questionId": .string(questionId), "optionIds": .array(optionIds.map { .string($0) })]
+      if let other { object["other"] = .string(other) }
+      return .object(object)
+    }
+  }
+
   /// An approval or question card.
   public struct Prompt: Sendable, Equatable {
     public var title: String
@@ -148,6 +198,10 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     /// `pending`, `resolved`, `cancelled`.
     public var resolutionState: String
     public var selectedOptionId: String?
+    /// A question's questions, structured; empty on approvals and older hosts.
+    public var questions: [Question] = []
+    /// What was answered, per question, once resolved.
+    public var answers: [Answer] = []
 
     public var isPending: Bool { resolutionState == "pending" }
   }
@@ -232,11 +286,34 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
   }
 
   private static func prompt(_ json: JSONValue, title: String, detail: String?) -> Prompt {
-    Prompt(
+    func freeText(_ json: JSONValue, id: String?) -> Question.FreeText? {
+      guard id != nil || json["freeTextInput"] != nil else { return nil }
+      let input = json["freeTextInput"]
+      return .init(
+        placeholder: input?["placeholder"]?.stringValue, multiline: input?["multiline"]?.boolValue ?? false,
+        allowEmpty: input?["allowEmpty"]?.boolValue ?? false)
+    }
+    let questions = (json["questions"]?.arrayValue ?? []).compactMap { question -> Question? in
+      guard let id = question["id"]?.stringValue else { return nil }
+      return Question(
+        id: id, text: question["question"]?.stringValue ?? "", header: question["header"]?.stringValue,
+        multiSelect: question["multiSelect"]?.boolValue ?? false,
+        options: (question["options"]?.arrayValue ?? []).compactMap(PromptOption.init),
+        freeText: freeText(question, id: question["freeTextQuestionId"]?.stringValue),
+        skippable: question["skippable"]?.boolValue ?? false)
+    }
+    let answers = (json["resolution"]?["answers"]?.arrayValue ?? []).compactMap { answer -> Answer? in
+      guard let id = answer["questionId"]?.stringValue else { return nil }
+      return Answer(
+        questionId: id, optionIds: (answer["optionIds"]?.arrayValue ?? []).compactMap(\.stringValue),
+        other: answer["other"]?.stringValue)
+    }
+    return Prompt(
       title: title, detail: detail,
       options: (json["options"]?.arrayValue ?? []).compactMap(PromptOption.init),
       resolutionState: json["resolution"]?["state"]?.stringValue ?? "pending",
-      selectedOptionId: json["resolution"]?["selectedOptionId"]?.stringValue)
+      selectedOptionId: json["resolution"]?["selectedOptionId"]?.stringValue,
+      questions: questions, answers: answers)
   }
 }
 
@@ -277,6 +354,10 @@ public struct ChatTranscript: Sendable, Equatable {
   public private(set) var hostWorking: Bool?
   /// The ephemeral "what it is doing" line.
   public private(set) var activity: String?
+  /// Work the agent left running in the background (agents, shells, monitors), as the host last listed it.
+  public private(set) var backgroundTasks: [BackgroundTask] = []
+  public private(set) var stopsBackgroundTasks = false
+
   /// The prompts that can still be answered, when the host says; nil on hosts that do not.
   public private(set) var actionablePromptIds: Set<String>?
   public private(set) var ended = false
@@ -404,6 +485,12 @@ public struct ChatTranscript: Sendable, Equatable {
     if let activity = frame["activity"] {
       self.activity = activity["text"]?.stringValue
     }
+    // Absent means unchanged; null clears.
+    if let roster = frame["backgroundTasks"] {
+      let live = roster["state"]?.stringValue == "monitoring"
+      backgroundTasks = live ? (roster["tasks"]?.arrayValue ?? []).compactMap(BackgroundTask.init) : []
+      stopsBackgroundTasks = live && (roster["supportsStopAll"]?.boolValue ?? true)
+    }
     if let ids = frame["actionablePromptIds"]?.arrayValue {
       actionablePromptIds = Set(ids.compactMap(\.stringValue))
     }
@@ -412,5 +499,29 @@ public struct ChatTranscript: Sendable, Equatable {
   private mutating func rebuild() {
     // Journal order, never arrival or clock order.
     items = byId.values.sorted { ($0.sequence, $0.sequenceIndex, $0.id) < ($1.sequence, $1.sequenceIndex, $1.id) }
+  }
+}
+
+/// One piece of background work (agent-session-background-task-wire.ts).
+public struct BackgroundTask: Sendable, Equatable, Identifiable {
+  /// `agent`, `workflow`, `command`, `monitor`, `unknown`.
+  public var id: String
+  public var kind: String
+  public var label: String
+  public var state: String?
+  /// Host epoch milliseconds.
+  public var startedAt: Double?
+  public var totalTokens: Int?
+  public var stoppable: Bool
+
+  init?(_ json: JSONValue) {
+    guard let id = json["id"]?.stringValue else { return nil }
+    self.id = id
+    kind = json["kind"]?.stringValue ?? "unknown"
+    label = json["description"]?.stringValue ?? json["name"]?.stringValue ?? ""
+    state = json["state"]?.stringValue
+    startedAt = json["startedAt"]?.doubleValue
+    totalTokens = json["totalTokens"]?.intValue
+    stoppable = json["stoppable"]?.boolValue ?? true
   }
 }

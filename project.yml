@@ -82,6 +82,7 @@ targets:
         NSCameraUsageDescription: Allow Orca to use the camera for QR code scanning.
         NSPhotoLibraryUsageDescription: Allow Orca to attach photos from your library to a terminal session on your paired desktop.
         NSPhotoLibraryAddUsageDescription: Allow Orca to save images from your sessions to Photos.
+        NSSpeechRecognitionUsageDescription: Orca turns what you say into text on this phone.
         NSMicrophoneUsageDescription: Allow Orca to use your microphone for voice dictation, transcribed on this phone or on your paired computer.
         CFBundleURLTypes:
           - CFBundleURLName: com.thm.orcaios

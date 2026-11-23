@@ -27,6 +27,16 @@ public struct ChatOptions: Sendable, Equatable {
   public var acceptsImages: Bool
   public var fastModeSupported: Bool
   public var planModeSupported: Bool
+  /// The thread's goal, when the agent keeps one (`/goal`).
+  public var goal: Goal?
+
+  public struct Goal: Sendable, Equatable {
+    public var objective: String
+    /// `active`, `paused`, `blocked`, `limited`, `complete`…
+    public var status: String
+    public var timeUsedSeconds: Double
+    public var tokensUsed: Int
+  }
 
   public init(_ json: JSONValue) {
     func choice(_ value: JSONValue) -> Choice? {
@@ -54,6 +64,11 @@ public struct ChatOptions: Sendable, Equatable {
     acceptsImages = json["acceptsImages"]?.boolValue ?? true
     fastModeSupported = json["fastModeSupport"]?["supported"]?.boolValue ?? false
     planModeSupported = current?["interactionMode"] != nil
+    if let raw = json["threadGoal"]?["current"] ?? json["reportedThreadGoal"]?["current"], let objective = raw["objective"]?.stringValue {
+      goal = Goal(
+        objective: objective, status: raw["status"]?.stringValue ?? "active",
+        timeUsedSeconds: raw["timeUsedSeconds"]?.doubleValue ?? 0, tokensUsed: raw["tokensUsed"]?.intValue ?? 0)
+    }
   }
 
   public var currentModel: Model? {

@@ -49,7 +49,8 @@ extension HostAPI {
   /// Turns an automation on or off.
   public func setAutomation(_ automation: Automation, enabled: Bool) async throws {
     var params: [String: JSONValue] = ["id": .string(automation.id), "updates": ["enabled": .bool(enabled)]]
-    if let owner = automation.owner { params["expectedOwner"] = owner }
+    // The host wants `{ selector }`, not the bare selector.
+    if let owner = automation.expectedOwner { params["expectedOwner"] = owner }
     _ = try await connection.request("automation.update", .object(params))
   }
 }

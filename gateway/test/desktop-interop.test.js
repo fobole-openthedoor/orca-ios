@@ -164,8 +164,7 @@ test('official desktop PushGatewayClient signs in, registers, sends and deletes'
   const paths = h.fakeApns.requests.map((request) => `${request.headers['apns-push-type']} ${request.path}`)
   assert.deepEqual(paths.sort(), [
     `alert /3/device/${'ab'.repeat(32)}`,
-    `alert /3/device/${'ab'.repeat(32)}`,
-    `liveactivity /3/device/${'cd'.repeat(40)}`
+    `alert /3/device/${'ab'.repeat(32)}`
   ])
   // Exactly one session for the whole run: the client reused its token.
   assert.equal(Object.keys(h.gateway.store.state.sessions).length, 1)

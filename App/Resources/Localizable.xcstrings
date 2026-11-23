@@ -461,13 +461,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@% left"
+            "value": "%1$@%% left"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "剩余 %1$@%"
+            "value": "剩余 %1$@%%"
           }
         }
       }
@@ -56073,19 +56073,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Context %1$@ of %2$@ tokens, %3$@% used"
+            "value": "Context %1$@ of %2$@ tokens, %3$@%% used"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "上下文 %1$@/%2$@ token，已用 %3$@%"
+            "value": "上下文 %1$@/%2$@ token，已用 %3$@%%"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "上下文 %1$@/%2$@ token，已用 %3$@%"
+            "value": "上下文 %1$@/%2$@ token，已用 %3$@%%"
           }
         }
       }
@@ -68665,19 +68665,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ · %2$@%"
+            "value": "%1$@ · %2$@%%"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ · %2$@%"
+            "value": "%1$@ · %2$@%%"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ · %2$@%"
+            "value": "%1$@ · %2$@%%"
           }
         }
       }
@@ -76252,19 +76252,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ · %2$@%"
+            "value": "%1$@ · %2$@%%"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ · %2$@%"
+            "value": "%1$@ · %2$@%%"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ · %2$@%"
+            "value": "%1$@ · %2$@%%"
           }
         }
       }
@@ -87318,7 +87318,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "手动的"
+            "value": "手动"
           }
         },
         "zh-Hant": {
@@ -87548,7 +87548,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "最近的"
+            "value": "最近"
           }
         },
         "zh-Hant": {
@@ -89558,25 +89558,659 @@
         }
       }
     },
-    "orcaios.push.accepted": {
+    "orcaios.about.licenses": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The desktop sent the test. Check for the notification."
+            "value": "Open-source licenses"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "桌面已发出测试推送，请留意通知。"
+            "value": "开源许可"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "桌面已送出測試推播，請留意通知。"
+            "value": "開源授權"
+          }
+        }
+      }
+    },
+    "orcaios.about.thisApp": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This app’s source code"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本 App 的源代码"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本 App 的原始碼"
+          }
+        }
+      }
+    },
+    "orcaios.agentHistory.recentMessages": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recent messages"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近的消息"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近的訊息"
+          }
+        }
+      }
+    },
+    "orcaios.automation.deleteFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t delete the automation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法删除自动化"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法刪除自動化"
+          }
+        }
+      }
+    },
+    "orcaios.automation.enabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enabled"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启用"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "啟用"
+          }
+        }
+      }
+    },
+    "orcaios.automation.runFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t start the run"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法开始运行"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法開始執行"
+          }
+        }
+      }
+    },
+    "orcaios.automation.runStarted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The run started on the desktop."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已在桌面上开始运行。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已在桌面上開始執行。"
+          }
+        }
+      }
+    },
+    "orcaios.automation.saveFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t save the automation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存自动化"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法儲存自動化"
+          }
+        }
+      }
+    },
+    "orcaios.automation.sshHostUnknown": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This project’s SSH host isn’t available on the desktop. Pick another project."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面上找不到这个项目的 SSH 主机，请换一个项目。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面上找不到這個專案的 SSH 主機，請換一個專案。"
+          }
+        }
+      }
+    },
+    "orcaios.chat.approvalTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needs your approval"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要你批准"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要你核准"
+          }
+        }
+      }
+    },
+    "orcaios.chat.awaitingAnswer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for your answer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待你的回答"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待你的回答"
+          }
+        }
+      }
+    },
+    "orcaios.chat.awaitingApproval": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for your approval"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待你的批准"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待你的核准"
+          }
+        }
+      }
+    },
+    "orcaios.chat.cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelled"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已取消"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已取消"
+          }
+        }
+      }
+    },
+    "orcaios.chat.chooseAny": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose any that apply"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可多选"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可複選"
+          }
+        }
+      }
+    },
+    "orcaios.chat.next": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下一题"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下一題"
+          }
+        }
+      }
+    },
+    "orcaios.chat.previous": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上一题"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上一題"
+          }
+        }
+      }
+    },
+    "orcaios.chat.questionTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Question"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "问题"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "問題"
+          }
+        }
+      }
+    },
+    "orcaios.chat.submit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Submit"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "提交"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "提交"
+          }
+        }
+      }
+    },
+    "orcaios.composer.camera": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Take Photo"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拍照"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拍照"
+          }
+        }
+      }
+    },
+    "orcaios.dictation.denied": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Microphone and Speech Recognition for Orca in Settings."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请在“设置”中允许 Orca 使用麦克风和语音识别。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "請在「設定」中允許 Orca 使用麥克風和語音辨識。"
+          }
+        }
+      }
+    },
+    "orcaios.dictation.listening": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listening"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在听"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在聽"
+          }
+        }
+      }
+    },
+    "orcaios.dictation.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictation isn't available right now."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "语音输入暂时不可用。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "語音輸入暫時無法使用。"
+          }
+        }
+      }
+    },
+    "orcaios.home.activeCount": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld active"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 个活跃"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 個活躍"
+          }
+        }
+      }
+    },
+    "orcaios.home.worktreeCount": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld worktree"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld worktrees"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 个工作树"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 个工作树"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hant": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 個工作樹"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 個工作樹"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "orcaios.imageViewer.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't load this image"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载这张图片"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法載入這張圖片"
+          }
+        }
+      }
+    },
+    "orcaios.links.inApp": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open here"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 App 内打开"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 App 內開啟"
+          }
+        }
+      }
+    },
+    "orcaios.links.safari": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in Safari"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Safari 中打开"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Safari 中開啟"
           }
         }
       }
@@ -89587,19 +90221,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pushes reach this app through the gateway in the orca-ios repository. Start the desktop with ORCA_PUSH_GATEWAY_URL set to it; without that, alerts and Live Activities update only while this app is open."
+            "value": "While Orca is open, alerts and Live Activities update right away. To get them after you close Orca, your desktop needs push turned on."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "推送经 orca-ios 仓库里的推送网关送到这个 App。启动桌面时把 ORCA_PUSH_GATEWAY_URL 设为网关地址；不设置的话，通知和实时活动只在 App 打开时更新。"
+            "value": "Orca 打开时，通知和实时活动会直接更新。关掉 Orca 后还想收到，需要桌面开启推送。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "推播經 orca-ios 儲存庫裡的推播閘道送到這個 App。啟動桌面時把 ORCA_PUSH_GATEWAY_URL 設為閘道位址；不設定的話，通知和即時動態只在 App 開啟時更新。"
+            "value": "Orca 開啟時，通知和即時動態會直接更新。關掉 Orca 後還想收到，需要桌面開啟推播。"
           }
         }
       }
@@ -89627,25 +90261,209 @@
         }
       }
     },
-    "orcaios.push.notAccepted": {
+    "orcaios.sourceControl.stage": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The desktop didn’t send the test: %1$@"
+            "value": "Stage"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "桌面没有发出测试推送：%1$@"
+            "value": "暂存"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "桌面沒有送出測試推播：%1$@"
+            "value": "暫存"
+          }
+        }
+      }
+    },
+    "orcaios.troubleshoot.pushNoToken": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allowed, no push token yet"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已允许，尚未取得推送令牌"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已允許，尚未取得推播權杖"
+          }
+        }
+      }
+    },
+    "orcaios.troubleshoot.pushNotAsked": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not asked yet"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚未请求权限"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚未要求權限"
+          }
+        }
+      }
+    },
+    "orcaios.troubleshoot.pushReady": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allowed, push token received"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已允许，已取得推送令牌"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已允許，已取得推播權杖"
+          }
+        }
+      }
+    },
+    "orcaios.troubleshoot.resetPairing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove all paired desktops"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除所有已配对的桌面"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除所有已配對的桌面"
+          }
+        }
+      }
+    },
+    "orcaios.troubleshoot.resetPairingConfirm": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove all"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全部移除"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全部移除"
+          }
+        }
+      }
+    },
+    "orcaios.troubleshoot.resetPairingMessage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every paired desktop and its saved credentials are removed from this phone. You can pair again later."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所有已配对的桌面及其保存的凭据都会从这台手机上移除。之后可以重新配对。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所有已配對的桌面及其儲存的憑證都會從這支手機上移除。之後可以重新配對。"
+          }
+        }
+      }
+    },
+    "orcaios.usage.resetsInHours": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resets in %1$@h %2$@m"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 小时 %2$@ 分钟后重置"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 小時 %2$@ 分鐘後重置"
+          }
+        }
+      }
+    },
+    "orcaios.usage.resetsInMinutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resets in %1$@m"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 分钟后重置"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 分鐘後重置"
           }
         }
       }
@@ -116430,19 +117248,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Downloading… %1$@%"
+            "value": "Downloading… %1$@%%"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "正在下载… %1$@%"
+            "value": "正在下载… %1$@%%"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "正在下載… %1$@%"
+            "value": "正在下載… %1$@%%"
           }
         }
       }
@@ -128473,7 +129291,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "最近的"
+            "value": "最近"
           }
         },
         "zh-Hant": {
@@ -131679,7 +132497,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "开放"
+            "value": "未关闭"
           }
         },
         "zh-Hant": {
@@ -135161,7 +135979,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "开放"
+            "value": "未关闭"
           }
         },
         "zh-Hant": {
@@ -135714,7 +136532,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "开放"
+            "value": "未关闭"
           }
         },
         "zh-Hant": {

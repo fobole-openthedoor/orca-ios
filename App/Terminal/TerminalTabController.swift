@@ -1,5 +1,6 @@
 import GhosttyTerminal
 import OrcaCore
+import PhotosUI
 import UIKit
 
 /// One terminal tab. Ghostty draws and handles touch, keyboard and IME; the host owns the PTY.
@@ -370,6 +371,9 @@ final class TerminalTabController: UIViewController, WorkspaceContent, TerminalS
       guard let self, let image = UIImage(data: data) else { return }
       self.uploadAndType(image)
     }
+    dock.onDictated = { [weak self] text in self?.terminal.pasteWithProtection(text: text) }
+    dock.onError = { message in Toast.shared.show(message, kind: .error) }
+    dock.onImage = { [weak self] in self?.pickImage() }
     dock.onShowKeyboard = { [weak self] in
       guard let self, self.terminal.becomeFirstResponder() else { return }
       self.keyboardChanged(visible: true)
@@ -394,6 +398,16 @@ final class TerminalTabController: UIViewController, WorkspaceContent, TerminalS
     }
     uploadAndType(image)
     return true
+  }
+
+  /// The dock's image button: a photo from the library, uploaded and typed as its host path.
+  private func pickImage() {
+    var configuration = PHPickerConfiguration()
+    configuration.filter = .images
+    configuration.selectionLimit = 1
+    let picker = PHPickerViewController(configuration: configuration)
+    picker.delegate = self
+    present(picker, animated: true)
   }
 
   /// Uploads an image to the host and types its path, escaped for the shell.
@@ -561,5 +575,16 @@ final class TerminalTabController: UIViewController, WorkspaceContent, TerminalS
 
   private func hideStatus() {
     statusPill.setVisible(false, animated: true)
+  }
+}
+
+extension TerminalTabController: PHPickerViewControllerDelegate {
+  func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+    picker.dismiss(animated: true)
+    guard let provider = results.first?.itemProvider, provider.canLoadObject(ofClass: UIImage.self) else { return }
+    provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
+      guard let image = object as? UIImage else { return }
+      DispatchQueue.main.async { self?.uploadAndType(image) }
+    }
   }
 }

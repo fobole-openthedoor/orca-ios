@@ -294,3 +294,21 @@ public struct WorktreeCatalog: Sendable, Equatable {
     return .needsFullRead
   }
 }
+
+extension HostAPI {
+  /// Marks agents read or unread (`agentActivity.setRead`), at most 500 pane keys a request.
+  public func setAgentsRead(_ paneKeys: [String], read: Bool) async throws {
+    for start in stride(from: 0, to: paneKeys.count, by: 500) {
+      let chunk = paneKeys[start..<min(start + 500, paneKeys.count)].map { JSONValue.string($0) }
+      _ = try await connection.request("agentActivity.setRead", ["paneKeys": .array(chunk), "read": .bool(read)])
+    }
+  }
+
+  /// Takes finished agents off the list (`agentActivity.clear`).
+  public func clearAgents(_ paneKeys: [String]) async throws {
+    for start in stride(from: 0, to: paneKeys.count, by: 500) {
+      let chunk = paneKeys[start..<min(start + 500, paneKeys.count)].map { JSONValue.string($0) }
+      _ = try await connection.request("agentActivity.clear", ["paneKeys": .array(chunk)])
+    }
+  }
+}

@@ -56,7 +56,10 @@ enum HostWorktreeSummary {
     let visible = session.worktrees.filter { !$0.isArchived && !botHomes.contains($0.id) }
     // Active: something is running in it, a terminal or an agent.
     let active = visible.filter { $0.liveTerminalCount > 0 || !$0.agents.isEmpty }.count
-    return "\(visible.count) worktree\(visible.count == 1 ? "" : "s")" + (active > 0 ? " · \(active) active" : "")
+    let count = String.localizedStringWithFormat(
+      String(localized: "orcaios.home.worktreeCount", defaultValue: "%lld worktrees"), visible.count)
+    guard active > 0 else { return count }
+    return count + " · " + String.localizedStringWithFormat(String(localized: "orcaios.home.activeCount", defaultValue: "%lld active"), active)
   }
 
   /// Agents on this desktop waiting on the user.

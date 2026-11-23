@@ -275,8 +275,9 @@ private final class UsageBarRow: UIView {
     let fill = UIView()
     fill.translatesAutoresizingMaskIntoConstraints = false
     fill.layer.cornerRadius = 4
-    fill.backgroundColor =
-      window.usedPercent >= 90 ? Palette.statusRed : window.usedPercent >= 50 ? Palette.statusAmber : Palette.statusGreen
+    // UsageBar.tsx: rounded and clamped first, then green under 60, amber under 80, red from 80.
+    let used = min(100, max(0, window.usedPercent.rounded()))
+    fill.backgroundColor = used >= 80 ? Palette.statusRed : used >= 60 ? Palette.statusAmber : Palette.statusGreen
     track.addSubview(fill)
     let percent = TextLabel("\(Int(window.usedPercent.rounded()))%", size: 15, alignment: .right, tabular: true)
     let reset = TextLabel(Self.resetText(window), size: 14, color: Palette.textMuted)
@@ -309,7 +310,12 @@ private final class UsageBarRow: UIView {
     // The countdown from resetsAt, as the official bar reads; the host's own wording only without it.
     guard let resetsAt = window.resetsAt else { return window.resetDescription ?? "" }
     let minutes = max(0, Int((resetsAt / 1000 - Date().timeIntervalSince1970) / 60))
-    return minutes >= 60 ? "Resets in \(minutes / 60)h \(minutes % 60)m" : "Resets in \(minutes)m"
+    guard minutes >= 60 else {
+      return String(format: String(localized: "orcaios.usage.resetsInMinutes", defaultValue: "Resets in %1$@m"), "\(minutes)")
+    }
+    return String(
+      format: String(localized: "orcaios.usage.resetsInHours", defaultValue: "Resets in %1$@h %2$@m"), "\(minutes / 60)",
+      "\(minutes % 60)")
   }
 }
 
@@ -328,4 +334,14 @@ final class PaddedLabel: UIView {
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+extension UsageViewController: HostScoped {
+  func show(hostId: PairedHost.ID) {
+    guard self.hostId != hostId else { return }
+    self.hostId = hostId
+    stats = nil
+    accounts = nil
+    setNeedsUpdateProperties()
+  }
 }

@@ -16,9 +16,13 @@ final class SessionViewController: UIViewController {
   /// The host has answered with its tabs, so none means none rather than not yet.
   private var tabsLoaded = false
 
-  init(session: HostSession, worktreeId: String) {
+  /// The chat to bring to the front once the tabs arrive, as an item or a past session asked.
+  private var focusSessionId: String?
+
+  init(session: HostSession, worktreeId: String, sessionId: String? = nil) {
     self.session = session
     self.worktreeId = worktreeId
+    focusSessionId = sessionId
     super.init(nibName: nil, bundle: nil)
     hidesBottomBarWhenPushed = true
   }
@@ -40,12 +44,14 @@ final class SessionViewController: UIViewController {
     let more = UIBarButtonItem(image: Lucide.ellipsis.image(size: 20, strokeWidth: 2), menu: moreMenu())
     if bot != nil {
       // A bot's home: its items instead of source control, and its face beside its name.
-      let items = UIBarButtonItem(image: Lucide.listChecks.image(size: 20, strokeWidth: 2), style: .plain, target: nil, action: nil)
+      let items = UIBarButtonItem(
+        image: Lucide.listChecks.image(size: 20, strokeWidth: 2), primaryAction: UIAction { [weak self] _ in self?.openItems() })
       items.accessibilityLabel = String(localized: "session.header.items", defaultValue: "Items")
       navigationItem.rightBarButtonItems = [more, items]
       navigationItem.titleView = botTitle
     } else {
-      let branch = UIBarButtonItem(image: Lucide.gitBranch.image(size: 20, strokeWidth: 2), style: .plain, target: nil, action: nil)
+      let branch = UIBarButtonItem(
+        image: Lucide.gitBranch.image(size: 20, strokeWidth: 2), primaryAction: UIAction { [weak self] _ in self?.openSourceControl() })
       branch.accessibilityLabel = String(localized: "session.header.sourceControl", defaultValue: "Source control")
       navigationItem.rightBarButtonItems = [more, branch]
     }
@@ -102,6 +108,17 @@ final class SessionViewController: UIViewController {
       navigationController?.popViewController(animated: true)
       return
     }
+    if let focus = focusSessionId,
+      let tab = next.tabs.first(where: { if case .agentSession(let id, _) = $0.kind { id == focus } else { false } })
+    {
+      focusSessionId = nil
+      show(tab)
+      updateStrip()
+      let api = session.api
+      let selector = selector
+      Task { await api.activateTab(tab.id, worktree: selector) }
+      return
+    }
     let active = next.tabs.first { $0.id == next.activeTabId } ?? next.tabs.first
     show(active)
     updateStrip()
@@ -127,12 +144,21 @@ final class SessionViewController: UIViewController {
           api: session.api, sessionId: sessionId, capabilities: session.status?.capabilities ?? [],
           connectionId: worktree.flatMap { session.repo(id: $0.repoId)?.connectionId })
         let chat = ChatViewController(model: model)
+        chat.imageLoader = ChatImageLoader(api: session.api, worktreeId: worktreeId)
         let agentType: String? = { if case .agentSession(_, let agent) = tab?.kind { return agent } else { return nil } }()
         chat.onActivity = { [weak self] working, detail in
           guard let self, let worktree = self.session.worktree(id: self.worktreeId) else { return }
           AgentActivityCenter.shared.reportChat(
             hostId: self.session.host.id, hostName: self.session.name, worktree: worktree, agentType: agentType,
             working: working, detail: detail)
+        }
+        chat.onOpenPath = { [weak self] path in self?.openPath(path) }
+        // Fork from a response: a new chat with the same agent, holding this one through that answer.
+        chat.onFork = { [weak self] itemId in
+          guard let self else { return }
+          let api = self.session.api
+          let selector = self.selector
+          self.run { try await api.createChat(agent: agentType ?? "claude", worktree: selector, forkFrom: (sessionId, itemId)) }
         }
         chats[sessionId] = chat
         next = chat
@@ -160,6 +186,57 @@ final class SessionViewController: UIViewController {
     next.view.pin(to: content)
     next.didMove(toParent: self)
     current = next
+  }
+
+  // MARK: Panels
+
+  /// A path from a chat: relative to this workspace, or absolute inside it.
+  private func openPath(_ path: String) {
+    var relative = path
+    if let root = session.worktree(id: worktreeId)?.path, !root.isEmpty, path.hasPrefix(root) {
+      relative = String(path.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+    navigationController?.pushViewController(
+      FilePreviewViewController(session: session, worktreeId: worktreeId, path: relative), animated: true)
+  }
+
+  private func openSourceControl() {
+    navigationController?.pushViewController(SourceControlViewController(session: session, worktreeId: worktreeId), animated: true)
+  }
+
+  private func openFiles() {
+    navigationController?.pushViewController(FileExplorerViewController(session: session, worktreeId: worktreeId), animated: true)
+  }
+
+  /// Past agent sessions here; one with a chat opens it in this workspace.
+  private func openHistory() {
+    let history = AgentHistoryViewController(session: session, worktreeId: worktreeId)
+    let session = session
+    history.onOpenChat = { [weak self] worktreeId, sessionId in
+      guard let self else { return }
+      if worktreeId == self.worktreeId {
+        self.focusSessionId = sessionId
+        self.navigationController?.popToViewController(self, animated: true)
+        self.apply(self.tabs)
+      } else {
+        self.navigationController?.pushViewController(
+          SessionViewController(session: session, worktreeId: worktreeId, sessionId: sessionId), animated: true)
+      }
+    }
+    navigationController?.pushViewController(history, animated: true)
+  }
+
+  /// A bot's items; an item's chat opens here, in its home.
+  private func openItems() {
+    guard let bot else { return }
+    let items = BotItemsViewController(session: session, botId: bot.id)
+    items.onOpenChat = { [weak self] sessionId in
+      guard let self else { return }
+      self.focusSessionId = sessionId
+      self.navigationController?.popToViewController(self, animated: true)
+      self.apply(self.tabs)
+    }
+    navigationController?.pushViewController(items, animated: true)
   }
 
   /// The open tabs, the shown one checked; the shown one can also be closed.
@@ -233,13 +310,13 @@ final class SessionViewController: UIViewController {
     UIMenu(children: [
       UIAction(
         title: String(localized: "session.headerMore.fileExplorer", defaultValue: "File explorer"),
-        image: Lucide.folderTree.image(size: 18)) { _ in },
+        image: Lucide.folderTree.image(size: 18)) { [weak self] _ in self?.openFiles() },
       UIAction(
         title: String(localized: "session.headerMore.agentHistory", defaultValue: "Agent History"),
-        image: Lucide.history.image(size: 18)) { _ in },
+        image: Lucide.history.image(size: 18)) { [weak self] _ in self?.openHistory() },
       UIAction(
         title: String(localized: "session.headerMore.textSize", defaultValue: "Text size"),
-        image: Lucide.aLargeSmall.image(size: 18)) { _ in },
+        image: Lucide.aLargeSmall.image(size: 18)) { [weak self] _ in self?.present(ChatTextSettingsController.sheet(), animated: true) },
     ])
   }
 }

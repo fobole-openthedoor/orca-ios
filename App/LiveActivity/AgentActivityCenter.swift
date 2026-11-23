@@ -4,9 +4,12 @@ import Observation
 import OrcaCore
 
 /// Keeps one Live Activity per workspace whose agent is working, from what the paired desktops report.
+/// Only work in progress is shown: when the agent stops (finished, failed or waiting for you) the activity
+/// goes away at once.
 ///
-/// The app updates activities while it runs (including the short time the system gives it after leaving the
-/// foreground); after that the desktop's pushes, through the gateway in this repo, update and end them (see
+/// Activities are keyed by workspace id alone, so the same workspace reached through two pairings of one
+/// desktop, or an activity left over from an earlier launch, never shows twice. The app updates activities
+/// while it runs; after that the desktop's pushes, through the gateway in this repo, end them (see
 /// PushCenter). Each local update sets a stale date, so an activity nothing reaches greys out instead of
 /// claiming the agent is still working.
 @MainActor
@@ -15,8 +18,6 @@ final class AgentActivityCenter {
 
   /// How long an update stays current without another.
   private static let staleAfter: TimeInterval = 10 * 60
-  /// How long a finished activity stays on the Lock Screen.
-  private static let dismissAfter: TimeInterval = 10 * 60
 
   private var activities: [String: Activity<AgentActivityAttributes>] = [:]
   private var lastStates: [String: AgentActivityAttributes.ContentState] = [:]
@@ -29,10 +30,24 @@ final class AgentActivityCenter {
     guard !observing else { return }
     observing = true
     // Adopt activities that outlived the last launch, so they are updated or ended instead of orphaned.
-    for activity in Activity<AgentActivityAttributes>.activities {
-      if let key = Self.key(from: activity.attributes.deepLink) { activities[key] = activity }
+    for activity in Activity<AgentActivityAttributes>.activities { adopt(activity) }
+    Task { [weak self] in
+      for await activity in Activity<AgentActivityAttributes>.activityUpdates {
+        self?.adopt(activity)
+      }
     }
     observe(model)
+  }
+
+  /// Takes an activity this center didn't start in this run; a second one for the same workspace ends.
+  private func adopt(_ activity: Activity<AgentActivityAttributes>) {
+    guard activity.activityState == .active || activity.activityState == .stale else { return }
+    guard let key = Self.key(from: activity.attributes.deepLink) else { return }
+    if let current = activities[key] {
+      if current.id != activity.id { dismiss(activity) }
+      return
+    }
+    activities[key] = activity
   }
 
   private func observe(_ model: AppModel) {
@@ -44,67 +59,52 @@ final class AgentActivityCenter {
   }
 
   private func sync(_ model: AppModel) {
-    var seen = Set<String>()
+    var working = Set<String>()
+    var known = Set<String>()
+    var everyHostConnected = true
     for host in model.hosts {
-      guard let session = model.session(for: host.id) else { continue }
-      // Read connection state so a drop re-runs this and lets activities go stale.
-      _ = session.connectionState
+      guard let session = model.session(for: host.id), session.connectionState == .connected else {
+        everyHostConnected = false
+        continue
+      }
       for worktree in session.worktrees where !worktree.isArchived {
-        guard let agent = Self.primaryAgent(in: worktree) else { continue }
-        let key = "\(host.id.uuidString)/\(worktree.id)"
-        seen.insert(key)
-        update(key: key, host: session.name, hostId: host.id, worktree: worktree, agent: agent)
+        known.insert(worktree.id)
+        guard !working.contains(worktree.id),
+          let agent = worktree.agents.first(where: { Self.isWorking($0.state) })
+        else { continue }
+        working.insert(worktree.id)
+        update(key: worktree.id, host: session.name, hostId: host.id, worktree: worktree, agent: agent)
       }
     }
-    for (key, activity) in activities where !seen.contains(key) {
-      end(activity, key: key, phase: .done)
+    // A workspace a connected desktop lists as not working ends now; one no desktop can see right now
+    // keeps its activity until the stale date greys it out.
+    for (key, activity) in activities where !working.contains(key) && (known.contains(key) || everyHostConnected) {
+      end(activity, key: key)
     }
   }
 
-  /// The agent worth showing: one that needs you, else one working, else the most recent.
-  private static func primaryAgent(in worktree: Worktree) -> Worktree.Agent? {
-    let agents = worktree.agents
-    return agents.first { phase(for: $0.state) == .needsYou }
-      ?? agents.first { phase(for: $0.state) == .working }
-      ?? agents.max { ($0.updatedAt ?? 0) < ($1.updatedAt ?? 0) }
-  }
-
-  private static func phase(for state: String) -> AgentActivityAttributes.Phase? {
-    switch state {
-    case "working", "monitoring": .working
-    case "permission", "waiting", "blocked": .needsYou
-    case "failed": .failed
-    case "done", "idle", "active": .done
-    default: nil
-    }
-  }
+  private static func isWorking(_ state: String) -> Bool { state == "working" || state == "monitoring" }
 
   private func update(key: String, host: String, hostId: UUID, worktree: Worktree, agent: Worktree.Agent) {
-    guard let phase = Self.phase(for: agent.state) else { return }
     let detail = [agent.lastAssistantMessage, agent.title].compactMap { $0 }
       .map { $0.replacingOccurrences(of: "\n", with: " ") }.first { !$0.isEmpty } ?? worktree.displayName
-    let previous = lastStates[key]
-    let since = previous?.phase == phase ? previous!.since : Date(timeIntervalSince1970: (agent.updatedAt ?? Date().timeIntervalSince1970 * 1000) / 1000)
-    let state = AgentActivityAttributes.ContentState(phase: phase, detail: String(detail.prefix(160)), since: since)
+    let since = lastStates[key]?.since
+      ?? Date(timeIntervalSince1970: (agent.updatedAt ?? Date().timeIntervalSince1970 * 1000) / 1000)
+    let state = AgentActivityAttributes.ContentState(phase: .working, detail: String(detail.prefix(160)), since: since)
 
     if let activity = activities[key] {
-      guard state != previous else { return }
+      guard state != lastStates[key] else { return }
       lastStates[key] = state
-      if phase == .done || phase == .failed {
-        end(activity, key: key, phase: phase, state: state)
-      } else {
-        Task { await activity.update(ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleAfter))) }
-      }
+      Task { await activity.update(ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleAfter))) }
       return
     }
-    // A new activity only for work that is happening now; a finished agent never starts one.
-    guard phase == .working || phase == .needsYou, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+    guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
     let attributes = AgentActivityAttributes(
       hostName: host, workspaceName: worktree.displayName.isEmpty ? worktree.repo : worktree.displayName,
       agentName: Self.agentName(agent.agentType),
       deepLink: Self.deepLink(hostId: hostId, worktreeId: worktree.id))
     let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleAfter))
-    // A token lets the push gateway update it after the app is gone; a build signed without pushes can't
+    // A token lets the push gateway end it after the app is gone; a build signed without pushes can't
     // have one, so it falls back to local updates alone.
     guard let activity = (try? Activity.request(attributes: attributes, content: content, pushType: .token))
       ?? (try? Activity.request(attributes: attributes, content: content, pushType: nil))
@@ -113,30 +113,28 @@ final class AgentActivityCenter {
     lastStates[key] = state
   }
 
-  private func end(
-    _ activity: Activity<AgentActivityAttributes>, key: String, phase: AgentActivityAttributes.Phase,
-    state: AgentActivityAttributes.ContentState? = nil
-  ) {
+  private func end(_ activity: Activity<AgentActivityAttributes>, key: String) {
     activities[key] = nil
     lastStates[key] = nil
-    let final = state ?? AgentActivityAttributes.ContentState(
-      phase: phase, detail: activity.content.state.detail, since: Date())
-    Task {
-      await activity.end(
-        ActivityContent(state: final, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(Self.dismissAfter)))
-    }
+    dismiss(activity)
   }
 
-  /// A chat on screen saw its agent start or stop, faster than the workspace list reports it.
+  private func dismiss(_ activity: Activity<AgentActivityAttributes>) {
+    let final = AgentActivityAttributes.ContentState(phase: .done, detail: activity.content.state.detail, since: Date())
+    Task { await activity.end(ActivityContent(state: final, staleDate: nil), dismissalPolicy: .immediate) }
+  }
+
+  /// A chat on screen saw its agent start working, sooner than the workspace list reports it. Stopping is
+  /// left to the list, which knows whether another agent in the workspace is still at it.
   func reportChat(
     hostId: UUID, hostName: String, worktree: Worktree, agentType: String?, working: Bool, detail: String?
   ) {
-    let key = "\(hostId.uuidString)/\(worktree.id)"
+    guard working else { return }
     var agent = Worktree.Agent.placeholder(agentType: agentType)
-    agent.state = working ? "working" : "done"
+    agent.state = "working"
     agent.lastAssistantMessage = detail
     agent.updatedAt = Date().timeIntervalSince1970 * 1000
-    update(key: key, host: hostName, hostId: hostId, worktree: worktree, agent: agent)
+    update(key: worktree.id, host: hostName, hostId: hostId, worktree: worktree, agent: agent)
   }
 
   /// Launch with ORCA_DEBUG_ACTIVITY=1 to show a sample activity, for checking the Lock Screen and Dynamic Island.
@@ -170,11 +168,8 @@ final class AgentActivityCenter {
     return components.url!
   }
 
+  /// The workspace id in an activity's deep link, which keys it.
   private static func key(from url: URL) -> String? {
-    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-    guard let host = items.first(where: { $0.name == "host" })?.value,
-      let worktree = items.first(where: { $0.name == "worktree" })?.value
-    else { return nil }
-    return "\(host)/\(worktree)"
+    URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "worktree" }?.value
   }
 }

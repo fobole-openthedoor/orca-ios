@@ -56,6 +56,9 @@ public final class ChatSessionModel {
   public private(set) var isStopping = false
 
   @ObservationIgnored private let api: HostAPI
+  /// An image this phone sent, with the host path its message will name: the chat keeps it as the
+  /// message's preview (imagePreviewsByMessageId), since the host may refuse to send a large one back.
+  @ObservationIgnored public var onImageUploaded: ((String, Data) -> Void)?
   @ObservationIgnored private let capabilities: Set<String>
   /// The SSH connection of the workspace's project, which image uploads name.
   @ObservationIgnored private let connectionId: String?
@@ -214,10 +217,10 @@ public final class ChatSessionModel {
   /// The journal is the truth about a send once it names it.
   private func reconcilePending() {
     pending = pending.compactMap { send in
-      guard let submission = transcript.submissions[send.id] else {
-        // Hosts that keep no submission rows: the user's own message arriving after the send settles it.
-        return Self.arrivedWithoutSubmission(send, in: transcript) ? nil : send
-      }
+      // The person's own message in the journal settles the send, whatever the submission row says: a
+      // host may name the provider's item rather than the journal's, so the ids need not match.
+      if Self.arrivedWithoutSubmission(send, in: transcript) { return nil }
+      guard let submission = transcript.submissions[send.id] else { return send }
       var send = send
       switch submission.dispatchState {
       case "accepted":
@@ -266,7 +269,9 @@ public final class ChatSessionModel {
         }
         switch attachment.kind {
         case .image:
-          imagePaths.append(try await api.uploadImage(attachment.data, fileName: attachment.name, connectionId: connectionId, progress: report))
+          let path = try await api.uploadImage(attachment.data, fileName: attachment.name, connectionId: connectionId, progress: report)
+          imagePaths.append(path)
+          onImageUploaded?(path, attachment.data)
         case .file:
           guard acceptsFiles else {
             throw AttachmentError.unsupportedByHost
@@ -342,6 +347,70 @@ public final class ChatSessionModel {
   }
 
   /// Answers an approval or question card. Returns the refusal message when the host declines.
+  /// Rewind to here: the conversation forgets this message and everything after it.
+  public func rewind(to item: TranscriptItem) async -> String? {
+    guard let epoch = transcript.cursor?.epoch else { return "unavailable" }
+    let mutation = AgentSessionMutation(
+      method: "agentSession.rewind", sessionId: sessionId,
+      fields: ["itemId": .string(item.id), "expectedEpoch": .string(epoch)], expectedRuntimeFence: transcript.fence)
+    do {
+      switch try await api.perform(mutation) {
+      case .accepted(_, let fence, _):
+        transcript.noteFence(fence)
+        return nil
+      case .refused(let code, let message):
+        return message.isEmpty ? code : message
+      }
+    } catch {
+      return HostSession.describe(error)
+    }
+  }
+
+  /// Stops one background task, or all of them.
+  public func stopBackgroundTask(_ taskId: String? = nil) async -> String? {
+    var fields: [String: JSONValue] = ["turnId": "background-tasks", "scope": "background-tasks"]
+    if let taskId { fields["taskId"] = .string(taskId) }
+    let mutation = AgentSessionMutation(method: "agentSession.cancel", sessionId: sessionId, fields: fields, expectedRuntimeFence: transcript.fence)
+    do {
+      switch try await api.perform(mutation) {
+      case .accepted(_, let fence, _):
+        transcript.noteFence(fence)
+        return nil
+      case .refused(let code, let message):
+        return message.isEmpty ? code : message
+      }
+    } catch {
+      return HostSession.describe(error)
+    }
+  }
+
+  /// Re-reads the options, for the goal's time and status between turns.
+  public func refreshOptions() async {
+    if let reply = try? await api.chatOptions(sessionId: sessionId) { options = ChatOptions(reply) }
+  }
+
+  /// Answers a structured question, one answer per question.
+  public func answer(_ item: TranscriptItem, with answers: [TranscriptItem.Answer]) async -> String? {
+    let mutation = AgentSessionMutation(
+      method: "agentSession.respondToQuestion", sessionId: sessionId,
+      fields: [
+        "itemId": .string(item.id), "expectedRevision": .number(Double(item.revision)),
+        "answers": .array(answers.map(\.json)),
+      ],
+      expectedRuntimeFence: transcript.fence)
+    do {
+      switch try await api.perform(mutation) {
+      case .accepted(_, let fence, _):
+        transcript.noteFence(fence)
+        return nil
+      case .refused(let code, let message):
+        return code == "agent_session_already_resolved" ? nil : (message.isEmpty ? code : message)
+      }
+    } catch {
+      return HostSession.describe(error)
+    }
+  }
+
   public func respond(to item: TranscriptItem, optionId: String) async -> String? {
     let method: String
     switch item.body {

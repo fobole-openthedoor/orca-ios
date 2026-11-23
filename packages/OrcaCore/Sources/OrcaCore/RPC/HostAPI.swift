@@ -114,10 +114,14 @@ public struct HostAPI: Sendable {
   }
 
   /// Opens a new agent chat tab (`agentSession.create`). A refusal inside the reply is thrown as an RPCError.
-  public func createChat(agent: String, worktree selector: String) async throws {
+  /// `forkFrom` starts it as a copy of another chat through one of its items.
+  public func createChat(agent: String, worktree selector: String, forkFrom: (sessionId: String, throughItemId: String)? = nil) async throws {
+    var fields: [String: JSONValue] = ["worktree": .string(selector), "agent": .string(agent)]
+    if let forkFrom {
+      fields["forkFrom"] = ["sessionId": .string(forkFrom.sessionId), "throughItemId": .string(forkFrom.throughItemId)]
+    }
     let mutation = AgentSessionMutation(
-      method: "agentSession.create", sessionId: UUID().uuidString.lowercased(),
-      fields: ["worktree": .string(selector), "agent": .string(agent)], expectedRuntimeFence: nil)
+      method: "agentSession.create", sessionId: UUID().uuidString.lowercased(), fields: fields, expectedRuntimeFence: nil)
     let result = try await connection.request("agentSession.create", mutation.params, timeout: .seconds(15))
     if result["ok"]?.boolValue == false {
       throw RPCError(

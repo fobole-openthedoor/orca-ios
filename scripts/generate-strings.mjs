@@ -34,6 +34,8 @@ for (const [file, locale] of Object.entries(LOCALES)) {
 const PLURAL = /_(zero|one|two|few|many|other)$/
 
 function toFormat(text, order) {
+  // A literal % ("50%") must survive String(format:), which only strings with placeholders go through.
+  if (/\{\{/.test(text)) text = text.replace(/%/g, '%%')
   return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, name) => {
     let index = order.indexOf(name)
     if (index === -1) {
@@ -45,10 +47,12 @@ function toFormat(text, order) {
 }
 
 // This client's own strings, for what the official app doesn't have (scripts/strings-extra.json, the same
-// i18next shape per language); an official key always wins.
+// i18next shape per language); an official key always wins, except the few official translations
+// listed under `overrides`, which read awkwardly on a phone.
 const extra = JSON.parse(readFileSync(path.join(root, 'scripts/strings-extra.json'), 'utf8'))
 for (const [file, locale] of Object.entries(LOCALES)) {
-  catalogs[locale] = { ...flatten(extra[file] ?? {}), ...catalogs[locale] }
+  const { overrides = {}, ...own } = extra[file] ?? {}
+  catalogs[locale] = { ...flatten(own), ...catalogs[locale], ...flatten(overrides) }
 }
 
 const strings = {}

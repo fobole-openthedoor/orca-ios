@@ -1,96 +1,224 @@
 import OrcaCore
 import UIKit
 
-/// What the transcript draws, projected from the host's items: each turn becomes the user's message, one
-/// "Worked for …" row holding everything the agent did, and the agent's final answer.
+/// What the transcript draws, projected from the host's items:
+/// - a turn still running, or one the reader opened, keeps every row in place: the agent's words where it
+///   said them, consecutive tool calls as one activity line, consecutive thoughts as one line, changed files
+///   as one card, and a question or approval as a line that opens its sheet;
+/// - a finished turn that answered folds into "Worked for …" above its final answer.
 enum ChatLine: Hashable {
   case user(id: String)
-  case work(turnKey: String)
-  case workItem(id: String)
-  case answer(id: String)
   case pending(id: String)
-  case prompt(id: String)
   /// A quiet divider in place of a message Orca sent itself, such as a new bot's first turn.
   case notice(id: String)
+  /// "Worked for …" (folded or opened) or the running turn's clock.
+  case work(turnKey: String)
+  /// The agent's words; `final` carries the time and actions row.
+  case answer(id: String)
+  /// Consecutive tool calls, keyed by the first call.
+  case run(key: String)
+  /// Consecutive thoughts, keyed by the first; opens in place.
+  case thoughts(key: String)
+  case thoughtText(id: String)
+  /// Consecutive file edits as one card.
+  case files(key: String)
+  /// A question or approval: a line that opens its sheet.
+  case prompt(id: String)
+  /// A status or other note, in the muted style.
+  case workItem(id: String)
+  /// The running turn's last line.
+  case working
 }
 
 struct ChatProjection {
+  struct Run {
+    var items: [TranscriptItem]
+    var running: Bool
+    var calls: [TranscriptItem.ToolCall] {
+      items.compactMap { if case .toolCall(let call) = $0.body { call } else { nil } }
+    }
+  }
+
   var lines: [ChatLine] = []
   var items: [String: TranscriptItem] = [:]
   var pending: [String: PendingSend] = [:]
-  /// The work rows' contents and summary, by turn.
+  /// Each turn's clock: worked seconds, whether it still runs, whether its work is folded away.
   var work: [String: (items: [TranscriptItem], seconds: Int?, running: Bool)] = [:]
+  var folded: Set<String> = []
+  var runs: [String: Run] = [:]
+  var thoughts: [String: (items: [TranscriptItem], seconds: Int?, live: Bool)] = [:]
+  var files: [String: [ChangedFilesView.File]] = [:]
+  /// Answers that end their turn: only these show the time and actions.
+  var finalAnswers: Set<String> = []
+  /// Questions and approvals still waiting, oldest first.
+  var waiting: [String] = []
 
-  init(rows: [ChatRow], expanded: Set<String>, transcript: ChatTranscript) {
-    var currentWork: [TranscriptItem] = []
-    var turnKey: String?
-    var turnStart: Double?
-    var answer: TranscriptItem?
-    var reportedSeconds: [String: Int] = [:]
-    // Turns whose work stays out of sight: Orca's own setup turn shows only its answer.
-    var quietTurns: Set<String> = []
-
-    func closeTurn(running: Bool) {
-      guard let key = turnKey else { return }
-      let end = answer?.observedAt ?? currentWork.last?.observedAt
+  init(rows: [ChatRow], expanded: Set<String>, openThoughts: Set<String> = [], transcript: ChatTranscript) {
+    // Split the stream into turns: each starts at the person's message (or a pending send).
+    struct Turn {
+      var key: String
+      var head: ChatLine?
+      var items: [TranscriptItem] = []
       var seconds: Int?
-      if let turnStart, let end { seconds = Int(max(1, (end - turnStart) / 1000)) }
-      if !quietTurns.contains(key), !currentWork.isEmpty || answer != nil || running {
-        work[key] = (currentWork, reportedSeconds[key] ?? seconds, running)
-        lines.append(.work(turnKey: key))
-        if expanded.contains(key) { lines += currentWork.map { .workItem(id: $0.id) } }
-      }
-      if let answer { lines.append(.answer(id: answer.id)) }
-      turnKey = nil
-      currentWork = []
-      answer = nil
+      var quiet = false
     }
-
+    var turns: [Turn] = []
     for row in rows {
       switch row {
       case .pending(let send):
-        closeTurn(running: false)
         pending[send.id] = send
-        lines.append(.pending(id: send.id))
+        turns.append(Turn(key: send.id, head: .pending(id: send.id)))
       case .item(let item):
         items[item.id] = item
         switch item.body {
-        case .message(let message) where message.role == "user" && message.origin == "bot-created":
-          closeTurn(running: false)
-          lines.append(.notice(id: item.id))
-          turnKey = item.id
-          quietTurns.insert(item.id)
-          turnStart = nil
         case .message(let message) where message.role == "user":
-          closeTurn(running: false)
-          lines.append(.user(id: item.id))
-          turnKey = item.id
-          // Work is timed from the agent's first item, not from the message that asked for it.
-          turnStart = nil
-        case .approval, .question:
-          closeTurn(running: false)
-          lines.append(.prompt(id: item.id))
-        case .message(let message) where message.role == "assistant" && !message.text.isEmpty:
-          // Only the last assistant message of a turn is its answer; earlier ones are work.
-          if let previous = answer { currentWork.append(previous) }
-          answer = item
-          if turnStart == nil { turnStart = item.observedAt }
-          if turnKey == nil {
-            turnKey = item.id
-            turnStart = item.observedAt
-          }
+          let botCreated = message.origin == "bot-created"
+          turns.append(Turn(key: item.id, head: botCreated ? .notice(id: item.id) : .user(id: item.id), quiet: botCreated))
         case .turn(let turn):
-          // The host's own measure of the turn wins over the gap between its first and last item.
-          if let duration = turn.durationMs, let key = turnKey { reportedSeconds[key] = max(1, Int((duration / 1000).rounded(.down))) }
-          continue
+          if let duration = turn.durationMs, !turns.isEmpty {
+            turns[turns.count - 1].seconds = max(1, Int((duration / 1000).rounded(.down)))
+          }
         default:
-          if turnKey == nil { turnKey = item.id }
-          if turnStart == nil { turnStart = item.observedAt }
-          currentWork.append(item)
+          if turns.isEmpty { turns.append(Turn(key: item.id)) }
+          turns[turns.count - 1].items.append(item)
         }
       }
     }
-    closeTurn(running: transcript.isWorking)
+
+    for (index, turn) in turns.enumerated() {
+      if let head = turn.head { lines.append(head) }
+      let live = index == turns.count - 1 && transcript.isWorking
+      let items = turn.items.filter(Self.draws).filter { item in
+        if case .toolCall(let call) = item.body { return !ToolCategory.isAsk(call) }
+        return true
+      }
+      let answerIndex = items.lastIndex { Self.prose($0) != nil }
+      let hasWork = items.indices.contains { $0 != answerIndex }
+      var seconds = turn.seconds
+      if seconds == nil, let first = items.first?.observedAt, let last = items.last?.observedAt, last > first {
+        seconds = max(1, Int((last - first) / 1000))
+      }
+
+      // Orca's own setup turn shows only its answer.
+      if turn.quiet, let answerIndex {
+        lines.append(.answer(id: items[answerIndex].id))
+        finalAnswers.insert(items[answerIndex].id)
+        continue
+      }
+      let folds = !live && answerIndex != nil && hasWork
+      if folds {
+        work[turn.key] = (items, seconds, false)
+        lines.append(.work(turnKey: turn.key))
+      }
+      if folds && !expanded.contains(turn.key) {
+        folded.insert(turn.key)
+        // Folded: what still waits on the person, then the answer.
+        for item in items where Self.isWaiting(item) {
+          lines.append(.prompt(id: item.id))
+          waiting.append(item.id)
+        }
+        lines.append(.answer(id: items[answerIndex!].id))
+        finalAnswers.insert(items[answerIndex!].id)
+        continue
+      }
+
+      // In place: group consecutive calls, thoughts and edits.
+      var runKey: String?
+      var thoughtKey: String?
+      var filesKey: String?
+      let lastIndex = items.indices.last
+      for (position, item) in items.enumerated() {
+        switch item.body {
+        case .toolCall:
+          thoughtKey = nil
+          filesKey = nil
+          if let key = runKey {
+            runs[key]?.items.append(item)
+          } else {
+            runKey = item.id
+            runs[item.id] = Run(items: [item], running: false)
+            lines.append(.run(key: item.id))
+          }
+          if live && position == lastIndex { runs[runKey!]?.running = true }
+        case .message(let message) where message.role == "reasoning":
+          runKey = nil
+          filesKey = nil
+          if let key = thoughtKey {
+            thoughts[key]?.items.append(item)
+          } else {
+            thoughtKey = item.id
+            thoughts[item.id] = ([item], nil, false)
+            lines.append(.thoughts(key: item.id))
+            if openThoughts.contains(item.id) { lines.append(.thoughtText(id: item.id)) }
+          }
+          if live && position == lastIndex { thoughts[thoughtKey!]?.live = true }
+        case .diff(let path, let patch, let truncated):
+          runKey = nil
+          thoughtKey = nil
+          let file = ChangedFilesView.File(path: path, patch: patch, truncated: truncated)
+          if let key = filesKey {
+            files[key]?.append(file)
+          } else {
+            filesKey = item.id
+            files[item.id] = [file]
+            lines.append(.files(key: item.id))
+          }
+        case .approval, .question:
+          runKey = nil
+          thoughtKey = nil
+          filesKey = nil
+          lines.append(.prompt(id: item.id))
+          if Self.isWaiting(item) { waiting.append(item.id) }
+        default:
+          runKey = nil
+          thoughtKey = nil
+          filesKey = nil
+          if Self.prose(item) != nil {
+            lines.append(.answer(id: item.id))
+            if !live && position == answerIndex { finalAnswers.insert(item.id) }
+          } else {
+            lines.append(.workItem(id: item.id))
+          }
+        }
+      }
+      // A thought row's open text follows the whole group, not only its first member.
+      for (key, group) in thoughts where openThoughts.contains(key) && group.items.count > 1 {
+        if let at = lines.firstIndex(of: .thoughtText(id: key)) {
+          lines.insert(contentsOf: group.items.dropFirst().map { ChatLine.thoughtText(id: $0.id) }, at: at + 1)
+        }
+      }
+      if live { lines.append(.working) }
+    }
+    // Thought seconds: from a group's first item to whatever follows it.
+    for (key, group) in thoughts {
+      guard let first = group.items.first, let last = group.items.last else { continue }
+      let end = items.values.filter { $0.sequence > last.sequence || ($0.sequence == last.sequence && $0.sequenceIndex > last.sequenceIndex) }
+        .map(\.observedAt).min() ?? last.observedAt
+      thoughts[key]?.seconds = max(1, Int((end - first.observedAt) / 1000))
+    }
+  }
+
+  /// The agent's words, when the item is prose.
+  static func prose(_ item: TranscriptItem) -> String? {
+    guard case .message(let message) = item.body, message.role == "assistant", !message.text.isEmpty else { return nil }
+    return message.text
+  }
+
+  static func isWaiting(_ item: TranscriptItem) -> Bool {
+    switch item.body {
+    case .approval(let prompt), .question(let prompt): prompt.isPending
+    default: false
+    }
+  }
+
+  /// Rows that draw nothing are dropped before grouping, so they never split a run.
+  private static func draws(_ item: TranscriptItem) -> Bool {
+    switch item.body {
+    case .message(let message): message.role == "reasoning" ? !message.text.isEmpty : !message.text.isEmpty || !message.imagePaths.isEmpty
+    case .other: false
+    case .status(let text, _): !text.isEmpty
+    default: true
+    }
   }
 }
 
@@ -110,6 +238,8 @@ private enum MessageClock {
 /// Small 44 pt icon buttons after a message's time (messages/MobileNativeChatMessageMeta.tsx).
 final class MessageMetaView: UIStackView {
   var onCopy: (() -> Void)?
+  /// The other actions, by their position after Copy (1 is the first after it).
+  var onAction: ((Int) -> Void)?
   private let time = TextLabel(size: Typography.metaSize + 1, color: Palette.textMuted, tabular: true)
   private var copyButton: UIButton!
 
@@ -131,6 +261,9 @@ final class MessageMetaView: UIStackView {
         copyButton = button
         button.addAction(UIAction { [weak self] _ in self?.copied() }, for: .primaryActionTriggered)
         button.accessibilityLabel = String(localized: "common.copy", defaultValue: "Copy")
+      } else {
+        button.addAction(UIAction { [weak self] _ in self?.onAction?(index) }, for: .primaryActionTriggered)
+        button.accessibilityLabel = Self.label(icon)
       }
       addArrangedSubview(button)
     }
@@ -140,6 +273,15 @@ final class MessageMetaView: UIStackView {
   required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
   func set(time milliseconds: Double) { time.text = MessageClock.time(milliseconds) }
+
+  private static func label(_ icon: Lucide) -> String {
+    switch icon {
+    case .reply: String(localized: "chat.messageActionsSheet.rewind", defaultValue: "Rewind to here")
+    case .gitFork: String(localized: "chat.message.forkFromResponse", defaultValue: "Fork from this response")
+    case .arrowUp: String(localized: "chat.message.scrollMessageToTop", defaultValue: "Scroll this message to top")
+    default: ""
+    }
+  }
 
   /// Copy feedback is inline; the glyph turns into a check for 1.6 s.
   private func copied() {
@@ -157,7 +299,16 @@ final class UserMessageView: UIView {
   private let bubble = UIView()
   private let text = TextLabel(size: ChatProse.bodySize, lines: 0)
   private let meta = MessageMetaView(trailing: true, actions: [.copy, .reply])
+  private let images = ChatImageStack()
   private var raw = ""
+  /// Opens the message's image at that index in the viewer.
+  var onOpenImage: ((Int) -> Void)? {
+    didSet { images.onOpen = onOpenImage }
+  }
+  /// Rewind to here: the conversation drops this message and everything after it.
+  var onRewind: (() -> Void)? {
+    didSet { meta.onAction = { [weak self] _ in self?.onRewind?() } }
+  }
 
   init() {
     super.init(frame: .zero)
@@ -165,7 +316,12 @@ final class UserMessageView: UIView {
     bubble.backgroundColor = Palette.chatUserSurface
     bubble.layer.cornerRadius = Radius.surface
     bubble.layer.borderWidth = 1
-    bubble.addSubview(text)
+    let column = UIStackView(arrangedSubviews: [text, images])
+    column.axis = .vertical
+    column.alignment = .leading
+    column.spacing = Spacing.sm
+    column.translatesAutoresizingMaskIntoConstraints = false
+    bubble.addSubview(column)
     addSubview(bubble)
     addSubview(meta)
     meta.onCopy = { [weak self] in ChatClipboard.copy(self?.raw ?? "") }
@@ -175,10 +331,10 @@ final class UserMessageView: UIView {
       bubble.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: Spacing.lg),
       bubble.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, multiplier: 0.88, constant: -Spacing.lg * 2 * 0.88),
       // The 1 pt border takes room inside the box, as it does in React Native's layout.
-      text.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: Spacing.md + 1),
-      text.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -Spacing.md - 1),
-      text.topAnchor.constraint(equalTo: bubble.topAnchor, constant: Spacing.sm + 1),
-      text.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -Spacing.sm - 1),
+      column.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: Spacing.md + 1),
+      column.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -Spacing.md - 1),
+      column.topAnchor.constraint(equalTo: bubble.topAnchor, constant: Spacing.sm + 1),
+      column.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -Spacing.sm - 1),
       meta.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: 2),
       meta.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
       meta.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg + 5),
@@ -189,9 +345,13 @@ final class UserMessageView: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  func show(text value: String, at time: Double?, sending: Bool) {
+  func show(
+    text value: String, images sources: [ImageViewerController.Source] = [], at time: Double?, sending: Bool
+  ) {
     raw = value
     text.styledText = ChatMarkdown.linkingPaths(ChatMarkdown.inline(value, color: Palette.chatForegroundStrong))
+    text.isHidden = value.isEmpty
+    images.show(sources)
     if let time { meta.set(time: time) }
     meta.isHidden = time == nil
     bubble.alpha = sending ? 0.6 : 1
@@ -350,15 +510,22 @@ final class AnswerView: UIView {
   private let blocks = UIStackView()
   private let meta = MessageMetaView(trailing: false, actions: [.copy, .gitFork, .arrowUp])
   private var raw = ""
+  /// A tapped link or file path in the answer.
+  var onOpenURL: ((URL) -> Void)?
+  var onOpenPath: ((String) -> Void)?
+  var onFork: (() -> Void)?
+  var onScrollToTop: (() -> Void)?
 
   init() {
     super.init(frame: .zero)
+    addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
     blocks.axis = .vertical
     blocks.spacing = Spacing.sm
     blocks.translatesAutoresizingMaskIntoConstraints = false
     addSubview(blocks)
     addSubview(meta)
     meta.onCopy = { [weak self] in ChatClipboard.copy(self?.raw ?? "") }
+    meta.onAction = { [weak self] index in index == 1 ? self?.onFork?() : self?.onScrollToTop?() }
     NSLayoutConstraint.activate([
       blocks.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.sm),
       blocks.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
@@ -371,6 +538,19 @@ final class AnswerView: UIView {
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  @objc private func tapped(_ tap: UITapGestureRecognizer) {
+    for case let label as TextLabel in blocks.arrangedSubviews {
+      let point = tap.location(in: label)
+      guard label.bounds.contains(point) else { continue }
+      if let url = label.attribute(.link, at: point) as? URL {
+        onOpenURL?(url)
+      } else if let path = label.attribute(.orcaPath, at: point) as? String {
+        onOpenPath?(path)
+      }
+      return
+    }
+  }
 
   func show(markdown: String, at time: Double, streaming: Bool) {
     raw = markdown

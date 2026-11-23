@@ -31,15 +31,27 @@ final class SettingsViewController: UITableViewController {
         Row(
           icon: .sunMoon, title: String(localized: "settings.menuItems.appearance", defaultValue: "Appearance"),
           opens: { AppearanceViewController() }),
-        Row(icon: .terminal, title: String(localized: "settings.menuItems.terminal", defaultValue: "Terminal")),
-        Row(icon: .messageSquare, title: String(localized: "settings.menuItems.chatUi", defaultValue: "Chat UI")),
-        Row(icon: .globe, title: String(localized: "settings.menuItems.browser", defaultValue: "Browser")),
-        Row(icon: .mic, title: String(localized: "settings.menuItems.voice", defaultValue: "Voice")),
+        Row(
+          icon: .terminal, title: String(localized: "settings.menuItems.terminal", defaultValue: "Terminal"),
+          opens: { TerminalSettingsViewController() }),
+        Row(
+          icon: .messageSquare, title: String(localized: "settings.menuItems.chatUi", defaultValue: "Chat UI"),
+          opens: { ChatUISettingsViewController() }),
+        Row(
+          icon: .globe, title: String(localized: "settings.menuItems.browser", defaultValue: "Browser"),
+          opens: { BrowserSettingsViewController() }),
+        Row(
+          icon: .mic, title: String(localized: "settings.menuItems.voice", defaultValue: "Voice"),
+          opens: { VoiceSettingsViewController() }),
         Row(
           icon: .bell, title: String(localized: "settings.menuItems.notifications", defaultValue: "Notifications"),
           opens: { NotificationsViewController() }),
-        Row(icon: .wrench, title: String(localized: "settings.menuItems.troubleshooting", defaultValue: "Troubleshooting")),
-        Row(icon: .info, title: String(localized: "settings.menuItems.about", defaultValue: "About")),
+        Row(
+          icon: .wrench, title: String(localized: "settings.menuItems.troubleshooting", defaultValue: "Troubleshooting"),
+          opens: { TroubleshootingViewController() }),
+        Row(
+          icon: .info, title: String(localized: "settings.menuItems.about", defaultValue: "About"),
+          opens: { AboutViewController() }),
       ],
       [
         Row(
@@ -49,7 +61,7 @@ final class SettingsViewController: UITableViewController {
       [
         Row(
           icon: .shield, title: String(localized: "settings.menuScreen.privacyPolicy", defaultValue: "Privacy policy"),
-          action: { UIApplication.shared.open(URL(string: "https://github.com/huami1314/orca-ios")!) }),
+          action: { UIApplication.shared.open(URL(string: "https://orca.dev/privacy")!) }),
         Row(
           icon: .lifeBuoy, title: String(localized: "settings.menuScreen.support", defaultValue: "Support"),
           action: { UIApplication.shared.open(URL(string: "https://github.com/huami1314/orca-ios/issues")!) }),

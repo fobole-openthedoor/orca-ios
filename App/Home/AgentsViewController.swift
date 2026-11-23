@@ -136,10 +136,36 @@ final class AgentsViewController: UIViewController {
 
   private func optionsMenu() -> UIMenu {
     UIMenu(children: [
-      UIAction(
-        title: String(localized: "agents.options.markAllRead", defaultValue: "Mark all read"),
-        image: Lucide.checkCheck.image(size: 18)) { _ in }
+      UIDeferredMenuElement.uncached { [weak self] completion in
+        guard let self else { return completion([]) }
+        let unread = self.agentKeys { worktree, _ in worktree.unread }
+        let finished = self.agentKeys { _, agent in Section.of(agent.state) == .done }
+        let markRead = UIAction(
+          title: String(localized: "agents.options.markAllRead", defaultValue: "Mark all read"),
+          image: Lucide.checkCheck.image(size: 18), attributes: unread.isEmpty ? .disabled : []
+        ) { _ in
+          Task { for (session, keys) in unread { try? await session.api.setAgentsRead(keys, read: true); await session.refresh() } }
+        }
+        let clear = UIAction(
+          title: String(localized: "agents.options.clearFinished", defaultValue: "Clear finished"),
+          image: Lucide.trash2.image(size: 18), attributes: finished.isEmpty ? [.disabled, .destructive] : .destructive
+        ) { _ in
+          Task { for (session, keys) in finished { try? await session.api.clearAgents(keys); await session.refresh() } }
+        }
+        completion([markRead, clear])
+      }
     ])
+  }
+
+  /// The pane keys of the agents that pass, by their desktop.
+  private func agentKeys(_ passes: (Worktree, Worktree.Agent) -> Bool) -> [(HostSession, [String])] {
+    model.hosts.compactMap { host in
+      guard let session = model.session(for: host.id) else { return nil }
+      let keys = session.worktrees.filter { !$0.isArchived }.flatMap { worktree in
+        worktree.agents.filter { passes(worktree, $0) }.map(\.paneKey)
+      }
+      return keys.isEmpty ? nil : (session, keys)
+    }
   }
 }
 

@@ -4,7 +4,6 @@ import { createHash } from 'node:crypto'
 // Swift's Date encodes as seconds since 2001-01-01 under JSONDecoder's default strategy.
 const APPLE_REFERENCE_EPOCH_S = 978_307_200
 const DETAIL_MAX_CHARS = 120
-const LIVE_ACTIVITY_DISMISS_AFTER_S = 600
 const DEFAULT_TTL_MS = 5 * 60 * 1000
 
 export function collapseIdFor(hostFingerprint, notification) {
@@ -77,79 +76,41 @@ export function deepLinkFor(hostKey, worktreeId) {
 /**
  * Live Activity push for this notification, or null when none applies.
  * Returns the token it targets so a dead token can be forgotten.
+ *
+ * The phone shows an activity only while an agent is working, and the desktop only notifies when work
+ * stops (it needs input, or it finished), so every notification ends the workspace's activity at once.
+ * Nothing is push-started: a start would show an agent that has already stopped.
  */
 export function buildLiveActivityPush({ notification, device, nowMs }) {
   const worktreeId = notification.worktreeId
   if (!worktreeId) return null
   const kind = notification.kind ?? 'alert'
   if (kind !== 'alert') return null
-  const nowS = Math.floor(nowMs / 1000)
-  const since = nowS - APPLE_REFERENCE_EPOCH_S
-  const detail = oneLine(notification.body || notification.title)
+  const state = notification.agentState
+  if (state !== 'needs-input' && state !== 'finished') return null
   const updateToken = device.activityTokens?.[worktreeId]
-  const headers = {
-    'apns-push-type': 'liveactivity',
-    'apns-topic': `${device.topic}.push-type.liveactivity`,
-    'apns-priority': '10',
-    'apns-expiration': String(expirationSeconds(notification, nowMs))
-  }
-  const alert = { title: notification.title, body: notification.body }
-
-  if (notification.agentState === 'needs-input') {
-    if (updateToken) {
-      return {
-        token: updateToken,
-        tokenKind: 'update',
-        headers,
-        payload: {
-          aps: {
-            timestamp: nowS,
-            event: 'update',
-            'content-state': { phase: 'needsYou', detail, since },
-            alert
-          }
-        }
-      }
-    }
-    if (device.pushToStartToken) {
-      return {
-        token: device.pushToStartToken,
-        tokenKind: 'start',
-        headers,
-        payload: {
-          aps: {
-            timestamp: nowS,
-            event: 'start',
-            'content-state': { phase: 'needsYou', detail, since },
-            'attributes-type': 'AgentActivityAttributes',
-            attributes: {
-              hostName: device.hostName,
-              workspaceName: notification.title,
-              agentName: 'Agent',
-              deepLink: deepLinkFor(device.hostKey, worktreeId)
-            },
-            alert
-          }
-        }
-      }
-    }
-    return null
-  }
-
-  if (notification.agentState === 'finished' && updateToken) {
-    return {
-      token: updateToken,
-      tokenKind: 'end',
-      headers,
-      payload: {
-        aps: {
-          timestamp: nowS,
-          event: 'end',
-          'content-state': { phase: 'done', detail, since },
-          'dismissal-date': nowS + LIVE_ACTIVITY_DISMISS_AFTER_S
-        }
+  if (!updateToken) return null
+  const nowS = Math.floor(nowMs / 1000)
+  return {
+    token: updateToken,
+    tokenKind: 'end',
+    headers: {
+      'apns-push-type': 'liveactivity',
+      'apns-topic': `${device.topic}.push-type.liveactivity`,
+      'apns-priority': '10',
+      'apns-expiration': String(expirationSeconds(notification, nowMs))
+    },
+    payload: {
+      aps: {
+        timestamp: nowS,
+        event: 'end',
+        'content-state': {
+          phase: state === 'needs-input' ? 'needsYou' : 'done',
+          detail: oneLine(notification.body || notification.title),
+          since: nowS - APPLE_REFERENCE_EPOCH_S
+        },
+        'dismissal-date': nowS
       }
     }
   }
-  return null
 }

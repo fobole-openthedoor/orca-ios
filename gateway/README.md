@@ -3,7 +3,7 @@
 一个可以自己部署的小服务。Orca 桌面端把推送交给它，它再通过 APNs 发到社区版 iOS App（bundle id `com.thm.orcaios`）。支持两类推送：
 
 - 普通通知（alert / 角标）
-- ActivityKit 实时活动（push-to-start、update、end）
+- ActivityKit 实时活动（结束）
 
 桌面端这一侧不需要改代码。启动 Orca 时设置环境变量 `ORCA_PUSH_GATEWAY_URL`，桌面端就会改用这个网关，握手和接口与官方网关（`https://push.onorca.dev`）一致。
 
@@ -181,10 +181,9 @@ token = "orcaios1." + base64url(JSON)
 - `kind: "badge"`：记录这台桌面的未读数，然后把同一个 `d` 在所有桌面上的未读数相加，发一条只带角标的推送（`apns-expiration: 0`）。
 - `kind: "dismiss"`：不发送任何推送，直接返回 `queued`。
 - 实时活动：只在有 `worktreeId` 和 `agentState` 时发送。topic 为 `t + ".push-type.liveactivity"`，`apns-push-type: liveactivity`，优先级 10。
-  - `needs-input`：
-    - 如果 `a[worktreeId]` 存在，发 `event: "update"`，phase 为 `needsYou`，并带上 alert。
-    - 否则如果 `s` 存在，发 `event: "start"`，同时带上 `attributes-type: "AgentActivityAttributes"`、`attributes {hostName, workspaceName, agentName, deepLink}` 和 alert。
-  - `finished`：如果 `a[worktreeId]` 存在，发 `event: "end"`，phase 为 `done`，`dismissal-date` 为当前时间加 600 秒。发送成功后，网关会从已存的注册中删掉这个 update token，下一次 `needs-input` 会重新 start。
+  - 手机上的实时活动只在智能体工作时存在，由 App 自己开始和更新；桌面只在工作停下时通知（`needs-input` 或 `finished`），所以网关只负责结束：
+    - 如果 `a[worktreeId]` 存在，发 `event: "end"`，phase 为 `needsYou` 或 `done`，`dismissal-date` 为当前时间，活动立即消失。发送成功后，网关会从已存的注册中删掉这个 update token。
+    - 不会用 `s` push-to-start：开始一个活动只会显示一个已经停下的智能体。
   - `content-state` 为 `{phase, detail, since}`。`detail` 是 body 压成一行后的结果，最多 120 个字符；body 为空时用 title。`since` 是从 2001-01-01 起算的秒数，对应 Swift `Date` 的默认解码方式。
   - 实时活动推送失败不影响返回的状态，状态只反映发往 `d` 的那条推送。APNs 认为某个活动 token 已失效时，网关会把它从注册中删掉。
 - 结果映射：200 对应 `queued`；410、400 `BadDeviceToken`、400 `DeviceTokenNotForTopic` 对应 `dead`，同时删除这条注册（桌面端也会删掉自己的记录）；429 对应 `rate_limited`；其余情况对应 `error`。

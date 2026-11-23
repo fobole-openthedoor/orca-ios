@@ -161,14 +161,19 @@ final class HostViewController: UIViewController {
 
   private func applySnapshot() {
     var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-    snapshot.appendSections([.bots])
-    let bots = session.bots.bots
-    snapshot.appendItems(
-      bots.isEmpty
-        ? [.botsEmpty]
-        : bots.flatMap { foldedBots.contains($0.id) ? [Item.bot($0.id)] : [.bot($0.id), .botHome($0.id)] },
-      toSection: .bots)
+    // A search narrows the bots to the ones it names, and drops the section when none match.
+    let needle = query.lowercased()
+    let bots = session.bots.bots.filter { needle.isEmpty || $0.name.lowercased().contains(needle) }
     let sorted = workspaceView.sorted(visibleWorktrees)
+    if needle.isEmpty || !bots.isEmpty {
+      snapshot.appendSections([.bots])
+      snapshot.appendItems(
+        bots.isEmpty
+          ? [.botsEmpty]
+          : bots.flatMap { foldedBots.contains($0.id) ? [Item.bot($0.id)] : [.bot($0.id), .botHome($0.id)] },
+        toSection: .bots)
+    }
+    contentUnavailableConfiguration = !needle.isEmpty && bots.isEmpty && sorted.isEmpty ? UIContentUnavailableConfiguration.search() : nil
     // Pinned rows lead in their own lane rather than inside their group, as the official list's default.
     let pinned = sorted.filter(\.isPinned)
     let worktrees = sorted.filter { !$0.isPinned }
@@ -389,13 +394,13 @@ final class HostViewController: UIViewController {
     UIMenu(children: [
       UIAction(
         title: String(localized: "hostScreen.hostScreenHeader.tasks", defaultValue: "Tasks"),
-        image: Lucide.listTodo.image(size: 18)) { _ in },
+        image: Lucide.listTodo.image(size: 18)) { [weak self] _ in self?.openTasks() },
       UIAction(
         title: String(localized: "hostScreen.hostScreenHeader.automations", defaultValue: "Automations"),
-        image: Lucide.calendarClock.image(size: 18)) { _ in },
+        image: Lucide.calendarClock.image(size: 18)) { [weak self] _ in self?.openTab(.automations) },
       UIAction(
         title: String(localized: "hostScreen.hostScreenHeader.accounts", defaultValue: "Accounts"),
-        image: Lucide.userRound.image(size: 18)) { _ in },
+        image: Lucide.userRound.image(size: 18)) { [weak self] _ in self?.openTab(.usage) },
       UIMenu(
         options: .displayInline,
         children: [
@@ -404,6 +409,20 @@ final class HostViewController: UIViewController {
             image: Lucide.refreshCw.image(size: 18)) { [weak self] _ in self?.session.nudge() }
         ]),
     ])
+  }
+
+  /// This desktop's issues and reviews; making a workspace from one opens it.
+  private func openTasks() {
+    let tasks = TasksViewController(session: session)
+    tasks.onOpenWorkspace = { [weak self] session, worktreeId in
+      self?.navigationController?.pushViewController(SessionViewController(session: session, worktreeId: worktreeId), animated: true)
+    }
+    navigationController?.pushViewController(tasks, animated: true)
+  }
+
+  /// Automations and Accounts live in their own tabs; this desktop is the one they open on.
+  private func openTab(_ tab: HomeTab) {
+    (tabBarController as? HomeTabController)?.open(tab, hostId: session.host.id)
   }
 
   private func open(_ worktree: Worktree) {

@@ -62,6 +62,8 @@ final class WorkspaceOptionsViewController: UITableViewController {
     navigationItem.rightBarButtonItem?.primaryAction = UIAction(
       title: String(localized: "hostScreen.workspaceOptionsSheet.done", defaultValue: "Done")
     ) { [weak self] _ in self?.dismiss(animated: true) }
+    // The half-height sheet keeps its Liquid Glass behind the rows.
+    tableView.backgroundColor = .clear
     tableView.register(UITableViewCell.self, forCellReuseIdentifier: "row")
     rebuild()
   }

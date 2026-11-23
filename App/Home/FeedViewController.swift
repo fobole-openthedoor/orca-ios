@@ -179,7 +179,13 @@ extension FeedViewController: UICollectionViewDelegate {
       if let (bot, session) = botRows[key] { BotDirectory.open(bot, in: session, from: navigationController) }
     case .host(let id): openHost(id)
     case .pair: pairDesktop()
-    case .tasks, .none: break
+    case .tasks:
+      let tasks = TasksViewController(session: nil)
+      tasks.onOpenWorkspace = { [weak self] session, worktreeId in
+        self?.navigationController?.pushViewController(SessionViewController(session: session, worktreeId: worktreeId), animated: true)
+      }
+      navigationController?.pushViewController(tasks, animated: true)
+    case .none: break
     }
   }
 

@@ -3,13 +3,20 @@ import UIKit
 /// Chat prose (components/markdown/mobile-markdown-styles.ts at the chat's 1.25 scale): body 13/21,
 /// code 12, headings 16/23 and 18/25, all × 1.25.
 enum ChatProse {
-  static let scale: CGFloat = 1.25
-  static let bodySize: CGFloat = 13 * scale
-  static let bodyLine: CGFloat = 21 * scale
-  static let codeSize: CGFloat = 12 * scale
+  /// The chat's 1.25 scale, times the reader's text size (Text size; 14 pt is 1×).
+  static var scale: CGFloat { 1.25 * ChatTextSettings.current.factor }
+  static var bodySize: CGFloat { 13 * scale }
+  static var bodyLine: CGFloat { 21 * scale * ChatTextSettings.current.lineFactor }
+  static var codeSize: CGFloat { 12 * scale }
+  /// Activity lines, thoughts and the turn clock: the official 12 pt meta size, scaled like prose.
+  static var metaSize: CGFloat { 12 * scale }
+
+  static func bodyFont(weight: UIFont.Weight = .regular) -> UIFont {
+    ChatTextSettings.current.bodyFont(ofSize: bodySize, weight: weight)
+  }
 
   static func bodyAttributes(color: UIColor = Palette.textPrimary, font: UIFont? = nil) -> [NSAttributedString.Key: Any] {
-    let font = font ?? .systemFont(ofSize: bodySize)
+    let font = font ?? bodyFont()
     let paragraph = NSMutableParagraphStyle()
     paragraph.minimumLineHeight = bodyLine
     paragraph.maximumLineHeight = bodyLine
@@ -62,8 +69,8 @@ enum ChatMarkdown {
         flush()
         let text = String(trimmed.dropFirst(level + 1))
         let size: CGFloat = (level <= 1 ? 18 : 16) * ChatProse.scale
-        let line: CGFloat = (level <= 1 ? 25 : 23) * ChatProse.scale
-        let font = UIFont.systemFont(ofSize: size, weight: .semibold)
+        let line: CGFloat = (level <= 1 ? 25 : 23) * ChatProse.scale * ChatTextSettings.current.lineFactor
+        let font = ChatTextSettings.current.bodyFont(ofSize: size, weight: .semibold)
         let paragraph = NSMutableParagraphStyle()
         paragraph.minimumLineHeight = line
         paragraph.maximumLineHeight = line
@@ -121,7 +128,7 @@ enum ChatMarkdown {
     _ text: String, color: UIColor = Palette.textPrimary, base: [NSAttributedString.Key: Any]? = nil
   ) -> NSAttributedString {
     let base = base ?? ChatProse.bodyAttributes(color: color)
-    let baseFont = base[.font] as? UIFont ?? .systemFont(ofSize: ChatProse.bodySize)
+    let baseFont = base[.font] as? UIFont ?? ChatProse.bodyFont()
     let out = NSMutableAttributedString()
     var index = text.startIndex
     var plain = ""
@@ -145,6 +152,7 @@ enum ChatMarkdown {
         if looksLikePath(code) {
           attributes[.foregroundColor] = Palette.accentBlue
           attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+          attributes[.orcaPath] = code
         }
         // The page draws code as a padded inline box: a thin space inside each edge of the chip, and 2 pt
         // of air outside it so neighbouring words do not touch the fill.
@@ -159,7 +167,7 @@ enum ChatMarkdown {
       } else if rest.hasPrefix("**"), let close = rest.dropFirst(2).range(of: "**") {
         emitPlain()
         var attributes = base
-        attributes[.font] = UIFont.systemFont(ofSize: baseFont.pointSize, weight: .semibold)
+        attributes[.font] = ChatTextSettings.current.bodyFont(ofSize: baseFont.pointSize, weight: .semibold)
         out.append(inline(String(rest[rest.index(rest.startIndex, offsetBy: 2)..<close.lowerBound]), color: color, base: attributes))
         index = close.upperBound
       } else if rest.hasPrefix("["), let mid = rest.range(of: "]("), let end = rest[mid.upperBound...].firstIndex(of: ")"),
@@ -197,7 +205,10 @@ enum ChatMarkdown {
     for match in pattern.matches(in: text.string, range: NSRange(location: 0, length: out.length)) {
       if out.attribute(.chipBackground, at: match.range.location, effectiveRange: nil) != nil { continue }
       out.addAttributes(
-        [.foregroundColor: Palette.accentBlue, .underlineStyle: NSUnderlineStyle.single.rawValue], range: match.range)
+        [
+          .foregroundColor: Palette.accentBlue, .underlineStyle: NSUnderlineStyle.single.rawValue,
+          .orcaPath: (text.string as NSString).substring(with: match.range),
+        ], range: match.range)
     }
     return out
   }
@@ -207,4 +218,9 @@ enum ChatMarkdown {
     let ext = (code as NSString).pathExtension
     return code.contains("/") && !ext.isEmpty && ext.count <= 5 && !code.contains("(")
   }
+}
+
+extension NSAttributedString.Key {
+  /// A file path in chat text, which opens the file's preview when tapped.
+  static let orcaPath = NSAttributedString.Key("orca.path")
 }

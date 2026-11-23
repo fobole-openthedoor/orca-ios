@@ -50,6 +50,10 @@ final class PushCenter: NSObject {
   private var activityTokens: [String: String] = [:]
   /// What each desktop was last given, so an unchanged registration isn't sent again.
   private var registered: [UUID: String] = [:]
+  /// Desktops that answered the registration with a refusal (no push gateway set up there).
+  private(set) var refusedBy: Set<UUID> = []
+  /// How many desktops took this phone's registration.
+  var registeredDesktops: Int { registered.values.filter { !$0.isEmpty }.count }
   private var pending: Task<Void, Never>?
   private var started = false
 
@@ -170,7 +174,12 @@ final class PushCenter: NSObject {
       do {
         let accepted = try await session.api.registerPush(token: token, sandbox: Self.sandbox, filter: settings.filter)
         log.info("push registration with \(session.name, privacy: .public): \(accepted ? "registered" : "refused", privacy: .public)")
-        if accepted { registered[host.id] = token }
+        if accepted {
+          registered[host.id] = token
+          refusedBy.remove(host.id)
+        } else {
+          refusedBy.insert(host.id)
+        }
       } catch {
         // An older desktop without pushes, or a dropped connection: the next reconnect tries again.
         log.error("push registration failed: \(error.localizedDescription, privacy: .public)")

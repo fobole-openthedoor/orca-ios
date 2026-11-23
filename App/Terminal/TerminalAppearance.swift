@@ -64,13 +64,22 @@ enum TerminalAppearance {
     return definition.flatMap { UIColor(hex: $0.background) } ?? .systemBackground
   }
 
+  /// One size for pinch and Settings › Terminal: Settings' value once the reader set one there, else the
+  /// size pinching last left (or the default).
   static var fontSize: Float {
     get {
+      if UserDefaults.standard.object(forKey: "orca.settings.terminalFontSize") != nil {
+        return Float(PhoneSettings.terminalFontSize)
+      }
       let stored = UserDefaults.standard.float(forKey: "Terminal.fontSize")
       return stored == 0 ? defaultFontSize : min(max(stored, fontSizeRange.lowerBound), fontSizeRange.upperBound)
     }
     set {
       UserDefaults.standard.set(newValue, forKey: "Terminal.fontSize")
+      // Keep Settings in step once it owns the value; its range is narrower than pinch's.
+      if UserDefaults.standard.object(forKey: "orca.settings.terminalFontSize") != nil {
+        UserDefaults.standard.set(Double(min(max(newValue.rounded(), 8), 26)), forKey: "orca.settings.terminalFontSize")
+      }
     }
   }
 }
