@@ -196,6 +196,15 @@ final class FeedViewController: UIViewController {
     present(UINavigationController(rootViewController: pairing), animated: true)
   }
 
+  /// That desktop's Tasks, on its own page stack; making a workspace from a task opens it.
+  private func openTasks(_ session: HostSession) {
+    let tasks = TasksViewController(session: session)
+    tasks.onOpenWorkspace = { [weak self] session, worktreeId in
+      self?.navigationController?.pushViewController(SessionViewController(session: session, worktreeId: worktreeId), animated: true)
+    }
+    navigationController?.pushViewController(tasks, animated: true)
+  }
+
   private func openHost(_ id: PairedHost.ID) {
     guard let session = model.session(for: id) else { return }
     navigationController?.pushViewController(HostViewController(session: session), animated: true)
@@ -215,11 +224,22 @@ extension FeedViewController: UICollectionViewDelegate {
     case .host(let id): openHost(id)
     case .pair: pairDesktop()
     case .tasks:
-      let tasks = TasksViewController(session: nil)
-      tasks.onOpenWorkspace = { [weak self] session, worktreeId in
-        self?.navigationController?.pushViewController(SessionViewController(session: session, worktreeId: worktreeId), animated: true)
+      // home/MobileHomeTasksSection.tsx: one connected desktop opens straight away; more ask which.
+      let connected = model.orderedHosts.compactMap { model.session(for: $0.id) }
+        .filter { $0.connectionState == .connected }
+      if connected.count == 1 {
+        openTasks(connected[0])
+      } else if connected.count > 1, let cell = collectionView.cellForItem(at: indexPath) {
+        let picker = UIAlertController(
+          title: String(localized: "home.listFooter.hostPickerTitle", defaultValue: "Open Tasks On"), message: nil,
+          preferredStyle: .actionSheet)
+        for session in connected {
+          picker.addAction(UIAlertAction(title: session.name, style: .default) { [weak self] _ in self?.openTasks(session) })
+        }
+        picker.addAction(UIAlertAction(title: String(localized: "common.cancel", defaultValue: "Cancel"), style: .cancel))
+        picker.popoverPresentationController?.sourceView = cell
+        present(picker, animated: true)
       }
-      navigationController?.pushViewController(tasks, animated: true)
     case .none: break
     }
   }

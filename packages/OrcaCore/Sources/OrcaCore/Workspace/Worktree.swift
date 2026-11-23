@@ -205,6 +205,10 @@ public struct Repo: Sendable, Equatable, Identifiable {
   public var badgeColor: String?
   /// The SSH connection of a remote project; nil for a local one.
   public var connectionId: String?
+  /// A plain folder rather than a git repository: it makes workspaces, not worktrees.
+  public var isFolder: Bool
+  /// The same project on another host (an SSH twin) shares this key.
+  public var projectKey: String
 
   public init?(_ json: JSONValue) {
     guard let id = json["id"]?.stringValue, let displayName = json["displayName"]?.stringValue else {
@@ -215,6 +219,8 @@ public struct Repo: Sendable, Equatable, Identifiable {
     path = json["path"]?.stringValue
     badgeColor = json["badgeColor"]?.stringValue
     connectionId = json["connectionId"]?.stringValue
+    isFolder = json["kind"]?.stringValue == "folder"
+    projectKey = json["gitRemoteIdentity"]?["canonicalKey"]?.stringValue.map { "remote:\($0)" } ?? "repo:\(id)"
   }
 }
 
