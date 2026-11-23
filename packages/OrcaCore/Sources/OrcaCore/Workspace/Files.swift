@@ -145,10 +145,16 @@ extension HostAPI {
   /// Where a path someone wrote points (`files.resolveTerminalPath`, as the official file tap): a file in this
   /// or a sibling workspace, or a file elsewhere on the desktop with a grant to read it. `~`, absolute and
   /// relative paths all resolve. Nil when nothing is there.
-  public func resolvePath(worktreeId: String, pathText: String) async throws -> ResolvedPath? {
-    let result = try await connection.request(
-      "files.resolveTerminalPath",
-      ["worktree": .string("id:\(worktreeId)"), "pathText": .string(pathText), "crossWorkspace": .bool(true)])
+  /// `chat` names the chat the path was written in (its tab and session), so the desktop can find what that
+  /// agent wrote where it wrote it.
+  public func resolvePath(worktreeId: String, pathText: String, chat: (tabId: String, sessionId: String)? = nil)
+    async throws -> ResolvedPath?
+  {
+    var params: [String: JSONValue] = [
+      "worktree": .string("id:\(worktreeId)"), "pathText": .string(pathText), "crossWorkspace": .bool(true),
+    ]
+    if let chat { params["nativeChatContext"] = ["tabId": .string(chat.tabId), "sessionId": .string(chat.sessionId)] }
+    let result = try await connection.request("files.resolveTerminalPath", .object(params))
     guard result["exists"]?.boolValue == true else { return nil }
     let target = result["openTarget"]
     if target?["kind"]?.stringValue == "absolute-file", let path = target?["absolutePath"]?.stringValue,

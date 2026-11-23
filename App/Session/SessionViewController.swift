@@ -233,10 +233,15 @@ final class SessionViewController: UIViewController {
     lastOpened = (path, now)
     let api = session.api
     let worktreeId = worktreeId
+    // The chat on screen, whose agent wrote the path.
+    let chat: (tabId: String, sessionId: String)? = tabs.tabs.first { $0.id == shownTabId }.flatMap { tab in
+      if case .agentSession(let sessionId, _) = tab.kind { return (tab.id, sessionId) }
+      return nil
+    }
     Task { [weak self] in
       let resolved: ResolvedPath?
       do {
-        resolved = try await api.resolvePath(worktreeId: worktreeId, pathText: path)
+        resolved = try await api.resolvePath(worktreeId: worktreeId, pathText: path, chat: chat)
       } catch {
         // Only a relative path can stand in for itself on a desktop that can't resolve paths; `~/…` or an
         // absolute path read as one would name a file that isn't there. Say why instead.
@@ -250,7 +255,18 @@ final class SessionViewController: UIViewController {
         resolved = .worktree(worktreeId: worktreeId, relativePath: self?.relativeToWorkspace(path) ?? path, isDirectory: false)
       }
       guard let self else { return }
-      switch resolved {
+      var found = resolved
+      // A relative path an agent names may belong to another workspace on this desktop (it worked in a
+      // different repo): look there before saying it isn't found.
+      if found == nil, !path.hasPrefix("/"), !path.hasPrefix("~") {
+        for other in self.session.worktrees where other.id != worktreeId && !other.isArchived {
+          if let hit = try? await api.resolvePath(worktreeId: other.id, pathText: path) {
+            found = hit
+            break
+          }
+        }
+      }
+      switch found {
       case .worktree(let id, let relative, false):
         self.navigationController?.pushViewController(
           FilePreviewViewController(session: self.session, worktreeId: id, path: relative), animated: true)
