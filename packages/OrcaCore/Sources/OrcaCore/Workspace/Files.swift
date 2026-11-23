@@ -203,10 +203,10 @@ extension HostAPI {
   }
 
   /// Copies a workspace file to `destination` in `files.readChunk` pieces (as the official media download does),
-  /// reporting bytes read so far and the total.
+  /// several pieces in flight at once, each written where it belongs; reports bytes read so far and the total.
   public func downloadFile(
     worktreeId: String, path: String, to destination: URL, maxBytes: Int = 256 * 1024 * 1024,
-    progress: @Sendable (Int, Int) -> Void = { _, _ in }
+    parallel: Int = 4, progress: @Sendable (Int, Int) -> Void = { _, _ in }
   ) async throws {
     let stat = try await statFile(worktreeId: worktreeId, path: path)
     guard !stat.isDirectory else { throw FileDownloadError.notAFile }
@@ -215,22 +215,48 @@ extension HostAPI {
     let handle = try FileHandle(forWritingTo: destination)
     defer { try? handle.close() }
     let chunk = 384 * 1024
-    var offset = 0
-    while offset < stat.size {
+    let offsets = Array(stride(from: 0, to: stat.size, by: chunk))
+    var next = 0
+    var done = 0
+    try await withThrowingTaskGroup(of: (Int, Data).self) { group in
+      func start() {
+        guard next < offsets.count else { return }
+        let offset = offsets[next]
+        let length = min(chunk, stat.size - offset)
+        next += 1
+        group.addTask { (offset, try await self.readRange(worktreeId: worktreeId, path: path, offset: offset, length: length)) }
+      }
+      for _ in 0..<max(1, parallel) { start() }
+      // Writes stay on this task, one at a time; the reads overlap.
+      while let (offset, data) = try await group.next() {
+        try Task.checkCancellation()
+        try handle.seek(toOffset: UInt64(offset))
+        try handle.write(contentsOf: data)
+        done += data.count
+        progress(done, stat.size)
+        start()
+      }
+    }
+    guard done == stat.size else { throw FileDownloadError.changed }
+  }
+
+  /// Exactly `length` bytes from `offset`, asking again for any part a short reply left out.
+  private func readRange(worktreeId: String, path: String, offset: Int, length: Int) async throws -> Data {
+    var data = Data()
+    while data.count < length {
       try Task.checkCancellation()
-      let length = min(chunk, stat.size - offset)
+      let at = offset + data.count
       let result = try await connection.request(
         "files.readChunk",
-        fileParams(worktreeId, path, ["offset": .number(Double(offset)), "length": .number(Double(length))]),
+        fileParams(worktreeId, path, ["offset": .number(Double(at)), "length": .number(Double(length - data.count))]),
         timeout: .seconds(30))
-      guard let base64 = result["contentBase64"]?.stringValue, let data = Data(base64Encoded: base64),
-        !data.isEmpty, data.count <= length
+      guard let base64 = result["contentBase64"]?.stringValue, let piece = Data(base64Encoded: base64), !piece.isEmpty,
+        piece.count <= length - data.count
       else { throw FileDownloadError.changed }
-      try handle.write(contentsOf: data)
-      offset += data.count
-      progress(offset, stat.size)
-      if result["eof"]?.boolValue == true, offset != stat.size { throw FileDownloadError.changed }
+      data.append(piece)
+      if result["eof"]?.boolValue == true, data.count < length { throw FileDownloadError.changed }
     }
+    return data
   }
 }
 

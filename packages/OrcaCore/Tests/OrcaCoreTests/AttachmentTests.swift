@@ -92,4 +92,30 @@ import Testing
       ChatMessageBody.send(text: "see", filePaths: [], imagePaths: ["/i.png"])
         == ["kind": "message", "role": "user", "blocks": [["type": "text", "text": "see"], ["type": "image-ref", "path": "/i.png"]]])
   }
+
+  @Test func downloadsPiecesInParallelIntoTheirPlaces() async throws {
+    // A 1 MB file in 384 KB pieces; the host answers each piece in two halves to exercise short reads.
+    let file = Data((0..<(1024 * 1024)).map { UInt8(truncatingIfNeeded: $0 &* 31) })
+    let host = FakeHost { request, socket in
+      switch request["method"]?.stringValue {
+      case "files.stat":
+        socket.succeed(request, ["size": .number(Double(file.count)), "isDirectory": false, "mtime": 0])
+      case "files.readChunk":
+        let offset = request["params"]?["offset"]?.intValue ?? 0
+        let length = request["params"]?["length"]?.intValue ?? 0
+        let half = max(1, min(length, (length + 1) / 2))
+        let end = min(file.count, offset + half)
+        socket.succeed(
+          request, ["contentBase64": .string(file[offset..<end].base64EncodedString()), "eof": .bool(end == file.count)])
+      default:
+        socket.succeed(request, .null)
+      }
+    }
+    let api = await Self.api(host)
+    let destination = FileManager.default.temporaryDirectory.appendingPathComponent("download-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: destination) }
+    try await api.downloadFile(worktreeId: "w", path: "big.bin", to: destination, parallel: 4)
+    #expect(try Data(contentsOf: destination) == file)
+    await api.connection.close()
+  }
 }
