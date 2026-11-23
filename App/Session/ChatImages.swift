@@ -18,17 +18,38 @@ final class ChatImageLoader {
     self.worktreeId = worktreeId
   }
 
-  func cached(_ path: String) -> UIImage? { images[path] }
+  /// Images read once stay on the phone, so a chat opened again (or offline) shows them at once.
+  private static let folder: URL = {
+    let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("orca-chat-images", isDirectory: true)
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    return folder
+  }()
+
+  private func diskURL(_ path: String) -> URL {
+    let key = (worktreeId + "|" + path).utf8.reduce(into: UInt64(14_695_981_039_346_656_037)) { hash, byte in
+      hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211
+    }
+    return Self.folder.appendingPathComponent(String(key, radix: 16))
+  }
+
+  func cached(_ path: String) -> UIImage? {
+    if let image = images[path] { return image }
+    guard let data = try? Data(contentsOf: diskURL(path)), let image = UIImage(data: data) else { return nil }
+    images[path] = image
+    return image
+  }
 
   /// An image this phone uploaded, kept under the path its message names.
   func remember(_ path: String, data: Data) {
     guard images[path] == nil, let image = UIImage(data: data) else { return }
     images[path] = image
+    try? data.write(to: diskURL(path), options: .atomic)
     failed.remove(path)
   }
 
   func image(_ path: String) async -> UIImage? {
-    if let image = images[path] { return image }
+    if let image = cached(path) { return image }
     if failed.contains(path) { return nil }
     return await withCheckedContinuation { continuation in
       if waiting[path] == nil {
@@ -47,6 +68,7 @@ final class ChatImageLoader {
       Task {
         let data = try? await api.readChatImage(worktreeId: worktreeId, path: path)
         let image = data.flatMap { UIImage(data: $0) }
+        if let data, image != nil { try? data.write(to: diskURL(path), options: .atomic) }
         if let image { images[path] = image } else { failed.insert(path) }
         running -= 1
         waiting.removeValue(forKey: path)?.forEach { $0.resume(returning: image) }

@@ -487,13 +487,14 @@ final class SessionViewController: UIViewController {
 
   private func moreMenu() -> UIMenu {
     UIMenu(children: [
-      UIMenu(
-        options: .displayInline,
-        children: PiPCenter.shared.isSupported
-          ? [
+      // Picture in picture's three choices fold into one submenu, as the model chip's do.
+      PiPCenter.shared.isSupported
+        ? UIMenu(
+          title: String(localized: "orcaios.pip.start", defaultValue: "Picture in Picture"),
+          image: UIImage(systemName: "pip"),
+          children: [
             UIAction(
-              title: String(localized: "orcaios.pip.start", defaultValue: "Picture in Picture"),
-              image: UIImage(systemName: "pip.enter")
+              title: String(localized: "orcaios.pip.open", defaultValue: "Open now"), image: UIImage(systemName: "pip.enter")
             ) { _ in PiPCenter.shared.start() },
             UIAction(
               title: String(localized: "orcaios.pip.onLeave", defaultValue: "Picture in Picture on leaving"),
@@ -503,7 +504,7 @@ final class SessionViewController: UIViewController {
               title: String(localized: "orcaios.pip.commands", defaultValue: "Show each command in Picture in Picture"),
               image: UIImage(systemName: "list.bullet.rectangle"), state: PiPCenter.showsCommands ? .on : .off
             ) { _ in PiPCenter.showsCommands.toggle() },
-          ] : []),
+          ]) : UIMenu(options: .displayInline, children: []),
       UIAction(
         title: String(localized: "session.header.fileExplorer", defaultValue: "File explorer"),
         image: Lucide.folderTree.image(size: 18)) { [weak self] _ in self?.openFiles() },

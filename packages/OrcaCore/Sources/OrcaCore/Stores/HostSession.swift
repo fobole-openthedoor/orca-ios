@@ -39,6 +39,41 @@ public final class HostSession {
     configuration.clientCapabilities = ClientCapability.all
     configuration.onRelayUpdate = onRelayUpdate
     api = HostAPI(connection: OrcaConnection(configuration: configuration, dialer: dialer), clientId: clientId)
+    restoreFromCache()
+  }
+
+  // MARK: Cache
+
+  /// The lists as last read, kept on disk: a desktop's workspaces and bots show at once, before it answers.
+  @ObservationIgnored private lazy var cache = FrameCache(name: "host-" + host.id.uuidString, maxBytes: 8 * 1024 * 1024)
+
+  private func restoreFromCache() {
+    guard let saved = cache.load().last else { return }
+    if let rows = saved["worktrees"]?.arrayValue, let restored = WorktreeCatalog.restored(rows: rows) {
+      catalog = restored
+      worktrees = restored.worktrees
+      // A list is on screen; the desktop's answer refreshes it rather than replacing a spinner.
+      isLoading = false
+    }
+    // Kept as read, so a save before the desktop answers again doesn't drop them.
+    if let repos = saved["repos"] {
+      savedRepos = repos
+      self.repos = (repos["repos"]?.arrayValue ?? []).compactMap(Repo.init)
+    }
+    if let bots = saved["bots"] {
+      savedBots = bots
+      self.bots = BotsListing(bots)
+    }
+  }
+
+  @ObservationIgnored private var savedRepos: JSONValue?
+  @ObservationIgnored private var savedBots: JSONValue?
+
+  private func saveToCache() {
+    var saved: [String: JSONValue] = ["worktrees": .array(catalog.rawRows.filter { $0 != .null })]
+    if let savedRepos { saved["repos"] = savedRepos }
+    if let savedBots { saved["bots"] = savedBots }
+    cache.record(.object(saved), isSnapshot: true)
   }
 
   public func start() {
@@ -149,22 +184,25 @@ public final class HostSession {
   private func load() async {
     var catalog = catalog
     do {
-      async let repos = api.repos()
-      async let bots = api.bots()
+      async let repos = api.reposReply()
+      async let bots = api.botsReply()
       try await api.refresh(&catalog)
       self.catalog = catalog
       if worktrees != catalog.worktrees {
         worktrees = catalog.worktrees
       }
       // An old host without `repo.list` still has a usable workspace list.
-      if let repos = try? await repos, repos != self.repos {
-        self.repos = repos
+      if let repos = try? await repos {
+        savedRepos = repos.raw
+        if repos.repos != self.repos { self.repos = repos.repos }
       }
       // A host from before bots answers with an unknown method; it simply has none.
-      if let bots = try? await bots, bots != self.bots {
-        self.bots = bots
+      if let bots = try? await bots {
+        savedBots = bots.raw
+        if bots.bots != self.bots { self.bots = bots.bots }
       }
       loadError = nil
+      saveToCache()
     } catch {
       loadError = Self.describe(error)
     }

@@ -222,6 +222,8 @@ public struct Repo: Sendable, Equatable, Identifiable {
 /// of indexes into the rows of the snapshot the request named.
 public struct WorktreeCatalog: Sendable, Equatable {
   public private(set) var worktrees: [Worktree] = []
+  /// The rows as the host sent them, kept so the list can be cached and read back.
+  public private(set) var rawRows: [JSONValue] = []
   /// Sent as `afterSnapshotId`. Never persisted: it only means something to the host that issued it.
   public private(set) var snapshotId: String?
 
@@ -258,6 +260,7 @@ public struct WorktreeCatalog: Sendable, Equatable {
         return invalidate()
       }
       worktrees = parsed
+      rawRows = rows
       snapshotId = nextSnapshotId
       return .replaced
     }
@@ -269,6 +272,7 @@ public struct WorktreeCatalog: Sendable, Equatable {
         return invalidate()
       }
       var next: [Worktree] = []
+      var nextRaw: [JSONValue] = []
       next.reserveCapacity(rows.count)
       for row in rows {
         if let index = row.intValue {
@@ -276,17 +280,28 @@ public struct WorktreeCatalog: Sendable, Equatable {
             return invalidate()
           }
           next.append(worktrees[index])
+          nextRaw.append(rawRows.indices.contains(index) ? rawRows[index] : .null)
         } else if let worktree = Worktree(row) {
           next.append(worktree)
+          nextRaw.append(row)
         } else {
           return invalidate()
         }
       }
       worktrees = next
+      rawRows = nextRaw
       snapshotId = nextSnapshotId
       return .replaced
     }
     return invalidate()
+  }
+
+  /// A catalog from cached rows: the list as last seen, with no snapshot id, so the next read is a full one.
+  public static func restored(rows: [JSONValue]) -> WorktreeCatalog? {
+    var catalog = WorktreeCatalog()
+    guard !rows.isEmpty, catalog.apply(["worktrees": .array(rows)]) == .replaced else { return nil }
+    catalog.snapshotId = nil
+    return catalog
   }
 
   private mutating func invalidate() -> Outcome {

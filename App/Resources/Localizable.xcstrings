@@ -90267,19 +90267,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Show each command in Picture in Picture"
+            "value": "Show each command"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "画中画中显示每条命令"
+            "value": "显示每条命令"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "子母畫面中顯示每條命令"
+            "value": "顯示每條命令"
           }
         }
       }
@@ -90290,19 +90290,42 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Picture in Picture on leaving"
+            "value": "Open when leaving"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "离开时打开画中画"
+            "value": "离开时自动打开"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "離開時開啟子母畫面"
+            "value": "離開時自動開啟"
+          }
+        }
+      }
+    },
+    "orcaios.pip.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open now"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "立即打开"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "立即開啟"
           }
         }
       }

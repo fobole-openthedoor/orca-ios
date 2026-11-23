@@ -133,8 +133,11 @@ final class PiPCenter: NSObject {
     if controller?.canStartPictureInPictureAutomaticallyFromInline != wanted {
       controller?.canStartPictureInPictureAutomaticallyFromInline = wanted
     }
-    if Self.playing != working {
-      Self.playing = working
+    // Playing is what the system auto-starts from: only when leaving should open it, or the window is open
+    // because the person asked.
+    let playing = openedByHand || wanted
+    if Self.playing != playing {
+      Self.playing = playing
       controller?.invalidatePlaybackState()
     }
   }
@@ -154,6 +157,7 @@ final class PiPCenter: NSObject {
 
   func start() {
     openedByHand = true
+    updateAutoStart()
     draw(force: true)
     controller?.startPictureInPicture()
   }
@@ -188,8 +192,8 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
     MainActor.assumeIsolated {
       isActive = true
       startTimer(interval: 0.5)
-      // Opened on its own while nothing runs: close it again.
-      if !openedByHand, !(last?.working ?? false) { controller.stopPictureInPicture() }
+      // Opened on its own when it shouldn't have (the setting is off, or nothing runs): close it again.
+      if !openedByHand, !Self.startsOnLeave || !(last?.working ?? false) { controller.stopPictureInPicture() }
     }
   }
 
@@ -197,6 +201,7 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
     MainActor.assumeIsolated {
       isActive = false
       openedByHand = false
+      updateAutoStart()
       startTimer(interval: 1)
     }
   }

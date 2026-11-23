@@ -73,7 +73,13 @@ public struct BotsListing: Sendable, Equatable {
 extension HostAPI {
   /// `bots.list`; an empty listing from a host without bots.
   public func bots() async throws -> BotsListing {
-    BotsListing(try await connection.request("bots.list", [:]))
+    try await botsReply().bots
+  }
+
+  /// The bots and the reply they came from, for caching.
+  public func botsReply() async throws -> (bots: BotsListing, raw: JSONValue) {
+    let reply = try await connection.request("bots.list", [:])
+    return (BotsListing(reply), reply)
   }
 }
 

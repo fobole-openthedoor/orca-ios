@@ -65,8 +65,13 @@ public struct HostAPI: Sendable {
   }
 
   public func repos() async throws -> [Repo] {
+    try await reposReply().repos
+  }
+
+  /// The repos and the reply they came from, for caching.
+  public func reposReply() async throws -> (repos: [Repo], raw: JSONValue) {
     let reply = try await connection.request("repo.list", [:])
-    return (reply["repos"]?.arrayValue ?? []).compactMap(Repo.init)
+    return ((reply["repos"]?.arrayValue ?? []).compactMap(Repo.init), reply)
   }
 
   /// Tells the desktop this workspace was opened; nobody waits for the answer.
