@@ -191,6 +191,10 @@ final class SessionViewController: UIViewController {
   }
 
   private func show(_ tab: SessionTab?) {
+    // A browser tab's address and back/forward change under the same page; the pane on screen takes them.
+    if let tab, tab.id == shownTabId, let state = tab.browser {
+      (current as? BrowserTabViewController)?.apply(state)
+    }
     // The same tab is shown again when what it holds changed: a new terminal tab gets its terminal a moment
     // after it appears.
     guard
@@ -247,6 +251,11 @@ final class SessionViewController: UIViewController {
     case .markdown(let path), .file(let path, _):
       // A note or file tab reads as its preview: Markdown rendered, code highlighted.
       next = FilePreviewViewController(session: session, worktreeId: worktreeId, path: path)
+    case .browser:
+      // The desktop's page, streamed; nil support means the host's capabilities haven't been read yet.
+      next = BrowserTabViewController(
+        api: session.api, worktreeId: worktreeId, tab: tab?.browser ?? BrowserTabState([:]),
+        streamingSupported: session.status?.supports(BrowserCapability.screencast))
     case nil where tabsLoaded:
       let api = session.api
       let selector = selector
@@ -403,7 +412,7 @@ final class SessionViewController: UIViewController {
     navigationController?.pushViewController(items, animated: true)
   }
 
-  /// A terminal, or a chat with an agent.
+  /// A terminal, a chat with an agent, a browser or a note.
   private func newTabMenu() -> UIMenu {
     let api = session.api
     let selector = selector
@@ -424,11 +433,50 @@ final class SessionViewController: UIViewController {
           options: .displayInline,
           children: [
             UIAction(
+              title: String(localized: "session.sheets.browser", defaultValue: "Browser"), image: Lucide.globe.image(size: 18)
+            ) { [weak self] _ in self?.promptNewBrowser() },
+            UIAction(
               title: String(localized: "session.sheets.markdownNote", defaultValue: "Markdown Note"),
               image: Lucide.fileText.image(size: 18)
             ) { [weak self] _ in self?.run { try await api.createMarkdownNote(worktree: selector) } },
           ]),
       ])
+  }
+
+  /// The official New Browser prompt: a URL, or blank for a new tab. Hosts that can't stream a page to the
+  /// phone don't get one opened from it.
+  private func promptNewBrowser() {
+    guard session.status?.supports(BrowserCapability.screencast) == true else {
+      Toast.shared.show(
+        String(localized: "session.sheets.browserStreamingUnavailable", defaultValue: "This host can't stream browser tabs"),
+        kind: .error)
+      return
+    }
+    let alert = UIAlertController(
+      title: String(localized: "session.sheets.newBrowser", defaultValue: "New Browser"),
+      message: String(localized: "session.sheets.urlPrompt", defaultValue: "Enter a URL, or leave blank for a new tab."),
+      preferredStyle: .alert)
+    alert.addTextField { field in
+      field.placeholder = "https://example.com"
+      field.keyboardType = .URL
+      field.autocapitalizationType = .none
+      field.autocorrectionType = .no
+      field.returnKeyType = .go
+    }
+    alert.addAction(UIAlertAction(title: String(localized: "common.cancel", defaultValue: "Cancel"), style: .cancel))
+    let api = session.api
+    let selector = selector
+    let open = UIAlertAction(title: String(localized: "common.open", defaultValue: "Open"), style: .default) { [weak self, weak alert] _ in
+      guard let url = BrowserURL.normalize(alert?.textFields?.first?.text ?? "") else {
+        Toast.shared.show(
+          String(localized: "session.useContentCreateActions.invalidUrl", defaultValue: "Enter a valid URL"), kind: .error)
+        return
+      }
+      self?.run { try await api.createBrowserTab(worktree: selector, url: url) }
+    }
+    alert.addAction(open)
+    alert.preferredAction = open
+    present(alert, animated: true)
   }
 
   private static func icon(for tab: SessionTab) -> UIImage? {

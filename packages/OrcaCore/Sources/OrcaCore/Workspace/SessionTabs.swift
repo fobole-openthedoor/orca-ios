@@ -6,7 +6,8 @@ public struct SessionTab: Sendable, Equatable, Identifiable {
     /// `handle` is nil while the host has listed the tab but not yet started its terminal.
     case terminal(handle: String?)
     case agentSession(sessionId: String, agent: String)
-    case browser(url: String)
+    /// `pageId`: the desktop's page, nil until it has registered one. The rest is in `browser`.
+    case browser(pageId: String?)
     case file(relativePath: String, isDiff: Bool)
     case markdown(relativePath: String)
     /// A tab kind a newer host added; listed, but not openable here.
@@ -22,6 +23,8 @@ public struct SessionTab: Sendable, Equatable, Identifiable {
   public var launchAgent: String?
   /// The desktop's terminal palette (xterm theme keys: background, foreground, cursor, black … brightWhite).
   public var terminalColors: [String: String]?
+  /// For browser tabs: the page's address and navigation state, which change without changing the tab.
+  public var browser: BrowserTabState?
 
   public init?(_ json: JSONValue) {
     guard let id = json["id"]?.stringValue, let type = json["type"]?.stringValue else {
@@ -48,7 +51,9 @@ public struct SessionTab: Sendable, Equatable, Identifiable {
       kind = .agentSession(sessionId: sessionId, agent: json["agent"]?.stringValue ?? "")
       title = fallbackTitle
     case "browser":
-      kind = .browser(url: json["url"]?.stringValue ?? "")
+      let state = BrowserTabState(json)
+      kind = .browser(pageId: state.pageId)
+      browser = state
       title = fallbackTitle
     case "file":
       kind = .file(relativePath: json["relativePath"]?.stringValue ?? "", isDiff: json["mode"]?.stringValue == "diff")

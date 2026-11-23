@@ -87,6 +87,17 @@ public struct GitStatus: Sendable, Equatable {
   }
 }
 
+/// `git.localBranches`: branch names, and the checked-out one (nil on a detached HEAD).
+public struct GitLocalBranches: Sendable, Equatable {
+  public var current: String?
+  public var branches: [String]
+
+  init(_ json: JSONValue) {
+    current = json["current"]?.stringValue
+    branches = (json["branches"]?.arrayValue ?? []).compactMap(\.stringValue)
+  }
+}
+
 /// `git.diff` for one file: both sides, or why there is no text to show.
 public enum GitFileDiff: Sendable, Equatable {
   case text(original: String, modified: String)
@@ -160,10 +171,32 @@ extension HostAPI {
       error: result["error"]?.stringValue ?? result["error"]?["message"]?.stringValue)
   }
 
-  /// `git.push`; `publish` pushes a branch that has no upstream yet and sets one.
-  public func gitPush(worktreeId: String, publish: Bool = false) async throws {
-    _ = try await connection.request(
-      "git.push", gitParams(worktreeId, publish ? ["publish": true] : [:]), timeout: .seconds(120))
+  /// `git.push`; `publish` pushes a branch that has no upstream yet and sets one, `forceWithLease` replaces the
+  /// remote branch unless it moved since the last fetch.
+  public func gitPush(worktreeId: String, publish: Bool = false, forceWithLease: Bool = false) async throws {
+    var extra: [String: JSONValue] = [:]
+    if publish { extra["publish"] = true }
+    if forceWithLease { extra["forceWithLease"] = true }
+    _ = try await connection.request("git.push", gitParams(worktreeId, extra), timeout: .seconds(120))
+  }
+
+  /// Pulls only when the branch can move forward without a merge.
+  public func gitFastForward(worktreeId: String) async throws {
+    _ = try await connection.request("git.fastForward", gitParams(worktreeId), timeout: .seconds(120))
+  }
+
+  /// The worktree's local branches and the one checked out (`git.localBranches`).
+  public func gitLocalBranches(worktreeId: String) async throws -> GitLocalBranches {
+    GitLocalBranches(try await connection.request("git.localBranches", gitParams(worktreeId)))
+  }
+
+  public func gitCheckout(worktreeId: String, branch: String) async throws {
+    _ = try await connection.request("git.checkout", gitParams(worktreeId, ["branch": .string(branch)]), timeout: .seconds(60))
+  }
+
+  /// Ends a paused merge or rebase: `git.abortMerge`, `git.abortRebase`, or `git.completeMerge` to commit it.
+  public func gitConflictOperation(_ method: String, worktreeId: String) async throws {
+    _ = try await connection.request(method, gitParams(worktreeId), timeout: .seconds(60))
   }
 
   public func gitPull(worktreeId: String) async throws {
