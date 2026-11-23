@@ -104,7 +104,8 @@
         "pipFooter": "Opens only while the agent works. The session's ⋯ menu opens it at any time.",
         "activityHeading": "LIVE ACTIVITIES",
         "activityFooter": "A working agent shows on the Lock Screen and in the Dynamic Island until it stops.",
-        "activityToggle": "Show working agents"
+        "activityToggle": "Show working agents",
+        "showTips": "Show tips again"
       }
     }
   },
@@ -213,7 +214,8 @@
         "pipFooter": "只在智能体工作时自动打开；会话的 ⋯ 菜单随时可以手动打开。",
         "activityHeading": "实时活动",
         "activityFooter": "智能体工作时显示在锁定屏幕和灵动岛上，停下后消失。",
-        "activityToggle": "显示工作中的智能体"
+        "activityToggle": "显示工作中的智能体",
+        "showTips": "重新显示操作提示"
       }
     },
     "overrides": {
@@ -344,7 +346,8 @@
         "pipFooter": "只在代理工作時自動開啟；工作階段的 ⋯ 選單隨時可以手動開啟。",
         "activityHeading": "即時動態",
         "activityFooter": "代理工作時顯示在鎖定畫面和動態島上，停下後消失。",
-        "activityToggle": "顯示工作中的代理"
+        "activityToggle": "顯示工作中的代理",
+        "showTips": "重新顯示操作提示"
       }
     }
   }

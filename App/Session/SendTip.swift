@@ -19,5 +19,9 @@ struct SendHoldTip: Tip {
     [Action(id: "settings", title: String(localized: "orcaios.tip.openSettings", defaultValue: "Settings"))]
   }
 
-  var options: [any TipOption] { [Tips.MaxDisplayCount(1)] }
+  /// Shown already; cleared from Settings › Orca iOS to show it again.
+  static var seen: Bool {
+    get { UserDefaults.standard.bool(forKey: "orca.tip.sendHold") }
+    set { UserDefaults.standard.set(newValue, forKey: "orca.tip.sendHold") }
+  }
 }

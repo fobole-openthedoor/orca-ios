@@ -977,29 +977,24 @@ final class ChatViewController: UIViewController {
     watchSendTip()
   }
 
-  private var tipTask: Task<Void, Never>?
-
-  /// The send hint, the first time any chat shows; its Settings button opens Chat UI settings.
+  /// The send hint, once: shortly after the first chat settles on screen, unless something else is up.
+  /// Tracked here rather than by TipKit's own rules, which could spend the one showing on a chat that
+  /// never made it on screen. Settings › Orca iOS can bring it back.
   private func watchSendTip() {
-    guard tipTask == nil else { return }
-    let tip = SendHoldTip()
-    tipTask = Task { [weak self] in
-      for await shows in tip.shouldDisplayUpdates {
-        guard let self else { return }
-        if shows, self.presentedViewController == nil, self.view.window != nil {
-          let popover = TipUIPopoverViewController(tip, sourceItem: self.composer.sendAnchor) { [weak self] action in
-            self?.dismiss(animated: true)
-            if action.id == "settings" {
-              self?.navigationController?.pushViewController(OrcaIOSSettingsViewController(), animated: true)
-            }
-            tip.invalidate(reason: .actionPerformed)
-          }
-          popover.popoverPresentationController?.permittedArrowDirections = .down
-          self.present(popover, animated: true)
-        } else if !shows, self.presentedViewController is TipUIPopoverViewController {
-          self.dismiss(animated: true)
+    guard !SendHoldTip.seen else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+      guard let self, !SendHoldTip.seen, self.view.window != nil, self.presentedViewController == nil,
+        self.parent?.presentedViewController == nil
+      else { return }
+      SendHoldTip.seen = true
+      let popover = TipUIPopoverViewController(SendHoldTip(), sourceItem: self.composer.sendAnchor) { [weak self] action in
+        self?.dismiss(animated: true)
+        if action.id == "settings" {
+          self?.navigationController?.pushViewController(OrcaIOSSettingsViewController(), animated: true)
         }
       }
+      popover.popoverPresentationController?.permittedArrowDirections = .down
+      self.present(popover, animated: true)
     }
   }
 

@@ -29,6 +29,15 @@ final class OrcaIOSSettingsViewController: SettingsPageViewController {
             })
         ]),
       Section(
+        header: nil,
+        footer: nil,
+        rows: [
+          .button(title: String(localized: "orcaios.settings.showTips", defaultValue: "Show tips again")) { [weak self] in
+            SendHoldTip.seen = false
+            self?.rebuild()
+          }
+        ]),
+      Section(
         header: String(localized: "orcaios.settings.pipHeading", defaultValue: "PICTURE IN PICTURE"),
         footer: String(
           localized: "orcaios.settings.pipFooter",

@@ -90652,6 +90652,29 @@
         }
       }
     },
+    "orcaios.settings.showTips": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show tips again"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新显示操作提示"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新顯示操作提示"
+          }
+        }
+      }
+    },
     "orcaios.settings.title": {
       "extractionState": "manual",
       "localizations": {

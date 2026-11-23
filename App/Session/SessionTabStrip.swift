@@ -17,11 +17,12 @@ final class SessionTabStrip: UIView {
   private let chips = UIStackView()
   private let addButton = UIButton(configuration: .plain())
 
-  /// Glass tinted toward the page's ground: the chat scrolling under the strip reads as a frosted blur
-  /// rather than words behind the tabs.
+  /// Glass with a light dark tint: the chat scrolling under the strip reads muted rather than as words
+  /// behind the tabs, while the glass still shows. A device renders the tint much stronger than the
+  /// simulator; past a quarter it turns solid black.
   private static func darkGlass() -> UIGlassEffect {
     let glass = UIGlassEffect(style: .regular)
-    glass.tintColor = Palette.bgBase.withAlphaComponent(0.6)
+    glass.tintColor = UIColor.black.withAlphaComponent(0.22)
     glass.isInteractive = true
     return glass
   }
