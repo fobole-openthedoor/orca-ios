@@ -34,7 +34,7 @@ final class UsageViewController: UIViewController {
     title =
       pinnedHostId == nil ? HomeTab.usage.title : String(localized: "hostScreen.hostScreenHeader.accounts", defaultValue: "Accounts")
     view.backgroundColor = Palette.bgBase
-    navigationItem.largeTitleDisplayMode = pinnedHostId == nil ? .always : .never
+    navigationItem.largeTitleDisplayMode = pinnedHostId == nil ? .inline : .never
     refresh = UIBarButtonItem(
       image: Lucide.refreshCw.image(size: 20, strokeWidth: 2), primaryAction: UIAction { [weak self] _ in self?.load() })
     refresh.accessibilityLabel = String(localized: "home.usage.refresh", defaultValue: "Refresh usage")
@@ -56,6 +56,8 @@ final class UsageViewController: UIViewController {
       stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -Spacing.xl),
     ])
     hostButton.configuration?.cornerStyle = .capsule
+    // MobileHomeHostPill.tsx: 32 pt tall, 12 pt before the dot and 10 after the name.
+    hostButton.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: Spacing.md, bottom: 7, trailing: 10)
     hostButton.configuration?.baseForegroundColor = Palette.textPrimary
     hostButton.showsMenuAsPrimaryAction = true
     hostButton.contentHorizontalAlignment = .leading
@@ -119,7 +121,7 @@ final class UsageViewController: UIViewController {
         return String(
           format: String(localized: "home.usage.updatedAgo", defaultValue: "Updated %1$@ ago"), RelativeTime.short(updated) ?? "")
       }
-      stack.addArrangedSubview(heading(label, aside: aside, top: 28))
+      stack.addArrangedSubview(heading(label, aside: aside, top: 20))
       stack.addArrangedSubview(AccountCard(provider: entry, mark: mark))
     }
   }
@@ -128,7 +130,8 @@ final class UsageViewController: UIViewController {
     // The desktop picker: a glass pill with the connection dot, choosing between paired desktops.
     let status = HostConnectionPresentation(session.connectionState)
     var title = AttributedString("● ", attributes: AttributeContainer([.foregroundColor: status.dot, .font: UIFont.systemFont(ofSize: 11)]))
-    title += AttributedString(session.name, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 16)]))
+    title += AttributedString(
+      session.name, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 14), .foregroundColor: Palette.textSecondary]))
     hostButton.configuration?.attributedTitle = title
     hostButton.menu = UIMenu(
       children: model.orderedHosts.map { host in
@@ -154,12 +157,13 @@ final class UsageViewController: UIViewController {
 
   private func heading(_ text: String, aside: String?, top: CGFloat) -> UIView {
     let row = UIView()
-    let label = TextLabel(text, size: 16, weight: .semibold)
+    // home-list-styles.ts sectionHeading: 15 pt semibold, 7 pt above its group.
+    let label = TextLabel(text, size: 15, weight: .semibold)
     row.addSubview(label)
     var constraints = [
       label.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: Spacing.xs),
       label.topAnchor.constraint(equalTo: row.topAnchor, constant: top),
-      label.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -Spacing.sm),
+      label.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -7),
     ]
     if let aside {
       let note = TextLabel(aside, size: 14, color: Palette.textMuted)
@@ -200,16 +204,19 @@ private final class StatsCard: UIView {
     row.pin(to: self)
     for (index, (value, label)) in cells.enumerated() {
       let cell = UIView()
-      let number = TextLabel(value, size: 22, weight: .bold, alignment: .center, tabular: true)
-      let caption = TextLabel(label, size: 14, color: Palette.textSecondary, alignment: .center)
+      // MobileHomeStats.tsx: a 20/25 semibold value over a 13/17 label, 13 pt above and 12 below.
+      let number = TextLabel(
+        value, size: 20, weight: .semibold, lineHeight: 25, letterSpacing: -0.2, alignment: .center, tabular: true)
+      let caption = TextLabel(label, size: 13, color: Palette.textSecondary, lineHeight: 17, alignment: .center)
       cell.addSubview(number)
       cell.addSubview(caption)
       NSLayoutConstraint.activate([
-        number.topAnchor.constraint(equalTo: cell.topAnchor, constant: 14),
+        number.topAnchor.constraint(equalTo: cell.topAnchor, constant: 13),
         number.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
-        caption.topAnchor.constraint(equalTo: number.bottomAnchor, constant: 4),
+        caption.topAnchor.constraint(equalTo: number.bottomAnchor, constant: 2),
         caption.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
-        caption.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -14),
+        caption.leadingAnchor.constraint(greaterThanOrEqualTo: cell.leadingAnchor, constant: Spacing.sm),
+        caption.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -12),
       ])
       if index > 0 {
         let line = UIView()
@@ -238,10 +245,11 @@ private final class AccountCard: UIView {
     layer.cornerRadius = Radius.surface
     let column = UIStackView()
     column.axis = .vertical
-    column.spacing = Spacing.sm
+    column.spacing = 6
     column.translatesAutoresizingMaskIntoConstraints = false
     addSubview(column)
-    column.pin(to: self, insets: UIEdgeInsets(top: Spacing.lg, left: Spacing.lg, bottom: Spacing.lg, right: Spacing.lg))
+    // mobile-home-usage-styles.ts: 14 pt above and below, 16 at the sides.
+    column.pin(to: self, insets: UIEdgeInsets(top: 14, left: Spacing.lg, bottom: 14, right: Spacing.lg))
 
     // The active account; none set means the agent's own login.
     let active = provider.accounts.first { $0.id == provider.activeAccountId }
@@ -249,28 +257,29 @@ private final class AccountCard: UIView {
     tile.translatesAutoresizingMaskIntoConstraints = false
     tile.backgroundColor = Palette.bgRaised
     tile.layer.cornerRadius = Radius.tile
-    let icon = FilledIconView(size: 18)
+    let icon = FilledIconView(size: 16)
     icon.icon = mark
     tile.addSubview(icon)
     let name = TextLabel(
       active?.displayName ?? active?.email ?? String(localized: "accounts.screen.default", defaultValue: "System default"),
-      size: 16, lineHeight: 20)
+      size: 16, lineHeight: 22)
     let detail = TextLabel(
       active == nil ? String(localized: "accounts.screen.agentLogin", defaultValue: "Uses the agent's own login") : active!.email,
-      size: 14, color: Palette.textSecondary, lineHeight: 18)
+      size: 13, color: Palette.textSecondary, lineHeight: 17)
     let names = UIStackView(arrangedSubviews: [name, detail])
     names.axis = .vertical
     names.spacing = 1
     let pill = PaddedLabel(String(localized: "home.usage.active", defaultValue: "In use"))
     let header = UIStackView(arrangedSubviews: [tile, names, UIView(), pill])
     header.alignment = .center
-    header.spacing = Spacing.md
+    header.spacing = 10
     NSLayoutConstraint.activate([
-      tile.widthAnchor.constraint(equalToConstant: 30), tile.heightAnchor.constraint(equalToConstant: 30),
+      tile.widthAnchor.constraint(equalToConstant: 28), tile.heightAnchor.constraint(equalToConstant: 28),
       icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor), icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
     ])
     column.addArrangedSubview(header)
-    column.setCustomSpacing(Spacing.md, after: header)
+    // The head's 4 pt below it and the first meter's own 6 above.
+    column.setCustomSpacing(10, after: header)
 
     // Short names that fit the label column in every language: 5h, 7d, and Fable's own week.
     for (window, label) in [
@@ -291,42 +300,45 @@ private final class AccountCard: UIView {
 private final class UsageBarRow: UIView {
   init(label: String, window: UsageWindow) {
     super.init(frame: .zero)
-    let name = TextLabel(label, size: 15, color: Palette.textSecondary, lines: 1)
+    // mobile-home-usage-styles.ts meter: a 26 pt 13 pt label, a 6 pt track 10 pt either side, a 13 pt value,
+    // the reset 12 pt under the track.
+    let name = TextLabel(label, size: 13, color: Palette.textSecondary, lines: 1)
     name.adjustsFontSizeToFitWidth = true
     name.minimumScaleFactor = 0.7
     let track = UIView()
     track.translatesAutoresizingMaskIntoConstraints = false
-    track.backgroundColor = Palette.bgRaised
-    track.layer.cornerRadius = 4
+    track.backgroundColor = Palette.translucentFill
+    track.layer.cornerRadius = 3
+    track.clipsToBounds = true
     let fill = UIView()
     fill.translatesAutoresizingMaskIntoConstraints = false
-    fill.layer.cornerRadius = 4
+    fill.layer.cornerRadius = 3
     // UsageBar.tsx: rounded and clamped first, then green under 60, amber under 80, red from 80.
     let used = min(100, max(0, window.usedPercent.rounded()))
     fill.backgroundColor = used >= 80 ? Palette.statusRed : used >= 60 ? Palette.statusAmber : Palette.statusGreen
     track.addSubview(fill)
     // Used or left, as Settings › Appearance says; the colour always follows what is used.
     let shown = UsagePercentageDisplay.current == .used ? Int(used) : 100 - Int(used)
-    let percent = TextLabel("\(shown)%", size: 15, alignment: .right, tabular: true)
-    let reset = TextLabel(Self.resetText(window), size: 14, color: Palette.textMuted)
+    let percent = TextLabel("\(shown)%", size: 13, alignment: .right, tabular: true)
+    let reset = TextLabel(Self.resetText(window), size: 12, color: Palette.textMuted)
     for view in [name, track, percent, reset] as [UIView] { addSubview(view) }
     NSLayoutConstraint.activate([
       name.leadingAnchor.constraint(equalTo: leadingAnchor),
-      name.topAnchor.constraint(equalTo: topAnchor),
-      name.widthAnchor.constraint(equalToConstant: 44),
-      track.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 54),
+      name.centerYAnchor.constraint(equalTo: percent.centerYAnchor),
+      name.widthAnchor.constraint(equalToConstant: 26),
+      track.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 36),
       track.centerYAnchor.constraint(equalTo: percent.centerYAnchor),
-      track.heightAnchor.constraint(equalToConstant: 8),
-      track.trailingAnchor.constraint(equalTo: percent.leadingAnchor, constant: -Spacing.lg),
+      track.heightAnchor.constraint(equalToConstant: 6),
+      track.trailingAnchor.constraint(equalTo: percent.leadingAnchor, constant: -10),
       percent.trailingAnchor.constraint(equalTo: trailingAnchor),
-      percent.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-      percent.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+      percent.topAnchor.constraint(equalTo: topAnchor),
+      percent.widthAnchor.constraint(greaterThanOrEqualToConstant: 40),
       fill.leadingAnchor.constraint(equalTo: track.leadingAnchor),
       fill.topAnchor.constraint(equalTo: track.topAnchor),
       fill.bottomAnchor.constraint(equalTo: track.bottomAnchor),
       fill.widthAnchor.constraint(equalTo: track.widthAnchor, multiplier: max(0.001, window.usedPercent / 100)),
       reset.leadingAnchor.constraint(equalTo: track.leadingAnchor),
-      reset.topAnchor.constraint(equalTo: percent.bottomAnchor, constant: 6),
+      reset.topAnchor.constraint(equalTo: percent.bottomAnchor, constant: 2),
       reset.bottomAnchor.constraint(equalTo: bottomAnchor),
       name.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
     ])
@@ -355,14 +367,15 @@ private final class UsageBarRow: UIView {
 
 /// A small tinted label pill, as the official In use tag.
 final class PaddedLabel: UIView {
-  init(_ text: String, color: UIColor = Palette.accentBlue) {
+  init(_ text: String, color: UIColor = Palette.accentBlue, fill: UIColor = Palette.skillTokenSurface) {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
-    backgroundColor = color.withAlphaComponent(0.16)
-    layer.cornerRadius = 11
-    let label = TextLabel(text, size: 14, weight: .medium, color: color)
+    backgroundColor = fill
+    layer.cornerRadius = 9
+    // mobile-home-usage-styles.ts badge: 12 pt, 8 pt at the sides and 2 above and below.
+    let label = TextLabel(text, size: 12, color: color)
     addSubview(label)
-    label.pin(to: self, insets: UIEdgeInsets(top: 3, left: 10, bottom: 3, right: 10))
+    label.pin(to: self, insets: UIEdgeInsets(top: 2, left: Spacing.sm, bottom: 2, right: Spacing.sm))
     setContentHuggingPriority(.required, for: .horizontal)
     setContentCompressionResistancePriority(.required, for: .horizontal)
   }

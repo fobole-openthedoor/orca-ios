@@ -135,11 +135,12 @@ struct BotRowConfiguration: UIContentConfiguration {
 
 private final class BotRowView: UIView, UIContentView {
   private let avatar = BotAvatarView(size: 32)
-  private let name = TextLabel(size: 16, lineHeight: 20)
+  // bots/MobileBotHomeRow.tsx: a 15 pt medium name over the host pill (10 pt), a 13 pt preview and an 11 pt age.
+  private let name = TextLabel(size: 15, weight: .medium)
   private let chip = UIView()
-  private let chipLabel = TextLabel(size: 12, color: Palette.textMuted)
-  private let latest = TextLabel(size: 14, color: Palette.textMuted, lineHeight: 18)
-  private let time = TextLabel(size: 13, color: Palette.textMuted, tabular: true)
+  private let chipLabel = TextLabel(size: 10, color: Palette.textMuted)
+  private let latest = TextLabel(size: 13, color: Palette.textMuted)
+  private let time = TextLabel(size: 11, color: Palette.textMuted, tabular: true)
   private let count = UIView()
   private let countLabel = TextLabel(size: 12, weight: .bold, color: .black, alignment: .center, tabular: true)
   private var leading: NSLayoutConstraint!
@@ -152,10 +153,10 @@ private final class BotRowView: UIView, UIContentView {
     self.configuration = configuration
     super.init(frame: .zero)
     chip.backgroundColor = Palette.bgRaised
-    chip.layer.cornerRadius = 9
-    let monitor = LucideView(.monitor, size: 12, strokeWidth: 1.8, color: Palette.textMuted)
+    chip.layer.cornerRadius = 7
+    let monitor = LucideView(.monitor, size: 10, strokeWidth: 2, color: Palette.textMuted)
     let chipRow = UIStackView(arrangedSubviews: [monitor, chipLabel])
-    chipRow.spacing = 4
+    chipRow.spacing = 3
     chipRow.alignment = .center
     chipRow.translatesAutoresizingMaskIntoConstraints = false
     chip.addSubview(chipRow)
@@ -170,7 +171,7 @@ private final class BotRowView: UIView, UIContentView {
     chip.setContentCompressionResistancePriority(.required, for: .horizontal)
     let text = UIStackView(arrangedSubviews: [name, line])
     text.axis = .vertical
-    text.spacing = 2
+    text.spacing = 3
     text.alignment = .leading
     text.translatesAutoresizingMaskIntoConstraints = false
     let trailing = UIStackView(arrangedSubviews: [count, time])
@@ -189,17 +190,20 @@ private final class BotRowView: UIView, UIContentView {
     leading = avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg)
     NSLayoutConstraint.activate([
       leading,
-      avatar.topAnchor.constraint(equalTo: topAnchor, constant: 11),
+      // At least 64 pt, the picture and the text centred in it.
+      heightAnchor.constraint(greaterThanOrEqualToConstant: 64),
+      avatar.centerYAnchor.constraint(equalTo: centerYAnchor),
       text.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: Spacing.md),
-      text.topAnchor.constraint(equalTo: topAnchor, constant: 9),
-      text.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
+      text.centerYAnchor.constraint(equalTo: centerYAnchor),
+      text.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: Spacing.sm),
+      text.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -Spacing.sm),
       text.trailingAnchor.constraint(lessThanOrEqualTo: trailing.leadingAnchor, constant: -Spacing.sm),
       trailing.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
       trailing.lastBaselineAnchor.constraint(equalTo: latest.lastBaselineAnchor),
-      chipRow.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 6),
-      chipRow.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -8),
-      chipRow.topAnchor.constraint(equalTo: chip.topAnchor, constant: 2),
-      chipRow.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -2),
+      chipRow.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 5),
+      chipRow.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -5),
+      chipRow.topAnchor.constraint(equalTo: chip.topAnchor, constant: 1),
+      chipRow.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -1),
       // A 44 pt target around the 14 pt chevron, its glyph at the row's trailing edge, level with the name.
       fold.widthAnchor.constraint(equalToConstant: 44),
       fold.heightAnchor.constraint(equalToConstant: 44),

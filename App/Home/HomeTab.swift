@@ -14,6 +14,10 @@ enum HomeTab: String, CaseIterable {
     }
   }
 
+  static let titleAttributes: [NSAttributedString.Key: Any] = [
+    .font: UIFont.systemFont(ofSize: 22, weight: .bold), .kern: -0.4, .foregroundColor: Palette.textPrimary,
+  ]
+
   /// The official app's glyph for each tab (home/tabs/MobileHomeTabBar.tsx).
   var icon: Lucide {
     switch self {
@@ -39,6 +43,9 @@ final class HomeTabController: UITabBarController {
       ) { [weak self] _ in
         let navigation = UINavigationController(rootViewController: self?.root(for: homeTab) ?? UIViewController())
         navigation.navigationBar.prefersLargeTitles = true
+        // A tab's title shares the row with its buttons (home/tabs/MobileHomeTabHeader.tsx): 22 pt bold, -0.4 pt
+        // tracking, never iOS's 34 pt large title.
+        navigation.navigationBar.largeTitleTextAttributes = HomeTab.titleAttributes
         return navigation
       }
       tabsByID[homeTab] = tab
@@ -93,7 +100,7 @@ final class PlaceholderTabViewController: UIViewController {
     super.viewDidLoad()
     title = homeTab.title
     view.backgroundColor = Palette.bgBase
-    navigationItem.largeTitleDisplayMode = .always
+    navigationItem.largeTitleDisplayMode = .inline
   }
 }
 

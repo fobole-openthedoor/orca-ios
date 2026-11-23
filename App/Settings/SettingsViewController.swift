@@ -23,7 +23,7 @@ final class SettingsViewController: UITableViewController {
     super.viewDidLoad()
     title = String(localized: "common.settings", defaultValue: "Settings")
     navigationItem.largeTitleDisplayMode = .never
-    tableView.backgroundColor = Palette.bgBase
+    SettingsList.style(tableView)
     tableView.register(UITableViewCell.self, forCellReuseIdentifier: "row")
     let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
     sections = [
@@ -76,16 +76,27 @@ final class SettingsViewController: UITableViewController {
 
   override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { sections[section].count }
 
+  override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+    SettingsList.gap(before: section)
+  }
+
+  override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? { UIView() }
+
+  override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat { .leastNonzeroMagnitude }
+
+  override func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? { UIView() }
+
   override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
     let row = sections[indexPath.section][indexPath.row]
     let cell = tableView.dequeueReusableCell(withIdentifier: "row", for: indexPath)
     var content = UIListContentConfiguration.valueCell()
     content.text = row.title
-    content.textProperties.font = .systemFont(ofSize: 17)
+    content.textProperties.color = Palette.textPrimary
     content.secondaryText = row.detail
-    content.image = row.icon?.image(size: 22, strokeWidth: 1.8)
+    content.secondaryTextProperties.color = Palette.textSecondary
+    content.image = row.icon?.image(size: 18, strokeWidth: 2)
     content.imageProperties.tintColor = Palette.textSecondary
-    content.imageToTextPadding = 16
+    SettingsList.size(&content)
     cell.contentConfiguration = content
     cell.backgroundColor = Palette.bgRaised
     cell.accessoryType = row.opens != nil || (row.action == nil && row.icon != nil) ? .disclosureIndicator : .none

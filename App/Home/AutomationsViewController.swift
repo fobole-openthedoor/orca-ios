@@ -27,7 +27,7 @@ final class AutomationsViewController: UIViewController {
     super.viewDidLoad()
     title = HomeTab.automations.title
     view.backgroundColor = Palette.bgBase
-    navigationItem.largeTitleDisplayMode = pinnedHostId == nil ? .always : .never
+    navigationItem.largeTitleDisplayMode = pinnedHostId == nil ? .inline : .never
     let add = UIBarButtonItem(image: Lucide.plus.image(size: 20, strokeWidth: 2.2), style: .prominent, target: nil, action: nil)
     add.primaryAction = UIAction(image: Lucide.plus.image(size: 20, strokeWidth: 2.2)) { [weak self] _ in self?.edit(nil) }
     add.tintColor = Palette.createActionFill
@@ -35,6 +35,8 @@ final class AutomationsViewController: UIViewController {
     navigationItem.rightBarButtonItem = add
 
     hostButton.configuration?.cornerStyle = .capsule
+    // MobileHomeHostPill.tsx: 32 pt tall, 12 pt before the dot and 10 after the name.
+    hostButton.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: Spacing.md, bottom: 7, trailing: 10)
     hostButton.configuration?.baseForegroundColor = Palette.textPrimary
     hostButton.showsMenuAsPrimaryAction = true
     let header = UIView(frame: CGRect(x: 0, y: 0, width: 0, height: 56))
@@ -85,7 +87,8 @@ final class AutomationsViewController: UIViewController {
     }
     let status = HostConnectionPresentation(session.connectionState)
     var title = AttributedString("● ", attributes: AttributeContainer([.foregroundColor: status.dot, .font: UIFont.systemFont(ofSize: 11)]))
-    title += AttributedString(session.name, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 16)]))
+    title += AttributedString(
+      session.name, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 14), .foregroundColor: Palette.textSecondary]))
     hostButton.configuration?.attributedTitle = title
     hostButton.menu = UIMenu(
       children: hosts.map { host in

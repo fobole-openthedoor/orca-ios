@@ -58,7 +58,7 @@ class SettingsPageViewController: UITableViewController {
   override func viewDidLoad() {
     super.viewDidLoad()
     navigationItem.largeTitleDisplayMode = .never
-    tableView.backgroundColor = Palette.bgBase
+    SettingsList.style(tableView)
     tableView.register(UITableViewCell.self, forCellReuseIdentifier: "row")
     tableView.register(StackedControlCell.self, forCellReuseIdentifier: "stacked")
   }
@@ -67,13 +67,21 @@ class SettingsPageViewController: UITableViewController {
 
   override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { sections[section].rows.count }
 
-  override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { sections[section].header }
+  override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+    sections[section].header.map { SettingsList.header($0, first: section == 0) }
+  }
 
-  override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? { sections[section].footer }
+  override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+    sections[section].header == nil ? SettingsList.gap(before: section) : UITableView.automaticDimension
+  }
 
-  override func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? { sections[section].footerView }
+  override func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? {
+    sections[section].footerView ?? sections[section].footer.map(SettingsList.footer)
+  }
 
-  override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat { UITableView.automaticDimension }
+  override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
+    sections[section].footerView == nil && sections[section].footer == nil ? .leastNonzeroMagnitude : UITableView.automaticDimension
+  }
 
   override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
     let row = sections[indexPath.section].rows[indexPath.row]
@@ -101,13 +109,12 @@ class SettingsPageViewController: UITableViewController {
     content.textProperties.color = Palette.textPrimary
     content.secondaryTextProperties.color = Palette.textSecondary
     content.imageProperties.tintColor = Palette.textSecondary
-    content.imageToTextPadding = 16
     // A disabled row fades as a whole (feedback.disabledOpacity), as the official ListRow does.
     var dimmed = false
     switch row {
     case .value(let icon, let title, let value, let subtitle, let navigates, let enabled, let action):
       if subtitle != nil { content = subtitleContent() }
-      content.image = icon?.image(size: 20, strokeWidth: 1.8)
+      content.image = icon?.image(size: 18, strokeWidth: 2)
       content.text = title
       content.secondaryText = subtitle ?? value
       if subtitle != nil, let value { content.text = title; cell.accessoryView = valueLabel(value) }
@@ -118,7 +125,7 @@ class SettingsPageViewController: UITableViewController {
       cell.selectionStyle = action != nil && enabled ? .default : .none
       dimmed = !enabled
     case .menu(let icon, let title, let value, let options, let enabled):
-      content.image = icon?.image(size: 20, strokeWidth: 1.8)
+      content.image = icon?.image(size: 18, strokeWidth: 2)
       content.text = title
       cell.accessoryView = menuButton(value: value, options: options, enabled: enabled)
       dimmed = !enabled
@@ -175,6 +182,9 @@ class SettingsPageViewController: UITableViewController {
       break
     }
     if case .link = row {} else { cell.accessibilityLabel = nil }
+    var emphasized = false
+    if case .value(_, _, _, let subtitle, _, _, _) = row { emphasized = subtitle != nil }
+    SettingsList.size(&content, emphasized: emphasized)
     cell.contentConfiguration = content
     cell.contentView.alpha = dimmed ? Feedback.disabledOpacity : 1
     cell.accessoryView?.alpha = dimmed ? Feedback.disabledOpacity : 1
@@ -219,9 +229,6 @@ class SettingsPageViewController: UITableViewController {
     var content = UIListContentConfiguration.subtitleCell()
     content.textProperties.color = Palette.textPrimary
     content.secondaryTextProperties.color = Palette.textSecondary
-    content.secondaryTextProperties.font = .preferredFont(forTextStyle: .footnote)
-    content.textToSecondaryTextVerticalPadding = 3
-    content.imageToTextPadding = 16
     return content
   }
 
@@ -235,7 +242,7 @@ class SettingsPageViewController: UITableViewController {
   private func valueLabel(_ text: String) -> UILabel {
     let label = UILabel()
     label.text = text
-    label.font = .preferredFont(forTextStyle: .body)
+    label.font = .systemFont(ofSize: SettingsList.titleSize)
     label.textColor = Palette.textSecondary
     label.sizeToFit()
     return label
@@ -243,7 +250,7 @@ class SettingsPageViewController: UITableViewController {
 
   private func menuButton(value: String, options: [Option], enabled: Bool) -> UIButton {
     var configuration = UIButton.Configuration.plain()
-    configuration.title = value
+    configuration.attributedTitle = AttributedString(value, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: SettingsList.titleSize)]))
     configuration.image = UIImage(systemName: "chevron.up.chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
     configuration.imagePlacement = .trailing
     configuration.imagePadding = 4
@@ -266,6 +273,67 @@ class SettingsPageViewController: UITableViewController {
   }
 }
 
+/// The official grouped list (components/list/ListGroup.tsx, settings/settings-screen-frame.tsx) on a system
+/// inset-grouped table: 48 pt rows (60 with a subtitle) in 15 pt type, an 18 pt glyph in a 24 pt slot 12 pt
+/// before the text, 13 pt section labels in sentence case and 13 pt notes under a group.
+enum SettingsList {
+  static let titleSize: CGFloat = 15
+  static let subtitleSize: CGFloat = 13
+  static let labelSize: CGFloat = 13
+
+  static func style(_ tableView: UITableView) {
+    tableView.backgroundColor = Palette.bgBase
+    tableView.sectionHeaderTopPadding = 0
+    tableView.sectionHeaderHeight = UITableView.automaticDimension
+    tableView.sectionFooterHeight = UITableView.automaticDimension
+  }
+
+  /// Type and padding for a row's content: one line centres in 48 pt, a title over a subtitle in 60.
+  /// `emphasized` is ListRow's medium title over a subtitle; a switch's or a choice's title stays regular.
+  static func size(_ content: inout UIListContentConfiguration, emphasized: Bool = false) {
+    let twoLine = content.secondaryText != nil && content.prefersSideBySideTextAndSecondaryText == false
+    content.textProperties.font = .systemFont(ofSize: titleSize, weight: twoLine && emphasized ? .medium : .regular)
+    content.secondaryTextProperties.font = .systemFont(ofSize: twoLine ? subtitleSize : titleSize)
+    content.textToSecondaryTextVerticalPadding = 2
+    if content.image != nil { content.imageProperties.reservedLayoutSize = CGSize(width: 24, height: 0) }
+    content.imageToTextPadding = Spacing.md
+    content.directionalLayoutMargins.top = twoLine ? 12 : 15
+    content.directionalLayoutMargins.bottom = twoLine ? 12 : 15
+  }
+
+  /// The space above a group with no label: closer to the bar for the first.
+  static func gap(before section: Int) -> CGFloat { section == 0 ? Spacing.sm : Spacing.lg }
+
+  static func header(_ title: String, first: Bool) -> UIView {
+    let view = UITableViewHeaderFooterView()
+    var content = UIListContentConfiguration.groupedHeader()
+    content.text = title
+    content.textProperties.font = .systemFont(ofSize: labelSize, weight: .medium)
+    content.textProperties.color = Palette.textSecondary
+    content.textProperties.transform = .none
+    content.textProperties.numberOfLines = 1
+    content.directionalLayoutMargins.top = first ? Spacing.sm + Spacing.xs : Spacing.lg
+    content.directionalLayoutMargins.bottom = 6
+    view.contentConfiguration = content
+    return view
+  }
+
+  static func footer(_ text: String) -> UIView {
+    let view = UITableViewHeaderFooterView()
+    var content = UIListContentConfiguration.groupedFooter()
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.minimumLineHeight = 18
+    paragraph.maximumLineHeight = 18
+    content.attributedText = NSAttributedString(
+      string: text,
+      attributes: [.font: UIFont.systemFont(ofSize: labelSize), .foregroundColor: Palette.textSecondary, .paragraphStyle: paragraph])
+    content.directionalLayoutMargins.top = Spacing.sm
+    content.directionalLayoutMargins.bottom = 0
+    view.contentConfiguration = content
+    return view
+  }
+}
+
 /// A row whose control sits under its title (the official StackedRow): a segmented control or a size slider.
 final class StackedControlCell: UITableViewCell {
   private let titleLabel = UILabel()
@@ -284,9 +352,9 @@ final class StackedControlCell: UITableViewCell {
     super.init(style: style, reuseIdentifier: reuseIdentifier)
     backgroundColor = Palette.bgRaised
     selectionStyle = .none
-    titleLabel.font = .preferredFont(forTextStyle: .body)
+    titleLabel.font = .systemFont(ofSize: SettingsList.titleSize)
     titleLabel.textColor = Palette.textPrimary
-    valueLabel.font = .preferredFont(forTextStyle: .body)
+    valueLabel.font = .systemFont(ofSize: SettingsList.titleSize)
     valueLabel.textColor = Palette.textSecondary
     valueLabel.setContentHuggingPriority(.required, for: .horizontal)
     let header = UIStackView(arrangedSubviews: [titleLabel, valueLabel])
@@ -332,8 +400,8 @@ final class StackedControlCell: UITableViewCell {
     NSLayoutConstraint.activate([
       stack.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
       stack.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
-      stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: Spacing.md),
-      stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -Spacing.md),
+      stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: Spacing.sm + 4),
+      stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -(Spacing.sm + 4)),
     ])
   }
 

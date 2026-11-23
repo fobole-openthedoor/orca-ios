@@ -62,7 +62,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate {
     super.viewDidLoad()
     title = HomeTab.bots.title
     view.backgroundColor = Palette.bgBase
-    navigationItem.largeTitleDisplayMode = .always
+    navigationItem.largeTitleDisplayMode = .inline
     let add = UIBarButtonItem(
       image: Lucide.plus.image(size: 20, strokeWidth: 2),
       primaryAction: UIAction { [weak self] _ in self?.newBot() })

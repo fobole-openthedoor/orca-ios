@@ -46,7 +46,7 @@ final class AgentsViewController: UIViewController {
     super.viewDidLoad()
     title = HomeTab.agents.title
     view.backgroundColor = Palette.bgBase
-    navigationItem.largeTitleDisplayMode = .always
+    navigationItem.largeTitleDisplayMode = .inline
     search.searchBar.placeholder = String(localized: "agents.search.placeholder", defaultValue: "Search agents")
     search.searchResultsUpdater = self
     search.obscuresBackgroundDuringPresentation = false
@@ -194,11 +194,12 @@ struct AgentCardConfiguration: UIContentConfiguration {
 
 private final class AgentCardView: UIView, UIContentView {
   private let dot = AgentStatusDot()
-  private let title = TextLabel(size: 16, lineHeight: 22)
-  private let time = TextLabel(size: 14, color: Palette.textMuted, tabular: true)
-  private let detail = TextLabel(size: 15, color: Palette.textSecondary, lineHeight: 20, lines: 2)
-  private let mark = FilledIconView(size: 14)
-  private let workspace = TextLabel(size: 14, color: Palette.textMuted)
+  // agents/MobileAgentListRows.tsx: title 15/20, time 12, preview 14/19, place 12 under a 13 pt mark.
+  private let title = TextLabel(size: 15, lineHeight: 20)
+  private let time = TextLabel(size: 12, color: Palette.textMuted, tabular: true)
+  private let detail = TextLabel(size: 14, color: Palette.textSecondary, lineHeight: 19, lines: 2)
+  private let mark = FilledIconView(size: 13)
+  private let workspace = TextLabel(size: 12, color: Palette.textMuted)
 
   var configuration: UIContentConfiguration { didSet { apply() } }
 
@@ -217,17 +218,17 @@ private final class AgentCardView: UIView, UIContentView {
       dot.centerXAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg + 6),
       dot.centerYAnchor.constraint(equalTo: title.centerYAnchor),
       title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg + 24),
-      title.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.md),
+      title.topAnchor.constraint(equalTo: topAnchor, constant: 9),
       time.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: Spacing.sm),
-      time.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
+      time.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
       time.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
       detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-      detail.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.md),
-      detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+      detail.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+      detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 3),
       footer.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-      footer.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Spacing.lg),
-      footer.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 4),
-      footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.md),
+      footer.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
+      footer.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 3),
+      footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
     ])
     apply()
   }

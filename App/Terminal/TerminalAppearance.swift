@@ -98,6 +98,39 @@ extension UIColor {
 /// a path on the phone, and the long-press menu's Paste takes the same route.
 final class OrcaTerminalView: TerminalView {
   var onPaste: (() -> Bool)?
+  /// Presses that went down in the current run-loop turn, while a composing input mode (Pinyin, Kana, Hangul)
+  /// is active.
+  private var pressesThisTurn: Set<UIPress> = []
+
+  // Under a composing input mode Ghostty loans a printable key to the input method and, for the process's
+  // first such key, finds out at the next run-loop turn whether the system handed it over. If the key is
+  // already up by then (a quick tap, or synthetic typing), it is passed on without its event, the input
+  // method never takes it, and the claim of the next key discards it: "echo" arrived as "cho". Holding a
+  // release that lands in the same turn as its press until after that check keeps the press down for it.
+  override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    super.pressesBegan(presses, with: event)
+    guard Self.composes(textInputMode) else {
+      return
+    }
+    if pressesThisTurn.isEmpty {
+      DispatchQueue.main.async { [weak self] in self?.pressesThisTurn.removeAll() }
+    }
+    pressesThisTurn.formUnion(presses)
+  }
+
+  override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    guard !pressesThisTurn.isDisjoint(with: presses) else {
+      super.pressesEnded(presses, with: event)
+      return
+    }
+    // Queued after Ghostty's own check, which pressesBegan queued first.
+    DispatchQueue.main.async { super.pressesEnded(presses, with: event) }
+  }
+
+  private static func composes(_ mode: UITextInputMode?) -> Bool {
+    let language = mode?.primaryLanguage?.lowercased() ?? ""
+    return language.hasPrefix("zh") || language.hasPrefix("ja") || language.hasPrefix("ko")
+  }
 
   override func paste(_ sender: Any?) {
     if onPaste?() != true {

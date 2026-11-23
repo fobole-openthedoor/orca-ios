@@ -24,7 +24,7 @@ final class FeedViewController: UIViewController {
     super.viewDidLoad()
     title = HomeTab.feed.title
     view.backgroundColor = Palette.bgBase
-    navigationItem.largeTitleDisplayMode = .always
+    navigationItem.largeTitleDisplayMode = .inline
     let settings = UIBarButtonItem(
       image: Lucide.settings.image(size: 22, strokeWidth: 2),
       primaryAction: UIAction { [weak self] _ in
@@ -119,6 +119,9 @@ final class FeedViewController: UIViewController {
       content.image = Lucide.plus.image(size: 18, strokeWidth: 2)
       content.imageProperties.tintColor = Palette.accentBlue
       content.imageToTextPadding = 10
+      // home-list-styles.ts actionRow: 44 pt tall, 16 pt in from the group.
+      content.axesPreservingSuperviewLayoutMargins = []
+      content.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 12, leading: Spacing.lg, bottom: 12, trailing: Spacing.lg)
       cell.contentConfiguration = content
       cell.backgroundConfiguration = Self.rowBackground()
     }
