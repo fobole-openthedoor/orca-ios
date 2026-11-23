@@ -82,4 +82,20 @@ import Testing
     #expect(decoder.decode(Self.frame(99)) == .failed(message: "Unsupported terminal stream frame (opcode 99)."))
     #expect(decoder.decode(Self.frame(6, Array("gone".utf8))) == .failed(message: "gone"))
   }
+
+  @Test func readsGoalTransitionsFromStatusRows() {
+    let set = TranscriptItem([
+      "itemId": "g1", "sequence": 3,
+      "body": [
+        "kind": "status", "text": "Goal set",
+        "threadGoal": ["state": "set", "goal": ["objective": "Ship it", "status": "active", "timeUsedSeconds": 12, "tokensUsed": 40]],
+      ],
+    ])
+    #expect(set?.goalChange == .set(ChatOptions.Goal(objective: "Ship it", status: "active", timeUsedSeconds: 12, tokensUsed: 40)))
+    let cleared = TranscriptItem(["itemId": "g2", "body": ["kind": "status", "text": "Goal cleared", "threadGoal": ["state": "cleared"]]])
+    #expect(cleared?.goalChange == .cleared)
+    let plain = TranscriptItem(["itemId": "s", "body": ["kind": "status", "text": "Compacted", "contextClear": ["reason": "clear"]]])
+    #expect(plain?.goalChange == nil)
+    #expect(plain?.clearsContext == true)
+  }
 }

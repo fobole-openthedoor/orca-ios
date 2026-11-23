@@ -29,6 +29,8 @@ public struct ChatOptions: Sendable, Equatable {
   public var planModeSupported: Bool
   /// The thread's goal, when the agent keeps one (`/goal`).
   public var goal: Goal?
+  /// The host changes goals itself (pause, resume, clear); otherwise only the agent's `/goal clear` does.
+  public var goalsChangeable = false
   /// How full the context window is, as last learned (agent-session-context-usage.ts).
   public var contextUsage: ContextUsage?
 
@@ -85,6 +87,14 @@ public struct ChatOptions: Sendable, Equatable {
     /// The host changes it (agentSession.threadGoal: pause, resume, clear); otherwise only the agent's own
     /// `/goal clear` reaches it, and there is no pause (agent-session-thread-goal-report.ts).
     public var hostChanges: Bool = false
+
+    public init(objective: String, status: String, timeUsedSeconds: Double, tokensUsed: Int, hostChanges: Bool = false) {
+      self.objective = objective
+      self.status = status
+      self.timeUsedSeconds = timeUsedSeconds
+      self.tokensUsed = tokensUsed
+      self.hostChanges = hostChanges
+    }
   }
 
   public init(_ json: JSONValue) {
@@ -114,6 +124,7 @@ public struct ChatOptions: Sendable, Equatable {
     fastModeSupported = json["fastModeSupport"]?["supported"]?.boolValue ?? false
     planModeSupported = current?["interactionMode"] != nil
     contextUsage = ContextUsage(json["contextUsage"]?["current"])
+    goalsChangeable = json["threadGoal"] != nil && json["threadGoal"] != .null
     if let raw = json["threadGoal"]?["current"] ?? json["reportedThreadGoal"]?["current"], let objective = raw["objective"]?.stringValue {
       goal = Goal(
         objective: objective, status: raw["status"]?.stringValue ?? "active",

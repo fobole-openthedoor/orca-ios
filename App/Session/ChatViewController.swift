@@ -227,7 +227,7 @@ final class ChatViewController: UIViewController {
     if lastWorking == true, !model.isWorking { Task { await model.refreshOptions() } }
     lastWorking = model.isWorking
     dock.show(
-      tasks: model.transcript.backgroundTasks, stopsAll: model.transcript.stopsBackgroundTasks, goal: model.options?.goal,
+      tasks: model.transcript.backgroundTasks, stopsAll: model.transcript.stopsBackgroundTasks, goal: model.goal,
       queued: model.transcript.queuedMessages)
     view.setNeedsLayout()
     presentNewPrompt()

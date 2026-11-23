@@ -89,6 +89,26 @@ public final class ChatSessionModel {
     return transcript.items.compactMap(\.agentId).filter { seen.insert($0).inserted }
   }
 
+  /// The thread's goal as of now (agent-session-goal-check-display.ts): the newest goal transition in the
+  /// loaded journal wins over the options read when the chat opened, so a goal met, paused or cleared shows
+  /// at once; a context clear after the last transition leaves none.
+  public var goal: ChatOptions.Goal? {
+    let hostChanges = options?.goalsChangeable ?? false
+    for item in transcript.items.reversed() where item.agentId == nil {
+      if item.clearsContext { return nil }
+      switch item.goalChange {
+      case .set(var goal)?:
+        goal.hostChanges = hostChanges
+        return goal.status == "complete" ? nil : goal
+      case .cleared?: return nil
+      case nil: continue
+      }
+    }
+    guard var goal = options?.goal, goal.status != "complete" else { return nil }
+    goal.hostChanges = hostChanges
+    return goal
+  }
+
   public var isWorking: Bool {
     transcript.isWorking
   }
@@ -204,7 +224,7 @@ public final class ChatSessionModel {
   /// Pauses, resumes or clears the thread's goal: through the host when it keeps the goal
   /// (agentSession.threadGoal), else by sending the agent its own `/goal clear`.
   public func changeGoal(_ change: GoalChange) async -> String? {
-    guard let goal = options?.goal else { return nil }
+    guard let goal = self.goal else { return nil }
     guard goal.hostChanges else {
       guard case .clear = change else { return nil }
       await send(text: "/goal clear", attachments: [])

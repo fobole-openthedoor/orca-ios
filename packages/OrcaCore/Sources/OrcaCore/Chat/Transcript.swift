@@ -249,6 +249,15 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
   /// The text was cut for the wire; the whole item is read on demand.
   public var shortened: Bool
   public var body: Body
+  /// On a goal transition row: the goal it set, or `.cleared` (agent-session-journal-types.ts threadGoal).
+  public var goalChange: GoalChange?
+  /// The row starts a fresh context (a /clear): whatever goal was before it no longer holds.
+  public var clearsContext: Bool
+
+  public enum GoalChange: Sendable, Equatable {
+    case set(ChatOptions.Goal)
+    case cleared
+  }
 
   public init?(_ json: JSONValue) {
     guard let id = json["itemId"]?.stringValue, let body = json["body"] else {
@@ -260,6 +269,19 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     sequenceIndex = json["sequenceIndex"]?.intValue ?? 0
     observedAt = json["observedAt"]?.doubleValue ?? 0
     agentId = json["agentId"]?.stringValue
+    let rawBody = json["body"]
+    clearsContext = rawBody?["contextClear"] != nil && rawBody?["contextClear"] != .null
+    switch rawBody?["threadGoal"]?["state"]?.stringValue {
+    case "set":
+      if let goal = rawBody?["threadGoal"]?["goal"], let objective = goal["objective"]?.stringValue {
+        goalChange = .set(
+          ChatOptions.Goal(
+            objective: objective, status: goal["status"]?.stringValue ?? "active",
+            timeUsedSeconds: goal["timeUsedSeconds"]?.doubleValue ?? 0, tokensUsed: goal["tokensUsed"]?.intValue ?? 0))
+      }
+    case "cleared": goalChange = .cleared
+    default: break
+    }
     shortened = json["shortened"]?.boolValue ?? false
     self.body = Self.body(body)
   }
