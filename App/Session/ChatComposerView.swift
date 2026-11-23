@@ -41,6 +41,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   /// The composer: one line at rest (+, the field, the mic and send), a card with its controls row while
   /// editing or holding a draft, and, dragged up by its grabber, the whole screen for writing.
   private let row = UIStackView()
+  /// The row's flexible gap; in the one-line state the field fills it, whichever controls follow.
+  private let rowSpacer = UIView()
   private let grabber = UIView()
   private let grabberArea = UIView()
   private var expandedSet: [NSLayoutConstraint] = []
@@ -121,7 +123,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     // Holding send while the agent works offers the other way to send (MobileNativeChatSendButton.tsx).
     sendButton.addInteraction(UIContextMenuInteraction(delegate: self))
 
-    [attach, modelChip, UIView(), contextRing, mic, sendButton].forEach { row.addArrangedSubview($0) }
+    [attach, modelChip, rowSpacer, contextRing, mic, sendButton].forEach { row.addArrangedSubview($0) }
     row.axis = .horizontal
     row.alignment = .center
     row.spacing = Spacing.sm
@@ -195,7 +197,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     // At rest: one line, the field between + and the mic.
     collapsedSet = [
       textView.leadingAnchor.constraint(equalTo: attach.trailingAnchor, constant: Spacing.xs),
-      textView.trailingAnchor.constraint(equalTo: contextRing.leadingAnchor, constant: -Spacing.xs),
+      textView.trailingAnchor.constraint(equalTo: rowSpacer.trailingAnchor, constant: -Spacing.xs),
       textView.centerYAnchor.constraint(equalTo: row.centerYAnchor),
       row.topAnchor.constraint(equalTo: surface.contentView.topAnchor, constant: Spacing.sm),
     ]

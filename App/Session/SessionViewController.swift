@@ -56,7 +56,20 @@ final class SessionViewController: UIViewController {
       navigationItem.rightBarButtonItems = [more, branch]
     }
 
-    strip.tabsMenu = { [weak self] in self?.tabsMenu() ?? UIMenu() }
+    strip.onSelect = { [weak self] tab in
+      guard let self else { return }
+      self.show(tab)
+      self.updateStrip()
+      let api = self.session.api
+      let selector = self.selector
+      Task { await api.activateTab(tab.id, worktree: selector) }
+    }
+    strip.onClose = { [weak self] tab in
+      guard let self else { return }
+      let api = self.session.api
+      let selector = self.selector
+      self.run { try await api.closeTab(tab.id, worktree: selector) }
+    }
     strip.newTabMenu = { [weak self] in self?.newTabMenu() ?? UIMenu() }
     content.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(content)
@@ -140,7 +153,7 @@ final class SessionViewController: UIViewController {
   private func updateStrip() {
     let active = tabs.tabs.first { $0.id == shownTabId }
     let agentState = session.worktree(id: worktreeId)?.agents.first?.state
-    strip.show(tab: active, tabCount: tabs.tabs.count, agentState: agentState, botHome: bot != nil)
+    strip.show(tabs: tabs.tabs, shownId: active?.id, agentState: agentState, botHome: bot != nil)
   }
 
   private func show(_ tab: SessionTab?) {
@@ -284,30 +297,6 @@ final class SessionViewController: UIViewController {
       self.apply(self.tabs)
     }
     navigationController?.pushViewController(items, animated: true)
-  }
-
-  /// The open tabs, the shown one checked; the shown one can also be closed.
-  private func tabsMenu() -> UIMenu {
-    let api = session.api
-    let selector = selector
-    let open = tabs.tabs.map { tab in
-      UIAction(title: tab.title.isEmpty ? String(localized: "session.header.terminalTitle", defaultValue: "Terminal") : tab.title,
-        image: Self.icon(for: tab), state: tab.id == shownTabId ? .on : .off
-      ) { [weak self] _ in
-        self?.show(tab)
-        self?.updateStrip()
-        Task { await api.activateTab(tab.id, worktree: selector) }
-      }
-    }
-    var children: [UIMenuElement] = [UIMenu(options: .displayInline, children: open)]
-    if let shown = shownTabId {
-      children.append(
-        UIAction(
-          title: String(localized: "session.bulkTabClose.confirm", defaultValue: "Close tab"),
-          image: Lucide.x.image(size: 18), attributes: .destructive
-        ) { [weak self] _ in self?.run { try await api.closeTab(shown, worktree: selector) } })
-    }
-    return UIMenu(children: children)
   }
 
   /// A terminal, or a chat with an agent.
