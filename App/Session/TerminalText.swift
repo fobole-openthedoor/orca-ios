@@ -7,10 +7,13 @@ enum TerminalText {
   static let background = UIColor(red: 0x1a / 255, green: 0x1b / 255, blue: 0x26 / 255, alpha: 1)
   static let foreground = UIColor(red: 0xc0 / 255, green: 0xca / 255, blue: 0xf5 / 255, alpha: 1)
 
-  private static let palette: [UIColor] = [
+  private static let hexPalette: [UInt32] = [
     0x15161e, 0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xa9b1d6,
     0x414868, 0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xc0caf5,
-  ].map { UIColor(red: CGFloat($0 >> 16 & 0xff) / 255, green: CGFloat($0 >> 8 & 0xff) / 255, blue: CGFloat($0 & 0xff) / 255, alpha: 1) }
+  ]
+  private static let palette: [UIColor] = hexPalette.map { (hex: UInt32) -> UIColor in
+    UIColor(red: CGFloat(hex >> 16 & 0xff) / 255, green: CGFloat(hex >> 8 & 0xff) / 255, blue: CGFloat(hex & 0xff) / 255, alpha: 1)
+  }
 
   static func render(command: String?, output: String, size: CGFloat = 12) -> NSAttributedString {
     let regular = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
