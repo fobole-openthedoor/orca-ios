@@ -36,6 +36,9 @@ public struct ChatOptions: Sendable, Equatable {
     public var status: String
     public var timeUsedSeconds: Double
     public var tokensUsed: Int
+    /// The host changes it (agentSession.threadGoal: pause, resume, clear); otherwise only the agent's own
+    /// `/goal clear` reaches it, and there is no pause (agent-session-thread-goal-report.ts).
+    public var hostChanges: Bool = false
   }
 
   public init(_ json: JSONValue) {
@@ -67,7 +70,8 @@ public struct ChatOptions: Sendable, Equatable {
     if let raw = json["threadGoal"]?["current"] ?? json["reportedThreadGoal"]?["current"], let objective = raw["objective"]?.stringValue {
       goal = Goal(
         objective: objective, status: raw["status"]?.stringValue ?? "active",
-        timeUsedSeconds: raw["timeUsedSeconds"]?.doubleValue ?? 0, tokensUsed: raw["tokensUsed"]?.intValue ?? 0)
+        timeUsedSeconds: raw["timeUsedSeconds"]?.doubleValue ?? 0, tokensUsed: raw["tokensUsed"]?.intValue ?? 0,
+        hostChanges: json["threadGoal"] != nil)
     }
   }
 

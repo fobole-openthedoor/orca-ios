@@ -1,16 +1,18 @@
 import OrcaCore
 import UIKit
 
-/// The strips docked above the composer (MobileNativeChatBackgroundTasks, MobileNativeChatThreadGoalStrip):
-/// the agent's background work and its goal, each one line that opens in place.
+/// What runs beside the chat (MobileNativeChatBackgroundTasks, MobileNativeChatThreadGoalStrip), as one glass
+/// toolbar above the composer: a segment per kind of background task ("2 个智能体", "1 个 shell") and one
+/// for the goal. Each segment opens a native menu; stopping or clearing anything takes a second tap in a
+/// submenu, so a stray touch never ends work.
 final class ChatDockView: UIView {
   var onStop: ((String?) -> Void)?
+  /// A task was picked to look at: open the call that started it.
+  var onOpen: ((BackgroundTask) -> Void)?
+  var onGoal: ((ChatSessionModel.GoalChange) -> Void)?
 
-  private let stack = UIStackView()
-  private let tasksStrip = DockStrip()
-  private let goalStrip = DockStrip()
-  private var tasksOpen = false
-  private var goalOpen = false
+  private let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+  private let row = UIStackView()
   private var tasks: [BackgroundTask] = []
   private var stopsAll = false
   private var goal: ChatOptions.Goal?
@@ -18,26 +20,23 @@ final class ChatDockView: UIView {
   init() {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
-    stack.axis = .vertical
-    stack.spacing = Spacing.sm
-    stack.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(stack)
+    glass.cornerConfiguration = .capsule()
+    glass.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(glass)
+    row.spacing = 2
+    row.alignment = .center
+    row.translatesAutoresizingMaskIntoConstraints = false
+    glass.contentView.addSubview(row)
     NSLayoutConstraint.activate([
-      stack.topAnchor.constraint(equalTo: topAnchor),
-      stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm),
-      stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
-      stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
+      glass.topAnchor.constraint(equalTo: topAnchor),
+      glass.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm),
+      glass.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
+      glass.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Spacing.lg),
+      glass.heightAnchor.constraint(equalToConstant: 40),
+      row.leadingAnchor.constraint(equalTo: glass.contentView.leadingAnchor, constant: 6),
+      row.trailingAnchor.constraint(equalTo: glass.contentView.trailingAnchor, constant: -6),
+      row.centerYAnchor.constraint(equalTo: glass.contentView.centerYAnchor),
     ])
-    stack.addArrangedSubview(tasksStrip)
-    stack.addArrangedSubview(goalStrip)
-    tasksStrip.onToggle = { [weak self] in
-      self?.tasksOpen.toggle()
-      self?.redraw()
-    }
-    goalStrip.onToggle = { [weak self] in
-      self?.goalOpen.toggle()
-      self?.redraw()
-    }
     redraw()
   }
 
@@ -52,91 +51,158 @@ final class ChatDockView: UIView {
   }
 
   private func redraw() {
-    tasksStrip.isHidden = tasks.isEmpty
-    if !tasks.isEmpty {
-      var lines: [UIView] = []
-      if tasksOpen {
-        lines = tasks.map { task in taskRow(task) }
-        if stopsAll && tasks.count > 1 {
-          var stop = UIButton.Configuration.plain()
-          stop.title = String(localized: "session.backgroundTask.stopAll", defaultValue: "Stop background tasks")
-          stop.baseForegroundColor = Palette.statusRed
-          stop.contentInsets = .init(top: 6, leading: 0, bottom: 2, trailing: 0)
-          let button = UIButton(configuration: stop, primaryAction: UIAction { [weak self] _ in self?.onStop?(nil) })
-          button.contentHorizontalAlignment = .leading
-          lines.append(button)
-        }
-      }
-      tasksStrip.show(icon: .bot, title: Self.summary(tasks), subtitle: nil, open: tasksOpen, body: lines)
+    row.arrangedSubviews.forEach { $0.removeFromSuperview() }
+    var segments: [UIView] = []
+    // Agents, shells, then everything else the host runs in the background, in the official order.
+    let groups: [(kinds: Set<String>?, key: String, icon: Lucide)] = [
+      (["agent"], "session.backgroundTask.countAgents", .bot),
+      (["command"], "session.backgroundTask.countShell", .squareTerminal),
+      (["monitor"], "session.backgroundTask.countMonitors", .activity),
+      (["workflow"], "session.backgroundTask.countWorkflows", .workflow),
+      (nil, "session.backgroundTask.countTasks", .listTodo),
+    ]
+    let known: Set<String> = ["agent", "command", "monitor", "workflow"]
+    for group in groups {
+      let members = tasks.filter { group.kinds?.contains($0.kind) ?? !known.contains($0.kind) }
+      guard !members.isEmpty else { continue }
+      let title = String(format: Bundle.main.localizedString(forKey: group.key, value: "%lld", table: nil), members.count)
+      segments.append(segment(icon: group.icon, title: title, menu: taskMenu(members)))
     }
-    goalStrip.isHidden = goal == nil
-    if let goal {
-      let status: String
-      switch goal.status {
-      case "paused": status = String(localized: "chat.goal.paused", defaultValue: "Paused goal")
-      case "blocked": status = String(localized: "chat.goal.blocked", defaultValue: "Goal blocked")
-      case "limited", "budget_limited": status = String(localized: "chat.goal.limited", defaultValue: "Goal limited")
-      case "active": status = String(localized: "chat.goal.pursuing", defaultValue: "Pursuing goal")
-      default: status = String(localized: "chat.goal.set", defaultValue: "Goal set")
+    if let goal { segments.append(goalSegment(goal)) }
+    for (index, segment) in segments.enumerated() {
+      if index > 0 {
+        let divider = UIView()
+        divider.backgroundColor = Palette.borderSubtle
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+          divider.widthAnchor.constraint(equalToConstant: 1), divider.heightAnchor.constraint(equalToConstant: 18),
+        ])
+        row.addArrangedSubview(divider)
       }
-      let time = goal.timeUsedSeconds > 0 ? WorkSummaryView.duration(Int(goal.timeUsedSeconds)) : nil
-      var body: [UIView] = []
-      if goalOpen {
-        let full = TextLabel(size: 14, color: Palette.textSecondary, lines: 0)
-        full.text = goal.objective
-        body = [full]
-      }
-      goalStrip.show(icon: .goal, title: status, subtitle: goalOpen ? nil : goal.objective, trailing: time, open: goalOpen, body: body)
+      row.addArrangedSubview(segment)
     }
-    isHidden = tasks.isEmpty && goal == nil
+    isHidden = segments.isEmpty
   }
 
-  /// "3 个智能体 · 1 个 shell": counts by kind, as the official strip says them.
-  private static func summary(_ tasks: [BackgroundTask]) -> String {
-    var counts: [(String, Int)] = []
-    for kind in ["agent", "command", "monitor", "workflow", "unknown"] {
-      let count = tasks.filter { ($0.kind == kind) || (kind == "unknown" && !["agent", "command", "monitor", "workflow"].contains($0.kind)) }.count
-      if count > 0 { counts.append((kind, count)) }
-    }
-    return counts.map { kind, count in
-      let key: String
-      switch kind {
-      case "agent": key = "session.backgroundTask.countAgents"
-      case "command": key = "session.backgroundTask.countShell"
-      case "monitor": key = "session.backgroundTask.countMonitors"
-      case "workflow": key = "session.backgroundTask.countWorkflows"
-      default: key = "session.backgroundTask.countTasks"
-      }
-      return String(format: Bundle.main.localizedString(forKey: key, value: "%lld", table: nil), count)
-    }.joined(separator: " · ")
+  private func segment(icon: Lucide, title: String, color: UIColor = Palette.textPrimary, menu: UIMenu) -> UIButton {
+    var configuration = UIButton.Configuration.plain()
+    configuration.image = icon.image(size: 15, strokeWidth: 2)
+    configuration.imagePadding = 6
+    configuration.baseForegroundColor = color
+    configuration.contentInsets = .init(top: 6, leading: 10, bottom: 6, trailing: 10)
+    configuration.titleLineBreakMode = .byTruncatingTail
+    configuration.attributedTitle = AttributedString(
+      title, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 14, weight: .semibold)]))
+    let button = UIButton(configuration: configuration)
+    button.showsMenuAsPrimaryAction = true
+    // Opening upward must not flip the order: looking comes before stopping.
+    button.preferredMenuElementOrder = .fixed
+    button.menu = menu
+    return button
   }
 
-  private func taskRow(_ task: BackgroundTask) -> UIView {
-    let icon = LucideView(task.kind == "command" ? .squareTerminal : task.kind == "monitor" ? .activity : .bot, size: 14, strokeWidth: 2, color: Palette.textMuted)
-    let label = TextLabel(task.label.isEmpty ? task.kind : task.label, size: 14, color: Palette.textPrimary, lines: 1)
-    label.lineBreakMode = .byTruncatingTail
-    label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+  /// Each task as a submenu: look at it, or stop it. Stopping them all comes last.
+  private func taskMenu(_ members: [BackgroundTask]) -> UIMenu {
+    var children: [UIMenuElement] = members.map { task in
+      var actions: [UIMenuElement] = [
+        UIAction(
+          title: String(localized: "common.open", defaultValue: "Open"), image: Lucide.externalLink.image(size: 18)
+        ) { [weak self] _ in self?.onOpen?(task) }
+      ]
+      if task.stoppable {
+        let id = task.id
+        actions.append(
+          UIAction(
+            title: String(localized: "session.backgroundTask.stop", defaultValue: "Stop"),
+            image: Lucide.circleX.image(size: 18), attributes: .destructive
+          ) { [weak self] _ in
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            self?.onStop?(id)
+          })
+      }
+      let submenu = UIMenu(
+        title: task.label.isEmpty ? task.kind : task.label, image: Self.icon(task).image(size: 18), children: actions)
+      submenu.subtitle = Self.facts(task)
+      return submenu
+    }
+    if stopsAll && tasks.count > 1 {
+      let stopAll = String(localized: "session.backgroundTask.stopAll", defaultValue: "Stop background tasks")
+      children.append(
+        UIMenu(
+          options: .displayInline,
+          children: [
+            UIMenu(
+              title: stopAll, image: Lucide.circleX.image(size: 18), options: .destructive,
+              children: [
+                UIAction(title: stopAll, attributes: .destructive) { [weak self] _ in
+                  UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                  self?.onStop?(nil)
+                }
+              ])
+          ]))
+    }
+    return UIMenu(children: children)
+  }
+
+  private func goalSegment(_ goal: ChatOptions.Goal) -> UIButton {
+    let status: String
+    switch goal.status {
+    case "paused": status = String(localized: "chat.goal.paused", defaultValue: "Paused goal")
+    case "blocked": status = String(localized: "chat.goal.blocked", defaultValue: "Goal blocked")
+    case "limited", "budget_limited": status = String(localized: "chat.goal.limited", defaultValue: "Goal limited")
+    case "active": status = String(localized: "chat.goal.pursuing", defaultValue: "Pursuing goal")
+    default: status = String(localized: "chat.goal.set", defaultValue: "Goal set")
+    }
+    var actions: [UIMenuElement] = []
+    if goal.hostChanges {
+      let paused = goal.status == "paused"
+      actions.append(
+        UIAction(
+          title: paused
+            ? String(localized: "chat.goal.resume", defaultValue: "Resume")
+            : String(localized: "chat.goal.pause", defaultValue: "Pause"),
+          image: (paused ? Lucide.play : Lucide.pause).image(size: 18)
+        ) { [weak self] _ in self?.onGoal?(paused ? .resume : .pause) })
+    }
+    let clear = String(localized: "chat.goal.clear", defaultValue: "Clear goal")
+    actions.append(
+      UIMenu(
+        title: clear, image: Lucide.circleX.image(size: 18), options: .destructive,
+        children: [
+          UIAction(title: clear, attributes: .destructive) { [weak self] _ in
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            self?.onGoal?(.clear)
+          }
+        ]))
+    // The menu's title carries the whole objective, with the time spent on it.
+    var heading = goal.objective
+    if goal.timeUsedSeconds > 0 { heading += "\n" + WorkSummaryView.duration(Int(goal.timeUsedSeconds)) }
+    let button = segment(
+      icon: .goal, title: status, color: goal.status == "active" ? Palette.textPrimary : Palette.statusAmber,
+      menu: UIMenu(title: heading, children: actions))
+    button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    return button
+  }
+
+  private static func icon(_ task: BackgroundTask) -> Lucide {
+    switch task.kind {
+    case "command": .squareTerminal
+    case "monitor": .activity
+    case "workflow": .workflow
+    default: .bot
+    }
+  }
+
+  /// How long it has run and what it has spent, as the official strip writes them.
+  private static func facts(_ task: BackgroundTask) -> String? {
     var facts: [String] = []
     if let started = task.startedAt, started > 0 {
       facts.append(WorkSummaryView.duration(max(1, Int(Date().timeIntervalSince1970 - started / 1000))))
     }
     if let tokens = task.totalTokens, tokens > 0 {
-      facts.append(String(format: String(localized: "chat.subagentGroup.tokens", defaultValue: "%@ tokens"), Self.compact(tokens)))
+      facts.append(String(format: String(localized: "chat.subagentGroup.tokens", defaultValue: "%@ tokens"), compact(tokens)))
     }
-    let meta = TextLabel(facts.joined(separator: " · "), size: 13, color: Palette.textMuted, tabular: true)
-    let row = UIStackView(arrangedSubviews: [icon, label, meta])
-    row.spacing = Spacing.sm
-    row.alignment = .center
-    if task.stoppable {
-      var stop = UIButton.Configuration.plain()
-      stop.title = String(localized: "session.backgroundTask.stop", defaultValue: "Stop")
-      stop.baseForegroundColor = Palette.statusRed
-      stop.contentInsets = .init(top: 4, leading: 6, bottom: 4, trailing: 0)
-      let id = task.id
-      row.addArrangedSubview(UIButton(configuration: stop, primaryAction: UIAction { [weak self] _ in self?.onStop?(id) }))
-    }
-    row.heightAnchor.constraint(greaterThanOrEqualToConstant: 32).isActive = true
-    return row
+    return facts.isEmpty ? nil : facts.joined(separator: " · ")
   }
 
   /// 293600 as "293.6k", as the official strip writes token counts.
@@ -146,69 +212,5 @@ final class ChatDockView: UIView {
     case ..<1_000_000: return String(format: "%.1fk", Double(value) / 1000)
     default: return String(format: "%.1fM", Double(value) / 1_000_000)
     }
-  }
-}
-
-/// One docked strip: a glass capsule with an icon, a title, an optional muted line and a chevron; its
-/// body opens below the title.
-private final class DockStrip: UIView {
-  var onToggle: (() -> Void)?
-  private let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-  private let icon = LucideView(.bot, size: 15, strokeWidth: 2, color: Palette.textSecondary)
-  private let title = TextLabel(size: 14, weight: .semibold, color: Palette.textPrimary, lines: 1)
-  private let subtitle = TextLabel(size: 14, color: Palette.textSecondary, lines: 1)
-  private let trailing = TextLabel(size: 13, color: Palette.textMuted, tabular: true)
-  private let chevron = LucideView(.chevronDown, size: 14, strokeWidth: 2, color: Palette.textMuted)
-  private let body = UIStackView()
-
-  init() {
-    super.init(frame: .zero)
-    glass.cornerConfiguration = .uniformCorners(radius: .fixed(Radius.surface))
-    glass.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(glass)
-    glass.pin(to: self)
-    subtitle.lineBreakMode = .byTruncatingTail
-    subtitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    trailing.setContentCompressionResistancePriority(.required, for: .horizontal)
-    let head = UIStackView(arrangedSubviews: [icon, title, subtitle, UIView(), trailing, chevron])
-    head.spacing = Spacing.sm
-    head.alignment = .center
-    head.heightAnchor.constraint(greaterThanOrEqualToConstant: 26).isActive = true
-    body.axis = .vertical
-    body.spacing = 2
-    let column = UIStackView(arrangedSubviews: [head, body])
-    column.axis = .vertical
-    column.spacing = Spacing.xs
-    column.translatesAutoresizingMaskIntoConstraints = false
-    glass.contentView.addSubview(column)
-    NSLayoutConstraint.activate([
-      column.topAnchor.constraint(equalTo: glass.contentView.topAnchor, constant: 10),
-      column.bottomAnchor.constraint(equalTo: glass.contentView.bottomAnchor, constant: -10),
-      column.leadingAnchor.constraint(equalTo: glass.contentView.leadingAnchor, constant: 14),
-      column.trailingAnchor.constraint(equalTo: glass.contentView.trailingAnchor, constant: -14),
-    ])
-    let tap = UITapGestureRecognizer(target: self, action: #selector(toggle))
-    head.addGestureRecognizer(tap)
-    isAccessibilityElement = false
-  }
-
-  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-  @objc private func toggle() {
-    UISelectionFeedbackGenerator().selectionChanged()
-    onToggle?()
-  }
-
-  func show(icon glyph: Lucide, title text: String, subtitle line: String?, trailing extra: String? = nil, open: Bool, body views: [UIView]) {
-    icon.icon = glyph
-    title.text = text
-    subtitle.text = line
-    subtitle.isHidden = (line ?? "").isEmpty
-    trailing.text = extra
-    trailing.isHidden = (extra ?? "").isEmpty
-    chevron.transform = open ? CGAffineTransform(rotationAngle: .pi) : .identity
-    body.arrangedSubviews.forEach { $0.removeFromSuperview() }
-    views.forEach { body.addArrangedSubview($0) }
-    body.isHidden = views.isEmpty
   }
 }

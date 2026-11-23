@@ -218,6 +218,16 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     }
   }
 
+  /// What is typed, unsent.
+  var draftText: String { textView.text ?? "" }
+
+  /// Puts a saved draft back, without raising the keyboard.
+  func restore(text: String, attachments saved: [OutgoingAttachment]) {
+    textView.text = text
+    attachments = saved
+    refresh()
+  }
+
   /// Puts text in the field (a rewound message, ready to edit), with the keyboard up.
   func setText(_ value: String) {
     textView.text = value

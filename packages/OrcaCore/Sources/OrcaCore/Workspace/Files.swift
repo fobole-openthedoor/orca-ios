@@ -62,6 +62,18 @@ public enum FilePreviewContent: Sendable, Equatable {
   case binary
 }
 
+/// What `resolvePath` found.
+public enum ResolvedPath: Sendable, Equatable {
+  /// Outside every workspace: readable through the terminal-artifact calls with this grant.
+  public struct Grant: Sendable, Equatable {
+    public var absolutePath: String
+    public var grantId: String
+  }
+
+  case worktree(worktreeId: String, relativePath: String, isDirectory: Bool)
+  case absolute(Grant)
+}
+
 /// `files.stat`.
 public struct FileStat: Sendable, Equatable {
   public var size: Int
@@ -102,17 +114,25 @@ extension HostAPI {
   }
 
   /// Reads a file for preview: images through `files.readPreview` (base64), everything else through `files.read`.
-  /// A binary file comes back as `.binary`; the host's `binary_file` refusal is folded into that too.
-  public func readFilePreview(worktreeId: String, path: String, asImage: Bool) async throws -> FilePreviewContent {
+  /// A file outside the workspace that `resolvePath` granted is read through the terminal-artifact calls
+  /// instead. A binary file comes back as `.binary`; the host's `binary_file` refusal is folded into that too.
+  public func readFilePreview(
+    worktreeId: String, path: String, asImage: Bool, artifact: ResolvedPath.Grant? = nil
+  ) async throws -> FilePreviewContent {
+    let params: JSONValue =
+      artifact.map {
+        ["worktree": .string("id:\(worktreeId)"), "absolutePath": .string($0.absolutePath), "grantId": .string($0.grantId)]
+      } ?? fileParams(worktreeId, path)
     if asImage {
-      let result = try await connection.request("files.readPreview", fileParams(worktreeId, path))
+      let result = try await connection.request(
+        artifact == nil ? "files.readPreview" : "files.readTerminalArtifactPreview", params)
       guard result["isImage"]?.boolValue == true, let base64 = result["content"]?.stringValue,
         let data = Data(base64Encoded: base64), !data.isEmpty
       else { return .binary }
       return .image(data, mimeType: result["mimeType"]?.stringValue ?? "image/png")
     }
     do {
-      let result = try await connection.request("files.read", fileParams(worktreeId, path))
+      let result = try await connection.request(artifact == nil ? "files.read" : "files.readTerminalArtifact", params)
       if result["isBinary"]?.boolValue == true { return .binary }
       return .text(
         result["content"]?.stringValue ?? "", truncated: result["truncated"]?.boolValue ?? false,
@@ -120,6 +140,29 @@ extension HostAPI {
     } catch let error as RPCError where (error.message + error.code).lowercased().contains("binary_file") {
       return .binary
     }
+  }
+
+  /// Where a path someone wrote points (`files.resolveTerminalPath`, as the official file tap): a file in this
+  /// or a sibling workspace, or a file elsewhere on the desktop with a grant to read it. `~`, absolute and
+  /// relative paths all resolve. Nil when nothing is there.
+  public func resolvePath(worktreeId: String, pathText: String) async throws -> ResolvedPath? {
+    let result = try await connection.request(
+      "files.resolveTerminalPath",
+      ["worktree": .string("id:\(worktreeId)"), "pathText": .string(pathText), "crossWorkspace": .bool(true)])
+    guard result["exists"]?.boolValue == true else { return nil }
+    let target = result["openTarget"]
+    if target?["kind"]?.stringValue == "absolute-file", let path = target?["absolutePath"]?.stringValue,
+      let grant = target?["grantId"]?.stringValue
+    {
+      return .absolute(ResolvedPath.Grant(absolutePath: path, grantId: grant))
+    }
+    let relative =
+      target?["kind"]?.stringValue == "worktree-file"
+      ? target?["relativePath"]?.stringValue : result["relativePath"]?.stringValue
+    guard let relative else { return nil }
+    let worktree = result["worktree"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 } ?? worktreeId
+    return .worktree(
+      worktreeId: worktree, relativePath: relative, isDirectory: result["isDirectory"]?.boolValue ?? false)
   }
 
   /// An image a chat message points at, read the way the official chat reads it: files the agent session

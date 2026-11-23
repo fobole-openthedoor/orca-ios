@@ -15,8 +15,10 @@ enum ChatLine: Hashable {
   case work(turnKey: String)
   /// The agent's words; `final` carries the time and actions row.
   case answer(id: String)
-  /// Consecutive tool calls, keyed by the first call.
+  /// Consecutive tool calls, keyed by the first call; opens in place.
   case run(key: String)
+  /// One call of an opened run.
+  case call(id: String)
   /// Consecutive thoughts, keyed by the first; opens in place.
   case thoughts(key: String)
   case thoughtText(id: String)
@@ -53,7 +55,10 @@ struct ChatProjection {
   /// Questions and approvals still waiting, oldest first.
   var waiting: [String] = []
 
-  init(rows: [ChatRow], expanded: Set<String>, openThoughts: Set<String> = [], transcript: ChatTranscript) {
+  init(
+    rows: [ChatRow], expanded: Set<String>, openThoughts: Set<String> = [], openRuns: Set<String> = [],
+    transcript: ChatTranscript
+  ) {
     // Split the stream into turns: each starts at the person's message (or a pending send).
     struct Turn {
       var key: String
@@ -188,6 +193,12 @@ struct ChatProjection {
         }
       }
       if live { lines.append(.working) }
+    }
+    // An opened run lists its calls under it.
+    for (key, run) in runs where openRuns.contains(key) {
+      if let at = lines.firstIndex(of: .run(key: key)) {
+        lines.insert(contentsOf: run.items.map { ChatLine.call(id: $0.id) }, at: at + 1)
+      }
     }
     // Thought seconds: from a group's first item to whatever follows it.
     for (key, group) in thoughts {
@@ -509,6 +520,10 @@ final class WorkItemView: UIView {
 final class AnswerView: UIView {
   private let blocks = UIStackView()
   private let meta = MessageMetaView(trailing: false, actions: [.copy, .gitFork, .arrowUp])
+  /// The time and actions row ends the view once the turn is over; mid-turn the words end it, so a hidden
+  /// row leaves no gap before the next activity.
+  private lazy var metaAtBottom = meta.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm)
+  private lazy var blocksAtBottom = blocks.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm)
   private var raw = ""
   /// A tapped link or file path in the answer.
   var onOpenURL: ((URL) -> Void)?
@@ -533,7 +548,7 @@ final class AnswerView: UIView {
       meta.topAnchor.constraint(equalTo: blocks.bottomAnchor, constant: 2),
       meta.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
       meta.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
-      meta.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm),
+      metaAtBottom,
     ])
   }
 
@@ -569,6 +584,9 @@ final class AnswerView: UIView {
     }
     meta.set(time: time)
     meta.isHidden = streaming
+    // Release one end before taking the other, so the two never hold at once.
+    (streaming ? metaAtBottom : blocksAtBottom).isActive = false
+    (streaming ? blocksAtBottom : metaAtBottom).isActive = true
   }
 }
 
@@ -598,6 +616,26 @@ final class CodeBlockView: UIView {
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// bot-quiet-result.ts: a bot's answer that ends with NO_REPLY had nothing worth reporting. The marker never
+/// shows; an answer that was only the marker reads "Nothing to report".
+enum BotQuietResult {
+  static let marker = "NO_REPLY"
+  private static let ending = try! NSRegularExpression(pattern: "(?:^|\\s)[`*_]*NO_REPLY[`*_.!]*\\s*$")
+
+  /// The words without their trailing marker(s), and whether there was one.
+  static func strip(_ text: String) -> (words: String, quiet: Bool) {
+    var words = text
+    var quiet = false
+    while let match = ending.firstMatch(in: words, range: NSRange(words.startIndex..., in: words)),
+      let range = Range(match.range, in: words)
+    {
+      quiet = true
+      words = String(words[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return (words, quiet)
+  }
 }
 
 enum ChatClipboard {

@@ -33,12 +33,19 @@ final class FilePreviewViewController: UIViewController, UIScrollViewDelegate, Q
   private var loadTask: Task<Void, Never>?
   private var content: UIView?
   private var imageView: UIImageView?
+  private weak var shareItem: UIBarButtonItem?
 
-  init(session: HostSession, worktreeId: String, path: String) {
+  /// Set for a file outside the workspace that the host granted (a `~/…` or absolute path from a chat).
+  private let artifact: ResolvedPath.Grant?
+
+  init(session: HostSession, worktreeId: String, path: String, artifact: ResolvedPath.Grant? = nil) {
     self.session = session
     self.worktreeId = worktreeId
-    self.path = path
-    kind = Kind(path: path)
+    self.path = artifact?.absolutePath ?? path
+    self.artifact = artifact
+    // Media is copied off the desktop through the workspace's file calls, which a granted file can't use.
+    let kind = Kind(path: self.path)
+    self.kind = artifact != nil && kind == .media ? .text : kind
     super.init(nibName: nil, bundle: nil)
   }
 
@@ -73,10 +80,20 @@ final class FilePreviewViewController: UIViewController, UIScrollViewDelegate, Q
         ) { [path] _ in UIPasteboard.general.string = path },
       ]))
     navigationItem.rightBarButtonItems = [more, share]
+    shareItem = share
     load()
   }
 
   private func share(from item: UIBarButtonItem?) {
+    if artifact != nil {
+      // Only what the preview already holds can leave the phone for a file outside the workspace.
+      let items: [Any] = [imageView?.image as Any?, loadedText as Any?].compactMap { $0 }
+      guard !items.isEmpty else { return }
+      let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
+      sheet.popoverPresentationController?.barButtonItem = item
+      present(sheet, animated: true)
+      return
+    }
     FileShare.share(
       session: session, worktreeId: worktreeId, path: path, fallbackText: loadedText, from: self, source: item)
   }
@@ -92,12 +109,13 @@ final class FilePreviewViewController: UIViewController, UIScrollViewDelegate, Q
     let api = session.api
     let worktreeId = worktreeId
     let path = path
+    let artifact = artifact
     switch kind {
     case .text, .image:
       let asImage = kind == .image
       loadTask = Task { [weak self] in
         do {
-          let preview = try await api.readFilePreview(worktreeId: worktreeId, path: path, asImage: asImage)
+          let preview = try await api.readFilePreview(worktreeId: worktreeId, path: path, asImage: asImage, artifact: artifact)
           guard !Task.isCancelled, let self else { return }
           switch preview {
           case .text(let text, let truncated, let byteLength):
@@ -268,6 +286,12 @@ final class FilePreviewViewController: UIViewController, UIScrollViewDelegate, Q
     var config = UIContentUnavailableConfiguration.empty()
     config.image = Lucide.file.image(size: 32)
     config.text = message
+    // The desktop copies files off only from inside a workspace; a granted file outside one has nothing to share.
+    guard artifact == nil else {
+      contentUnavailableConfiguration = config
+      shareItem?.isEnabled = false
+      return
+    }
     var button = UIButton.Configuration.filled()
     button.title = String(localized: "files.fileShare.share", defaultValue: "Share")
     button.image = Lucide.share.image(size: 16)

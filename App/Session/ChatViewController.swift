@@ -15,6 +15,9 @@ final class ChatViewController: UIViewController {
   private var projection = ChatProjection(rows: [], expanded: [], transcript: ChatTranscript())
   private var expanded: Set<String> = []
   private var openThoughts: Set<String> = []
+  /// Activity lines opened to their calls, and calls opened to their input and output.
+  private var openRuns: Set<String> = []
+  private var openCalls: Set<String> = []
   private var lastWorking: Bool?
   /// Questions this screen already opened on its own; closing one never reopens it unasked.
   private var presentedPrompts: Set<String> = []
@@ -26,6 +29,8 @@ final class ChatViewController: UIViewController {
   /// Fork from a response: a new chat holding this one through that item.
   var onFork: ((String) -> Void)?
   /// Reads the images messages point at from the workspace's host.
+  /// A bot's chat: its quiet answers (NO_REPLY) don't show their marker.
+  var isBotChat = false
   var imageLoader: ChatImageLoader? {
     didSet {
       model.onImageUploaded = { [weak imageLoader] path, data in
@@ -88,8 +93,14 @@ final class ChatViewController: UIViewController {
     ])
     view.keyboardLayoutGuide.usesBottomSafeArea = true
 
+    // What was typed here before, and not sent, comes back.
+    let draft = ChatDraftStore.load(model.sessionId)
+    composer.restore(text: draft.text, attachments: draft.attachments)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(saveDraft), name: UIApplication.willResignActiveNotification, object: nil)
     composer.onSend = { [weak self] text, attachments in
       guard let self else { return }
+      ChatDraftStore.save(self.model.sessionId, text: "", attachments: [])
       self.followsBottom = true
       Task {
         if let refusal = await self.model.submit(text: text, attachments: attachments) { self.say(refusal) }
@@ -102,6 +113,11 @@ final class ChatViewController: UIViewController {
       self?.present(ImageViewerController(sources: images.map { .image($0) }, index: index), animated: true)
     }
     composer.onError = { [weak self] message in self?.say(message) }
+    dock.onOpen = { [weak self] task in self?.openBackgroundTask(task) }
+    dock.onGoal = { [weak self] change in
+      guard let self else { return }
+      Task { if let refusal = await self.model.changeGoal(change) { self.say(refusal) } }
+    }
     dock.onStop = { [weak self] taskId in
       guard let self else { return }
       Task { if let refusal = await self.model.stopBackgroundTask(taskId) { self.say(refusal) } }
@@ -140,7 +156,8 @@ final class ChatViewController: UIViewController {
 
   override func updateProperties() {
     super.updateProperties()
-    projection = ChatProjection(rows: model.rows, expanded: expanded, openThoughts: openThoughts, transcript: model.transcript)
+    projection = ChatProjection(
+      rows: model.rows, expanded: expanded, openThoughts: openThoughts, openRuns: openRuns, transcript: model.transcript)
     var snapshot = NSDiffableDataSourceSnapshot<Int, ChatLine>()
     snapshot.appendSections([0])
     snapshot.appendItems(projection.lines)
@@ -274,6 +291,40 @@ final class ChatViewController: UIViewController {
   }
 
   /// Rewind to here, once confirmed: the message comes back to the composer to edit and send again.
+  /// A background task's row opens the call that started it: a subagent's task and what it returned, or a
+  /// shell's command and its output so far. Matched by call id, else by the label the strip shows.
+  private func openBackgroundTask(_ task: BackgroundTask) {
+    let label = task.label.trimmingCharacters(in: .whitespacesAndNewlines)
+    let match = model.transcript.items.reversed().first { item in
+      guard case .toolCall(let call) = item.body else { return false }
+      if call.callId == task.id { return true }
+      guard !label.isEmpty else { return false }
+      return ["description", "command", "prompt"].contains { call.input[$0]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) == label }
+    }
+    guard let item = match, case .toolCall(let call) = item.body else {
+      let alert = UIAlertController(title: label.isEmpty ? task.kind : label, message: nil, preferredStyle: .alert)
+      alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
+      present(alert, animated: true)
+      return
+    }
+    let model = self.model
+    let id = item.id
+    present(
+      ToolOutputViewController.sheet(call: call) {
+        guard let full = await model.fullItem(id), case .toolCall(let whole) = full.body else { return nil }
+        return whole
+      }, animated: true)
+  }
+
+  override func viewWillDisappear(_ animated: Bool) {
+    super.viewWillDisappear(animated)
+    saveDraft()
+  }
+
+  @objc private func saveDraft() {
+    ChatDraftStore.save(model.sessionId, text: composer.draftText, attachments: composer.attachments)
+  }
+
   private func imageSources(_ paths: [String]) -> [ImageViewerController.Source] {
     guard let loader = imageLoader else { return [] }
     return paths.map { path in
@@ -423,7 +474,18 @@ final class ChatViewController: UIViewController {
         case .message(let message) = item.body
       else { return }
       // Only a turn's last words carry the time and actions, once it has ended.
-      view.show(markdown: message.text, at: item.observedAt, streaming: !self.projection.finalAnswers.contains(id))
+      let streaming = !self.projection.finalAnswers.contains(id)
+      var text = message.text
+      if self.isBotChat {
+        let quiet = BotQuietResult.strip(text)
+        if quiet.quiet {
+          // Only a turn's last words say there was nothing to report; mid-turn the marker just goes.
+          text = quiet.words.isEmpty && !streaming
+            ? String(localized: "bots.chat.nothingToReport", defaultValue: "Nothing to report")
+            : quiet.words
+        }
+      }
+      view.show(markdown: text, at: item.observedAt, streaming: streaming)
       view.onOpenURL = { [weak self] url in self?.open(url) }
       view.onFork = { [weak self] in self?.onFork?(id) }
       view.onScrollToTop = { [weak self] in self?.scrollToTop(line) }
@@ -437,7 +499,9 @@ final class ChatViewController: UIViewController {
         let calls = run.calls
         // A running run names what it is doing now; a settled one counts what it did.
         let detail = run.running ? calls.last?.summary : nil
-        view.show(icon: ToolCategory.icon(for: calls), text: ToolCategory.sentence(for: calls, live: run.running), detail: detail, running: run.running)
+        view.show(
+          icon: ToolCategory.icon(for: calls), text: ToolCategory.sentence(for: calls, live: run.running), detail: detail,
+          running: run.running, expanded: self.openRuns.contains(key))
       case .thoughts(let key):
         guard let group = self.projection.thoughts[key] else { return }
         let text = group.live
@@ -471,6 +535,20 @@ final class ChatViewController: UIViewController {
       view.show(list)
       view.onOpen = { [weak self] file in self?.present(PatchSheetController.sheet(file), animated: true) }
     }
+    let call = registration(ToolCallView.init) { [weak self] view, line in
+      guard let self, case .call(let id) = line, let item = self.projection.items[id], case .toolCall(let call) = item.body
+      else { return }
+      view.show(call, open: self.openCalls.contains(id))
+      view.onShowFull = { [weak self] in
+        guard let self else { return }
+        let model = self.model
+        self.present(
+          ToolOutputViewController.sheet(call: call) {
+            guard let full = await model.fullItem(id), case .toolCall(let whole) = full.body else { return nil }
+            return whole
+          }, animated: true)
+      }
+    }
     let notice = registration(NoticeDividerView.init) { view, _ in
       view.show(String(localized: "chat.notice.botCreated", defaultValue: "Bot created"))
     }
@@ -483,6 +561,7 @@ final class ChatViewController: UIViewController {
       case .answer: collection.dequeueConfiguredReusableCell(using: answer, for: indexPath, item: line)
       case .run, .thoughts, .prompt, .working: collection.dequeueConfiguredReusableCell(using: activity, for: indexPath, item: line)
       case .thoughtText: collection.dequeueConfiguredReusableCell(using: thoughtText, for: indexPath, item: line)
+      case .call: collection.dequeueConfiguredReusableCell(using: call, for: indexPath, item: line)
       case .files: collection.dequeueConfiguredReusableCell(using: files, for: indexPath, item: line)
       }
     }
@@ -545,10 +624,31 @@ final class ChatViewController: UIViewController {
   }
 
   private func scrollToBottom(animated: Bool) {
-    collection.layoutIfNeeded()
-    let bottom = collection.contentSize.height + collection.adjustedContentInset.bottom - collection.bounds.height
-    let target = max(-collection.adjustedContentInset.top, bottom)
-    collection.setContentOffset(CGPoint(x: 0, y: target), animated: animated)
+    if animated {
+      // A glide for the button; the settling pass below then lands exactly on the end.
+      UIView.animate(withDuration: 0.3) { self.settleAtBottom() }
+    } else {
+      settleAtBottom()
+    }
+  }
+
+  private func settleAtBottom() {
+    // Rows size themselves as they come on screen, so the content grows while it scrolls there: settle it
+    // a few passes until the end stops moving.
+    var previous: CGFloat = -1
+    for _ in 0..<4 {
+      collection.layoutIfNeeded()
+      let bottom = collection.contentSize.height + collection.adjustedContentInset.bottom - collection.bounds.height
+      let target = max(-collection.adjustedContentInset.top, bottom)
+      guard abs(target - previous) > 0.5 else { break }
+      previous = target
+      collection.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+    }
+  }
+
+  override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    if followsBottom { scrollToBottom(animated: false) }
   }
 
   private var distanceFromBottom: CGFloat {
@@ -583,7 +683,7 @@ extension ChatViewController: UICollectionViewDelegate {
 
   func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
     switch dataSource.itemIdentifier(for: indexPath) {
-    case .work, .run: return true
+    case .work, .run, .call: return true
     case .thoughts(let key): return projection.thoughts[key]?.live == false
     case .prompt(let id): return projection.items[id].map(ChatProjection.isWaiting) ?? false
     default: return false
@@ -605,9 +705,19 @@ extension ChatViewController: UICollectionViewDelegate {
       if openThoughts.contains(key) { openThoughts.remove(key) } else { openThoughts.insert(key) }
       setNeedsUpdateProperties()
     case .run(let key):
-      // Activity lines open a native sheet, never inline.
-      guard let run = projection.runs[key] else { return }
-      present(ToolRunSheetController.sheet(title: ToolCategory.sentence(for: run.calls, live: run.running), calls: run.calls), animated: true)
+      // Opens in place to its calls, as the official tool lines do.
+      followsBottom = false
+      UISelectionFeedbackGenerator().selectionChanged()
+      if openRuns.contains(key) { openRuns.remove(key) } else { openRuns.insert(key) }
+      setNeedsUpdateProperties()
+    case .call(let id):
+      followsBottom = false
+      UISelectionFeedbackGenerator().selectionChanged()
+      if openCalls.contains(id) { openCalls.remove(id) } else { openCalls.insert(id) }
+      // The row keeps its identity, so it has to be redrawn to open.
+      var snapshot = dataSource.snapshot()
+      snapshot.reconfigureItems([.call(id: id)])
+      dataSource.apply(snapshot, animatingDifferences: true)
     case .prompt(let id):
       if let item = projection.items[id] { presentPrompt(item) }
     default:

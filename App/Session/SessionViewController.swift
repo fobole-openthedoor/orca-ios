@@ -145,6 +145,7 @@ final class SessionViewController: UIViewController {
           connectionId: worktree.flatMap { session.repo(id: $0.repoId)?.connectionId })
         let chat = ChatViewController(model: model)
         chat.imageLoader = ChatImageLoader(api: session.api, worktreeId: worktreeId)
+        chat.isBotChat = bot != nil
         let agentType: String? = { if case .agentSession(_, let agent) = tab?.kind { return agent } else { return nil } }()
         chat.onActivity = { [weak self] working, detail in
           guard let self, let worktree = self.session.worktree(id: self.worktreeId) else { return }
@@ -190,14 +191,44 @@ final class SessionViewController: UIViewController {
 
   // MARK: Panels
 
-  /// A path from a chat: relative to this workspace, or absolute inside it.
+  /// A path from a chat, resolved by the desktop as the official file tap does: relative, absolute or `~/…`,
+  /// in this workspace, a sibling one, or anywhere the desktop grants a read.
   private func openPath(_ path: String) {
-    var relative = path
-    if let root = session.worktree(id: worktreeId)?.path, !root.isEmpty, path.hasPrefix(root) {
-      relative = String(path.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let api = session.api
+    let worktreeId = worktreeId
+    Task { [weak self] in
+      let resolved: ResolvedPath?
+      do {
+        resolved = try await api.resolvePath(worktreeId: worktreeId, pathText: path)
+      } catch {
+        // A desktop older than path resolution: read it as a path inside this workspace.
+        resolved = .worktree(worktreeId: worktreeId, relativePath: self?.relativeToWorkspace(path) ?? path, isDirectory: false)
+      }
+      guard let self else { return }
+      switch resolved {
+      case .worktree(let id, let relative, false):
+        self.navigationController?.pushViewController(
+          FilePreviewViewController(session: self.session, worktreeId: id, path: relative), animated: true)
+      case .worktree(let id, _, true):
+        self.navigationController?.pushViewController(
+          FileExplorerViewController(session: self.session, worktreeId: id), animated: true)
+      case .absolute(let grant):
+        self.navigationController?.pushViewController(
+          FilePreviewViewController(session: self.session, worktreeId: worktreeId, path: grant.absolutePath, artifact: grant),
+          animated: true)
+      case nil:
+        let alert = UIAlertController(
+          title: String(localized: "files.filePreviewResponse.fileNotFound", defaultValue: "File not found"), message: path,
+          preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
+        self.present(alert, animated: true)
+      }
     }
-    navigationController?.pushViewController(
-      FilePreviewViewController(session: session, worktreeId: worktreeId, path: relative), animated: true)
+  }
+
+  private func relativeToWorkspace(_ path: String) -> String {
+    guard let root = session.worktree(id: worktreeId)?.path, !root.isEmpty, path.hasPrefix(root) else { return path }
+    return String(path.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
   }
 
   private func openSourceControl() {

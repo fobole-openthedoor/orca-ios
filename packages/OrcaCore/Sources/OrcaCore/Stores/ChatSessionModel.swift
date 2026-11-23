@@ -156,6 +156,42 @@ public final class ChatSessionModel {
     }
   }
 
+  public enum GoalChange: Sendable {
+    case pause, resume, clear
+  }
+
+  /// Pauses, resumes or clears the thread's goal: through the host when it keeps the goal
+  /// (agentSession.threadGoal), else by sending the agent its own `/goal clear`.
+  public func changeGoal(_ change: GoalChange) async -> String? {
+    guard let goal = options?.goal else { return nil }
+    guard goal.hostChanges else {
+      guard case .clear = change else { return nil }
+      await send(text: "/goal clear", attachments: [])
+      return nil
+    }
+    let wire: JSONValue =
+      switch change {
+      case .pause: ["kind": "status", "status": "paused"]
+      case .resume: ["kind": "status", "status": "active"]
+      case .clear: ["kind": "clear"]
+      }
+    let mutation = AgentSessionMutation(
+      method: "agentSession.threadGoal", sessionId: sessionId, fields: ["change": wire],
+      expectedRuntimeFence: transcript.fence)
+    do {
+      switch try await api.perform(mutation) {
+      case .accepted(_, let fence, _):
+        transcript.noteFence(fence)
+        await refreshOptions()
+        return nil
+      case .refused(let code, let message):
+        return message.isEmpty ? code : message
+      }
+    } catch {
+      return HostSession.describe(error)
+    }
+  }
+
   /// `/clear` or `/compact`, which the host runs itself.
   public func runConversationCommand(_ command: String, instructions: String?) async -> String? {
     var fields: [String: JSONValue] = ["command": .string(command)]
@@ -348,6 +384,14 @@ public final class ChatSessionModel {
 
   /// Answers an approval or question card. Returns the refusal message when the host declines.
   /// Rewind to here: the conversation forgets this message and everything after it.
+  /// One item as the host keeps it, when the transcript carried only its head (agentSession.item).
+  /// Nil when it is gone or the host predates the call.
+  public func fullItem(_ itemId: String) async -> TranscriptItem? {
+    let result = try? await api.connection.request(
+      "agentSession.item", ["sessionId": .string(sessionId), "itemId": .string(itemId)])
+    return result?["item"].flatMap(TranscriptItem.init)
+  }
+
   public func rewind(to item: TranscriptItem) async -> String? {
     guard let epoch = transcript.cursor?.epoch else { return "unavailable" }
     let mutation = AgentSessionMutation(

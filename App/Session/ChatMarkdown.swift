@@ -123,6 +123,12 @@ enum ChatMarkdown {
     return nil
   }
 
+  private static func intraword(_ text: String, open: String.Index, close: String.Index) -> Bool {
+    let before = open > text.startIndex ? text[text.index(before: open)] : " "
+    let after = text.index(after: close) < text.endIndex ? text[text.index(after: close)] : " "
+    return before.isLetter || before.isNumber || after.isLetter || after.isNumber
+  }
+
   /// Inline code, **bold**, *italic*, [links](url). Code that names a file reads as a link, as the official app does.
   static func inline(
     _ text: String, color: UIColor = Palette.textPrimary, base: [NSAttributedString.Key: Any]? = nil
@@ -182,7 +188,9 @@ enum ChatMarkdown {
         index = text.index(after: end)
       } else if (rest.hasPrefix("*") || rest.hasPrefix("_")), !rest.hasPrefix("**"),
         let close = rest.dropFirst().firstIndex(of: rest.first!), close > rest.index(after: rest.startIndex),
-        !rest[rest.startIndex..<close].contains(" \n")
+        !rest[rest.startIndex..<close].contains(" \n"),
+        // CommonMark: an underscore inside a word (run_in_background, snake_case) is not emphasis.
+        rest.first == "*" || !Self.intraword(text, open: index, close: close)
       {
         emitPlain()
         var attributes = base
