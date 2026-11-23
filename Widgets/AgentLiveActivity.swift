@@ -11,10 +11,14 @@ private enum ActivityColor {
   static let secondary = Color(red: 0xac / 255, green: 0xac / 255, blue: 0xac / 255)
   static let ground = Color(red: 0x0a / 255, green: 0x0a / 255, blue: 0x0a / 255)
 
+  /// Waiting on the person: orange, apart from a failure's red.
+  static let needsYou = Color(red: 0xf9 / 255, green: 0x73 / 255, blue: 0x16 / 255)
+
   static func tint(_ phase: AgentActivityAttributes.Phase) -> Color {
     switch phase {
     case .working: working
-    case .needsYou, .failed: attention
+    case .needsYou: needsYou
+    case .failed: attention
     case .done: done
     }
   }
@@ -31,21 +35,36 @@ private extension AgentActivityAttributes.Phase {
   }
 }
 
-/// The official agent dot: a spinning ring while working, a filled dot otherwise.
-private struct PhaseMark: View {
+/// The island's indicator light: one glowing dot in the state's colour (green done or idle, orange needs
+/// you, red failed, amber working); while working it breathes.
+private struct StatusLight: View {
   let phase: AgentActivityAttributes.Phase
-  var size: CGFloat = 10
+  var size: CGFloat = 9
 
   var body: some View {
-    if phase == .working {
-      ProgressView()
-        .progressViewStyle(.circular)
-        .tint(ActivityColor.working)
-        .frame(width: size, height: size)
-        .scaleEffect(size / 20)
+    let tint = ActivityColor.tint(phase)
+    Circle()
+      .fill(tint)
+      .frame(width: size, height: size)
+      .shadow(color: tint.opacity(0.9), radius: 3)
+      .shadow(color: tint.opacity(0.5), radius: 6)
+      .modifier(Breathing(active: phase == .working))
+      .frame(width: size + 8, height: size + 8)
+      .accessibilityLabel(phase.label)
+  }
+}
+
+/// A slow fade between bright and dim, for a light that is busy.
+private struct Breathing: ViewModifier {
+  let active: Bool
+
+  func body(content: Content) -> some View {
+    if active {
+      content.phaseAnimator([1.0, 0.35]) { view, opacity in view.opacity(opacity) } animation: { _ in
+        .easeInOut(duration: 0.9)
+      }
     } else {
-      Circle().fill(ActivityColor.tint(phase)).frame(width: size * 0.6, height: size * 0.6)
-        .frame(width: size, height: size)
+      content
     }
   }
 }
@@ -69,7 +88,7 @@ private struct LockScreenView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
-        PhaseMark(phase: context.state.phase, size: 12)
+        StatusLight(phase: context.state.phase, size: 8)
         Text(context.attributes.workspaceName)
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(ActivityColor.primary)
@@ -110,7 +129,7 @@ struct AgentLiveActivity: Widget {
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
           HStack(spacing: 6) {
-            PhaseMark(phase: context.state.phase, size: 12)
+            StatusLight(phase: context.state.phase, size: 8)
             Text(context.attributes.agentName)
               .font(.system(size: 13, weight: .semibold))
               .lineLimit(1)
@@ -138,16 +157,12 @@ struct AgentLiveActivity: Widget {
           .padding(.horizontal, 4)
         }
       } compactLeading: {
-        PhaseMark(phase: context.state.phase, size: 12)
+        // The island says the state with a light, nothing more.
+        StatusLight(phase: context.state.phase)
       } compactTrailing: {
-        // The island's trailing slot fits a few digits, not a word: how long it has worked, in the phase's tint.
-        Elapsed(state: context.state)
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(ActivityColor.tint(context.state.phase))
-          .multilineTextAlignment(.trailing)
-          .frame(maxWidth: 40, alignment: .trailing)
+        EmptyView()
       } minimal: {
-        PhaseMark(phase: context.state.phase, size: 12)
+        StatusLight(phase: context.state.phase)
       }
       .widgetURL(context.attributes.deepLink)
       .keylineTint(ActivityColor.tint(context.state.phase))
