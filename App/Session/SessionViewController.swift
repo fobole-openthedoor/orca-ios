@@ -108,7 +108,7 @@ final class SessionViewController: UIViewController {
     title = worktree?.displayName
     let status = HostConnectionPresentation(session.connectionState)
     // "● 正在工作 · main": what the agent is doing in words, then the branch; offline, the connection's state.
-    let state = worktree?.displayStatus ?? "idle"
+    let state = shownState(worktree)
     let word: String =
       switch state {
       case "working", "monitoring": String(localized: "sidebar.cardSlot.working", defaultValue: "Working")
@@ -156,9 +156,21 @@ final class SessionViewController: UIViewController {
     updateStrip()
   }
 
+  /// The state the header and tab show. With a chat on screen, it is whether that chat's agent is running a
+  /// turn: the desktop's workspace state also counts background tasks and an active goal as working, which
+  /// leaves "Working" up while nothing runs. Otherwise the workspace's own state.
+  private func shownState(_ worktree: Worktree?) -> String {
+    if let chat = current as? ChatViewController {
+      let waiting = worktree?.displayStatus == "permission"
+      return waiting ? "permission" : chat.model.isWorking ? "working" : "idle"
+    }
+    let state = worktree?.displayStatus ?? "idle"
+    return state == "monitoring" ? "idle" : state
+  }
+
   private func updateStrip() {
     let active = tabs.tabs.first { $0.id == shownTabId }
-    let agentState = session.worktree(id: worktreeId)?.agents.first?.state
+    let agentState = shownState(session.worktree(id: worktreeId))
     strip.show(tabs: tabs.tabs, shownId: active?.id, agentState: agentState, botHome: bot != nil)
   }
 
@@ -184,6 +196,9 @@ final class SessionViewController: UIViewController {
         let agentType: String? = { if case .agentSession(_, let agent) = tab?.kind { return agent } else { return nil } }()
         chat.onActivity = { [weak self] working, detail in
           guard let self, let worktree = self.session.worktree(id: self.worktreeId) else { return }
+          // The header and tab follow the chat's own turn.
+          self.updateStrip()
+          self.setNeedsUpdateProperties()
           AgentActivityCenter.shared.reportChat(
             hostId: self.session.host.id, hostName: self.session.name, worktree: worktree, agentType: agentType,
             working: working, detail: detail)
