@@ -73,6 +73,36 @@ final class PushCenter: NSObject {
 
   private var model: AppModel?
   private var deviceToken: String?
+  /// Why the phone has no push token, when iOS said so (most often: the build is signed without push).
+  private(set) var tokenError: String?
+  /// Desktops that took this phone's registration.
+  var registeredCount: Int { registered.values.filter { !$0.isEmpty }.count }
+
+  /// Where push stands on this phone, in words, for Settings › Notifications.
+  var statusLine: String {
+    if let tokenError {
+      return String(
+        format: String(
+          localized: "orcaios.push.statusNoToken",
+          defaultValue: "No push token: %1$@ The app was most likely signed without the Push Notifications entitlement."),
+        tokenError)
+    }
+    if deviceToken == nil {
+      return String(localized: "orcaios.push.statusWaiting", defaultValue: "Waiting for a push token from iOS.")
+    }
+    if registeredCount == 0 {
+      return String(
+        localized: "orcaios.push.statusUnregistered",
+        defaultValue: "Push token ready; no desktop has taken it yet. Keep the app open while connected.")
+    }
+    return String(
+      format: String(localized: "orcaios.push.statusRegistered", defaultValue: "Registered with %1$@ desktop(s)."),
+      "\(registeredCount)")
+  }
+
+  func didFailToRegister(_ error: Error) {
+    tokenError = error.localizedDescription
+  }
   private var startToken: String?
   private var activityTokens: [String: String] = [:]
   /// What each desktop was last given, so an unchanged registration isn't sent again.

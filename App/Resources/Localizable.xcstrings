@@ -91089,6 +91089,98 @@
         }
       }
     },
+    "orcaios.push.statusNoToken": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No push token: %1$@ The app was most likely signed without the Push Notifications entitlement."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有拿到推送 token：%1$@ 多半是安装包签名时没有带推送权限。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "沒有拿到推播 token：%1$@ 多半是安裝包簽名時沒有帶推播權限。"
+          }
+        }
+      }
+    },
+    "orcaios.push.statusRegistered": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registered with %1$lld desktop(s)."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已在 %1$lld 台桌面注册推送。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已在 %1$lld 台桌面註冊推播。"
+          }
+        }
+      }
+    },
+    "orcaios.push.statusUnregistered": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Push token ready; no desktop has taken it yet. Keep the app open while connected."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "推送 token 已拿到，还没有桌面接收注册。保持 App 打开并连上桌面。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "推播 token 已拿到，還沒有桌面接收註冊。保持 App 開啟並連上桌面。"
+          }
+        }
+      }
+    },
+    "orcaios.push.statusWaiting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for a push token from iOS."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等 iOS 下发推送 token。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等 iOS 下發推播 token。"
+          }
+        }
+      }
+    },
     "orcaios.session.tabUnsupported": {
       "extractionState": "manual",
       "localizations": {

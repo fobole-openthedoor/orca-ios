@@ -19,6 +19,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
   func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
     // No push entitlement in this signature, or no network: the app still updates while it runs.
     NSLog("APNs registration failed: %@", error.localizedDescription)
+    PushCenter.shared.didFailToRegister(error)
   }
 
   func application(

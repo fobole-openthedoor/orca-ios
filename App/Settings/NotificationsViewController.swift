@@ -97,6 +97,7 @@ final class NotificationsViewController: SettingsPageViewController {
         localized: "settings.notificationDisplayTest.description",
         defaultValue: "Test push delivery, or a local notification when push is unavailable."),
       String(localized: "orcaios.push.gatewayFooter", defaultValue: ""),
+      PushCenter.shared.statusLine,
       testMessage,
     ]
     let trouble = Section(

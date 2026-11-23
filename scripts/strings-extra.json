@@ -3,7 +3,11 @@
     "orcaios": {
       "push": {
         "gatewayFooter": "While Orca is open, alerts and Live Activities update right away. To get them after you close Orca, your desktop needs push turned on.",
-        "noDesktop": "Connect a desktop and try again."
+        "noDesktop": "Connect a desktop and try again.",
+        "statusNoToken": "No push token: {{error}} The app was most likely signed without the Push Notifications entitlement.",
+        "statusWaiting": "Waiting for a push token from iOS.",
+        "statusUnregistered": "Push token ready; no desktop has taken it yet. Keep the app open while connected.",
+        "statusRegistered": "Registered with {{count}} desktop(s)."
       },
       "composer": {
         "camera": "Take Photo",
@@ -171,7 +175,11 @@
     "orcaios": {
       "push": {
         "gatewayFooter": "Orca 打开时，通知和实时活动会直接更新。关掉 Orca 后还想收到，需要桌面开启推送。",
-        "noDesktop": "请先连接一台桌面再试。"
+        "noDesktop": "请先连接一台桌面再试。",
+        "statusNoToken": "没有拿到推送 token：{{error}} 多半是安装包签名时没有带推送权限。",
+        "statusWaiting": "正在等 iOS 下发推送 token。",
+        "statusUnregistered": "推送 token 已拿到，还没有桌面接收注册。保持 App 打开并连上桌面。",
+        "statusRegistered": "已在 {{count}} 台桌面注册推送。"
       },
       "composer": {
         "camera": "拍照",
@@ -360,7 +368,11 @@
     "orcaios": {
       "push": {
         "gatewayFooter": "Orca 開啟時，通知和即時動態會直接更新。關掉 Orca 後還想收到，需要桌面開啟推播。",
-        "noDesktop": "請先連接一台桌面再試。"
+        "noDesktop": "請先連接一台桌面再試。",
+        "statusNoToken": "沒有拿到推播 token：{{error}} 多半是安裝包簽名時沒有帶推播權限。",
+        "statusWaiting": "正在等 iOS 下發推播 token。",
+        "statusUnregistered": "推播 token 已拿到，還沒有桌面接收註冊。保持 App 開啟並連上桌面。",
+        "statusRegistered": "已在 {{count}} 台桌面註冊推播。"
       },
       "composer": {
         "camera": "拍照",
