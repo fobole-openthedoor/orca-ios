@@ -159,6 +159,7 @@ extension AutomationsViewController: HostScoped {
 
 extension AutomationsViewController: UITableViewDelegate {
   func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     edit(automations[indexPath.row])
   }

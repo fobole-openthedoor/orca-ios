@@ -94,6 +94,7 @@ final class BotTemplatesViewController: UITableViewController, UISearchResultsUp
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     guard indexPath.section < groups.count else {
       onPick(nil)

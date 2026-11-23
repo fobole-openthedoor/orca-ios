@@ -91,6 +91,7 @@ final class SettingsViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     let row = sections[indexPath.section][indexPath.row]
     if let opens = row.opens {

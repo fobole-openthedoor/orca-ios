@@ -13,7 +13,7 @@ final class SessionViewController: UIViewController {
   private var shownTabId: String?
   private var chats: [String: ChatViewController] = [:]
   private var current: UIViewController?
-  private var lastOpened: (path: String, at: Date)?
+  private var resolvingPath = false
   /// The host has answered with its tabs, so none means none rather than not yet.
   private var tabsLoaded = false
 
@@ -227,44 +227,56 @@ final class SessionViewController: UIViewController {
   /// A path from a chat, resolved by the desktop as the official file tap does: relative, absolute or `~/…`,
   /// in this workspace, a sibling one, or anywhere the desktop grants a read.
   private func openPath(_ path: String) {
-    // One tap can reach here twice (a link drawn as two highlight regions); open it once.
-    let now = Date()
-    guard lastOpened?.path != path || now.timeIntervalSince(lastOpened!.at) > 1 else { return }
-    lastOpened = (path, now)
+    // One lookup at a time: taps while it runs (or a tap reaching here twice) are dropped.
+    guard !resolvingPath else { return }
+    resolvingPath = true
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
     let api = session.api
     let worktreeId = worktreeId
     // The chat on screen, whose agent wrote the path.
-    let chat: (tabId: String, sessionId: String)? = tabs.tabs.first { $0.id == shownTabId }.flatMap { tab in
+    let shown = tabs.tabs.first { $0.id == shownTabId }
+    let chat: (tabId: String, sessionId: String)? = shown.flatMap { tab in
       if case .agentSession(let sessionId, _) = tab.kind { return (tab.id, sessionId) }
       return nil
     }
+    let candidates = chat.flatMap { chats[$0.sessionId]?.candidatePaths(for: path) } ?? []
+    let others = session.worktrees.filter { $0.id != worktreeId && !$0.isArchived }.map(\.id)
+    let relative = !path.hasPrefix("/") && !path.hasPrefix("~")
     Task { [weak self] in
-      let resolved: ResolvedPath?
+      defer { self?.resolvingPath = false }
+      var failure: Error?
+      var found: ResolvedPath?
       do {
-        resolved = try await api.resolvePath(worktreeId: worktreeId, pathText: path, chat: chat)
+        found = try await api.resolvePath(worktreeId: worktreeId, pathText: path, chat: chat)
       } catch {
-        // Only a relative path can stand in for itself on a desktop that can't resolve paths; `~/…` or an
-        // absolute path read as one would name a file that isn't there. Say why instead.
-        guard !path.hasPrefix("~"), !path.hasPrefix("/") else {
-          let message = (error as? RPCError).map { $0.message.isEmpty ? $0.code : $0.message } ?? error.localizedDescription
-          let alert = UIAlertController(title: path, message: message, preferredStyle: .alert)
-          alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
-          self?.present(alert, animated: true)
-          return
+        failure = error
+      }
+      // Not in this workspace: where the agent was working (its commands and files say), then the desktop's
+      // other workspaces. All asked at once; the likeliest answer wins.
+      if found == nil, relative {
+        found = await withTaskGroup(of: (Int, ResolvedPath?).self) { group in
+          for (rank, candidate) in candidates.enumerated() {
+            group.addTask { (rank, try? await api.resolvePath(worktreeId: worktreeId, pathText: candidate, chat: chat)) }
+          }
+          for (index, other) in others.enumerated() {
+            group.addTask { (candidates.count + index, try? await api.resolvePath(worktreeId: other, pathText: path)) }
+          }
+          var best: (Int, ResolvedPath)?
+          for await (rank, hit) in group {
+            if let hit, best == nil || rank < best!.0 { best = (rank, hit) }
+          }
+          return best?.1
         }
-        resolved = .worktree(worktreeId: worktreeId, relativePath: self?.relativeToWorkspace(path) ?? path, isDirectory: false)
       }
       guard let self else { return }
-      var found = resolved
-      // A relative path an agent names may belong to another workspace on this desktop (it worked in a
-      // different repo): look there before saying it isn't found.
-      if found == nil, !path.hasPrefix("/"), !path.hasPrefix("~") {
-        for other in self.session.worktrees where other.id != worktreeId && !other.isArchived {
-          if let hit = try? await api.resolvePath(worktreeId: other.id, pathText: path) {
-            found = hit
-            break
-          }
+      // A desktop that can't resolve paths: a relative path is read in this workspace as written.
+      if found == nil, let failure {
+        guard relative else {
+          let message = (failure as? RPCError).map { $0.message.isEmpty ? $0.code : $0.message } ?? failure.localizedDescription
+          self.sayOnce(title: path, message: message)
+          return
         }
+        found = .worktree(worktreeId: worktreeId, relativePath: self.relativeToWorkspace(path), isDirectory: false)
       }
       switch found {
       case .worktree(let id, let relative, false):
@@ -278,13 +290,18 @@ final class SessionViewController: UIViewController {
           FilePreviewViewController(session: self.session, worktreeId: worktreeId, path: grant.absolutePath, artifact: grant),
           animated: true)
       case nil:
-        let alert = UIAlertController(
-          title: String(localized: "files.filePreviewResponse.fileNotFound", defaultValue: "File not found"), message: path,
-          preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
-        self.present(alert, animated: true)
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        self.sayOnce(title: String(localized: "files.filePreviewResponse.fileNotFound", defaultValue: "File not found"), message: path)
       }
     }
+  }
+
+  /// An alert, unless one is already up.
+  private func sayOnce(title: String, message: String) {
+    guard presentedViewController == nil else { return }
+    let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+    alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
+    present(alert, animated: true)
   }
 
   private func relativeToWorkspace(_ path: String) -> String {

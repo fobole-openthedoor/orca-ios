@@ -527,6 +527,31 @@ final class ChatViewController: UIViewController {
     ChatDraftStore.save(model.sessionId, text: composer.draftText, attachments: composer.attachments)
   }
 
+  /// Where a relative path the agent wrote may live on the desktop, most likely first: absolute paths it
+  /// read or wrote that end with it, then the directories its commands changed into, joined with it.
+  func candidatePaths(for relative: String) -> [String] {
+    guard !relative.hasPrefix("/"), !relative.hasPrefix("~") else { return [] }
+    var exact: [String] = []
+    var joined: [String] = []
+    let cd = try! NSRegularExpression(pattern: #"(?:^|[;&|]\s*)cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)"#)
+    for item in model.transcript.items.reversed() {
+      guard case .toolCall(let call) = item.body else { continue }
+      for key in ["file_path", "path", "notebook_path"] {
+        if let value = call.input[key]?.stringValue, value.hasSuffix("/" + relative) { exact.append(value) }
+      }
+      if let command = call.input["command"]?.stringValue {
+        let ns = command as NSString
+        for match in cd.matches(in: command, range: NSRange(location: 0, length: ns.length)) {
+          let dir = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+          guard dir.hasPrefix("/") || dir.hasPrefix("~") else { continue }
+          joined.append((dir.hasSuffix("/") ? dir : dir + "/") + relative)
+        }
+      }
+    }
+    var seen = Set<String>()
+    return (exact + joined).filter { seen.insert($0).inserted }.prefix(6).map { $0 }
+  }
+
   /// Whether a line sits on the turn's activity thread: calls, thoughts, notes, questions and the working
   /// line do; the person's words, the agent's words and cards break it.
   private static func onThread(_ line: ChatLine?) -> Bool {

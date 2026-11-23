@@ -239,6 +239,7 @@ final class WorkspaceOptionsViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     let page: UIViewController
     switch sections[indexPath.section].rows[indexPath.row] {
@@ -332,6 +333,7 @@ final class OptionChoiceViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+  Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     let id = choices[indexPath.row].id
     if multiple {

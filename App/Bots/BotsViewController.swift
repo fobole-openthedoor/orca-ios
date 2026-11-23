@@ -109,6 +109,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate {
   }
 
   func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+    Haptics.select()
     collectionView.deselectItem(at: indexPath, animated: true)
     guard let key = dataSource.itemIdentifier(for: indexPath), let (bot, session) = rows[key] else { return }
     BotDirectory.open(bot, in: session, from: navigationController)

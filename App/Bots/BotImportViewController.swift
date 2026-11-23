@@ -91,6 +91,7 @@ final class BotImportViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     if indexPath.section == foundSections {
       navigationController?.pushViewController(BotImportExportViewController(session: session, onPick: onPick), animated: true)

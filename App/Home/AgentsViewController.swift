@@ -176,6 +176,7 @@ extension AgentsViewController: UICollectionViewDelegate, UISearchResultsUpdatin
   }
 
   func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+    Haptics.select()
     collectionView.deselectItem(at: indexPath, animated: true)
     guard let row = dataSource.itemIdentifier(for: indexPath), let (_, _, session) = entries[row] else { return }
     navigationController?.pushViewController(SessionViewController(session: session, worktreeId: row.worktreeId), animated: true)

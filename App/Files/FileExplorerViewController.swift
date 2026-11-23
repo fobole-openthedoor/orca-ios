@@ -255,6 +255,7 @@ final class FileExplorerViewController: UITableViewController, UISearchResultsUp
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     if indexPath.section == 1 {
       loadMore()

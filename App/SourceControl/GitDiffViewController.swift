@@ -216,6 +216,7 @@ final class GitDiffViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     guard case .fold(let lines) = rows[indexPath.row] else { return }
     rows.replaceSubrange(indexPath.row...indexPath.row, with: lines.map(LineDiff.Row.line))
     let inserted = (indexPath.row..<(indexPath.row + lines.count)).map { IndexPath(row: $0, section: 0) }

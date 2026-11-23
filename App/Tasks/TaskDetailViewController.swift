@@ -303,6 +303,7 @@ final class TaskDetailViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     if case .action(_, _, let run) = sections[indexPath.section].rows[indexPath.row] { run() }
   }

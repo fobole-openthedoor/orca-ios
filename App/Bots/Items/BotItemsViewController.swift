@@ -338,6 +338,7 @@ final class BotItemsViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     let group = sections[indexPath.section].group
     switch sections[indexPath.section].rows[indexPath.row] {

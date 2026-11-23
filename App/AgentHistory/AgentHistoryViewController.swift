@@ -376,6 +376,7 @@ final class AgentHistoryViewController: UITableViewController, UISearchResultsUp
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     let item = sections[indexPath.section].sessions[indexPath.row]
     let detail = AgentHistoryDetailViewController(item: item)
@@ -555,6 +556,7 @@ final class AgentHistoryDetailViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+  Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     switch sections[indexPath.section].rows[indexPath.row] {
     case .openChat:

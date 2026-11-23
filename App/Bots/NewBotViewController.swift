@@ -214,6 +214,7 @@ final class NewBotViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     guard indexPath.section == 0 else { return }
     if indexPath.row == 0 {

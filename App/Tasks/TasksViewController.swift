@@ -423,6 +423,7 @@ extension TasksViewController: UITableViewDataSource, UITableViewDelegate {
   }
 
   func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     guard let session else { return }
     let item = sections[indexPath.section].items[indexPath.row]

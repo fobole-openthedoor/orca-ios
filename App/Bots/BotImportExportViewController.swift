@@ -272,6 +272,7 @@ final class HostFolderPickerViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     guard let directory else { return }
     navigationController?.pushViewController(

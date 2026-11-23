@@ -437,6 +437,7 @@ extension HostViewController: UICollectionViewDelegate, UISearchResultsUpdating 
   }
 
   func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+    Haptics.select()
     collectionView.deselectItem(at: indexPath, animated: true)
     switch dataSource.itemIdentifier(for: indexPath) {
     case .worktree(let id):

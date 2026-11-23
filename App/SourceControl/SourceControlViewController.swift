@@ -510,6 +510,7 @@ final class SourceControlViewController: UITableViewController, UITextViewDelega
   }
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    Haptics.select()
     tableView.deselectRow(at: indexPath, animated: true)
     if let entry = entry(at: indexPath) { open(entry) }
   }

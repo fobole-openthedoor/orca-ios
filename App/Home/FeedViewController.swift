@@ -173,6 +173,7 @@ final class FeedViewController: UIViewController {
 
 extension FeedViewController: UICollectionViewDelegate {
   func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+    Haptics.select()
     collectionView.deselectItem(at: indexPath, animated: true)
     switch dataSource.itemIdentifier(for: indexPath) {
     case .bot(let key):
