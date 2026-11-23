@@ -268,26 +268,41 @@ final class ChatViewController: UIViewController {
   }
 
   /// The chip's menu (native-chat session options): the model, its effort, fast and plan mode.
+  /// The model chip's menu, in levels: the model and the effort as submenus naming the current choice, the
+  /// toggles beside them. Under Model, the newest of each family and the one in use; the rest under More.
   private func modelMenu(_ options: ChatOptions) -> UIMenu {
     let current = options.currentModel
-    let models = options.models.filter { !$0.id.isEmpty }.map { choice in
-      UIAction(
-        title: choice.label, subtitle: choice.description,
-        state: choice.id == current?.id ? .on : .off
-      ) { [weak self] _ in self?.setOption("model", choice.id) }
+    let all = options.models.filter { !$0.id.isEmpty }
+    let action: (ChatOptions.Model) -> UIAction = { choice in
+      UIAction(title: choice.label, subtitle: choice.description, state: choice.id == current?.id ? .on : .off) {
+        [weak self] _ in self?.setOption("model", choice.id)
+      }
     }
-    var children: [UIMenuElement] = [
-      UIMenu(title: String(localized: "chat.sessionOptionCopy.model", defaultValue: "Model"), options: .displayInline, children: models)
-    ]
-    if let efforts = current?.efforts, !efforts.isEmpty {
-      children.append(
+    let common = Self.commonModels(all, current: current?.id)
+    var restSeen = Set(common.map(\.label))
+    let rest = all.filter { model in !common.contains { $0.id == model.id } && restSeen.insert(model.label).inserted }
+    var modelItems: [UIMenuElement] = common.map(action)
+    if !rest.isEmpty {
+      modelItems.append(
         UIMenu(
-          title: String(localized: "chat.sessionOptionCopy.effort", defaultValue: "Effort"), options: .displayInline,
-          children: efforts.map { effort in
-            UIAction(title: Self.effortLabel(effort), state: effort.id == options.effort ? .on : .off) { [weak self] _ in
-              self?.setOption("effort", effort.id)
-            }
-          }))
+          title: String(localized: "chat.sessionOptionRows.moreModels", defaultValue: "More models"),
+          image: UIImage(systemName: "ellipsis.circle"), children: rest.map(action)))
+    }
+    let modelMenu = UIMenu(
+      title: String(localized: "chat.sessionOptionCopy.model", defaultValue: "Model"), image: UIImage(systemName: "cpu"),
+      children: modelItems)
+    modelMenu.subtitle = current?.label
+    var children: [UIMenuElement] = [modelMenu]
+    if let efforts = current?.efforts, !efforts.isEmpty {
+      let effortMenu = UIMenu(
+        title: String(localized: "chat.sessionOptionCopy.effort", defaultValue: "Effort"), image: UIImage(systemName: "gauge.with.dots.needle.50percent"),
+        children: efforts.map { effort in
+          UIAction(title: Self.effortLabel(effort), state: effort.id == options.effort ? .on : .off) { [weak self] _ in
+            self?.setOption("effort", effort.id)
+          }
+        })
+      effortMenu.subtitle = efforts.first { $0.id == options.effort }.map(Self.effortLabel)
+      children.append(effortMenu)
     }
     var toggles: [UIMenuElement] = []
     if options.fastModeSupported, current?.supportsFastMode ?? true {
@@ -308,6 +323,33 @@ final class ChatViewController: UIViewController {
     }
     if !toggles.isEmpty { children.append(UIMenu(options: .displayInline, children: toggles)) }
     return UIMenu(title: String(localized: "chat.sessionOptionCopy.sessionOptions", defaultValue: "Session options"), children: children)
+  }
+
+  /// The newest model of each family ("Opus 5.5" over "Opus 4.8"), the default, and the one in use, in the
+  /// host's order. A label without a version stays in the list.
+  private static func commonModels(_ models: [ChatOptions.Model], current: String?) -> [ChatOptions.Model] {
+    func parts(_ label: String) -> (family: String, version: [Int])? {
+      let words = label.split(separator: " ")
+      guard let family = words.first, words.count > 1,
+        let version = words.dropFirst().first.map({ $0.split(separator: ".").compactMap { Int($0) } }), !version.isEmpty
+      else { return nil }
+      return (family.lowercased(), version)
+    }
+    var newest: [String: [Int]] = [:]
+    for model in models {
+      guard let (family, version) = parts(model.label) else { continue }
+      if newest[family].map({ version.lexicographicallyPrecedes($0) == false }) ?? true { newest[family] = version }
+    }
+    let picked = models.filter { model in
+      if model.id == current || model.isDefault { return true }
+      guard let (family, version) = parts(model.label) else { return true }
+      return newest[family] == version
+    }
+    // The host can list one model under two ids (an alias and the version it points at); one row each,
+    // the one in use where it is one of them.
+    var seen = Set<String>()
+    return picked.sorted { a, _ in a.id == current }.filter { seen.insert($0.label).inserted }
+      .sorted { a, b in (picked.firstIndex { $0.id == a.id } ?? 0) < (picked.firstIndex { $0.id == b.id } ?? 0) }
   }
 
   /// An effort as the official picker names it, by its id.

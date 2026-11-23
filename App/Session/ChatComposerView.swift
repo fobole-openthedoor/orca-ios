@@ -29,6 +29,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private let attachmentStrip = UIScrollView()
   private let attachmentRow = UIStackView()
   private let placeholder = TextLabel(size: 16, color: Palette.textMuted, lines: 1)
+  private static let placeholderText = String(
+    localized: "chat.composer.placeholder", defaultValue: "Ask anything, @ to mention files, / for commands")
   private let container = UIVisualEffectView(effect: UIGlassContainerEffect())
   private let surface = UIVisualEffectView()
   private let attach = UIButton(configuration: .glass())
@@ -76,13 +78,19 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     textView.font = .systemFont(ofSize: 16)
     textView.textColor = Palette.textPrimary
     textView.backgroundColor = .clear
-    textView.textContainerInset = UIEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
+    // One line sits in the middle of the 32 pt field: the inset is half of what the line leaves.
+    let inset = floor((32 - (UIFont.systemFont(ofSize: 16).lineHeight)) / 2)
+    textView.textContainerInset = UIEdgeInsets(top: inset, left: 0, bottom: inset, right: 0)
     textView.textContainer.lineFragmentPadding = 0
     textView.isScrollEnabled = false
     textView.delegate = self
     textView.translatesAutoresizingMaskIntoConstraints = false
     textView.keyboardDismissMode = .interactive
-    placeholder.text = String(localized: "chat.composer.placeholder", defaultValue: "Ask anything, @ to mention files, / for commands")
+    // A long draft must never squeeze the buttons beside the one-line field.
+    textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    textView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    placeholder.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    placeholder.text = Self.placeholderText
     placeholder.isUserInteractionEnabled = false
 
     attach.configuration?.image = Lucide.plus.image(size: 20, strokeWidth: 2)
@@ -112,6 +120,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     modelChip.configuration?.image = Lucide.shieldAlert.image(size: 15, strokeWidth: 2).withTintColor(Palette.statusAmber, renderingMode: .alwaysOriginal)
     modelChip.configuration?.contentInsets = .init(top: 10, leading: 12, bottom: 10, trailing: 14)
     modelChip.showsMenuAsPrimaryAction = true
+    // The menu opens upward; keep the model first, as it reads.
+    modelChip.preferredMenuElementOrder = .fixed
     modelChip.isHidden = true
 
     mic.configuration?.image = Lucide.mic.image(size: 20, strokeWidth: 2)
@@ -173,11 +183,13 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
       placeholder.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
       placeholder.trailingAnchor.constraint(lessThanOrEqualTo: textView.trailingAnchor),
       // On the first line, however tall the field grows.
-      placeholder.topAnchor.constraint(equalTo: textView.topAnchor, constant: 4),
+      placeholder.topAnchor.constraint(equalTo: textView.topAnchor, constant: textView.textContainerInset.top),
       row.leadingAnchor.constraint(equalTo: surface.contentView.leadingAnchor, constant: Spacing.md),
       row.trailingAnchor.constraint(equalTo: surface.contentView.trailingAnchor, constant: -Spacing.md),
       row.bottomAnchor.constraint(equalTo: surface.contentView.bottomAnchor, constant: -Spacing.md),
       mic.widthAnchor.constraint(equalToConstant: 44),
+      attach.widthAnchor.constraint(equalToConstant: 44),
+      attach.heightAnchor.constraint(equalToConstant: 44),
       mic.heightAnchor.constraint(equalToConstant: 44),
       grabberArea.topAnchor.constraint(equalTo: surface.contentView.topAnchor),
       grabberArea.centerXAnchor.constraint(equalTo: surface.contentView.centerXAnchor),
@@ -214,7 +226,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
 
   /// One line when nothing is being written; the card otherwise.
   private func updateCollapsed(animated: Bool) {
-    let collapse = !textView.isFirstResponder && currentText.isEmpty && attachments.isEmpty && fullScreenProgress == 0
+    // Resting means not being written in: a draft rests too, as one line of its words.
+    let collapse = !textView.isFirstResponder && fullScreenProgress == 0
     guard collapse != isCollapsed || expandedSet.first?.isActive == collapse else { return }
     isCollapsed = collapse
     let change = {
@@ -232,7 +245,9 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     }
     // The chip leaves the row in the one-line state, so the field has the room.
     modelChip.isHidden = collapse || modelChip.menu == nil
+    refresh()
     if animated { UIView.animate(withDuration: 0.24, delay: 0, options: .curveEaseOut, animations: change) } else { change() }
+    refresh()
     onHeightChange?()
   }
 
@@ -346,13 +361,36 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private var currentText: String { textView.text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
   private func refresh() {
-    placeholder.isHidden = !textView.text.isEmpty
+    // At rest a draft reads as one line (its attachments counted first), drawn by the placeholder label
+    // over the field's own text, which goes clear so a tap still lands in the field.
+    let summarizing = isCollapsed && (!currentText.isEmpty || !attachments.isEmpty)
+    textView.textColor = summarizing ? .clear : Palette.textPrimary
+    attachmentStrip.isHidden = isCollapsed || attachments.isEmpty
+    if summarizing {
+      let words = currentText.replacingOccurrences(of: "\n", with: " ")
+      let files = attachments.isEmpty ? nil : "📎 \(attachments.count)"
+      placeholder.text = [files, words.isEmpty ? nil : words].compactMap { $0 }.joined(separator: "  ")
+      placeholder.textColor = Palette.textPrimary
+      placeholder.isHidden = false
+    } else {
+      placeholder.text = Self.placeholderText
+      placeholder.textColor = Palette.textMuted
+      placeholder.isHidden = !textView.text.isEmpty
+    }
     let action: Action = !currentText.isEmpty || !attachments.isEmpty ? .send : working ? .stop : .dictate
     sendButton.set(action)
     // Full screen holds its height; the drag owns it.
     guard fullScreenProgress == 0 else { return }
-    if isCollapsed != (!textView.isFirstResponder && currentText.isEmpty && attachments.isEmpty) {
+    if isCollapsed != !textView.isFirstResponder {
       DispatchQueue.main.async { self.updateCollapsed(animated: true) }
+    }
+    if isCollapsed {
+      textView.isScrollEnabled = false
+      if textHeight.constant != 32 {
+        textHeight.constant = 32
+        onHeightChange?()
+      }
+      return
     }
     // Grow up to six lines, then scroll, as the official field does.
     let width = max(textView.bounds.width, 100)
@@ -492,7 +530,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
       attachmentRow.addArrangedSubview(chip(for: attachment))
     }
     let shown = !attachments.isEmpty
-    attachmentStrip.isHidden = !shown
+    attachmentStrip.isHidden = !shown || isCollapsed
     if !isCollapsed {
       textTop.isActive = !shown
       textUnderChips.isActive = shown
