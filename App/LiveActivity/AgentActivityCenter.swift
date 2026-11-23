@@ -154,10 +154,10 @@ final class AgentActivityCenter {
   func startSampleIfRequested() {
     guard ProcessInfo.processInfo.environment["ORCA_DEBUG_ACTIVITY"] == "1" else { return }
     let attributes = AgentActivityAttributes(
-      hostName: "Mac mini", workspaceName: "explain-greet", agentName: "Claude",
+      hostName: "MacBook Pro", workspaceName: "forecast-week", agentName: "Claude",
       deepLink: Self.deepLink(hostId: UUID(), worktreeId: "sample"))
     let state = AgentActivityAttributes.ContentState(
-      phase: .working, detail: "Reading src/greet.ts to see what an empty name returns", since: Date().addingTimeInterval(-42))
+      phase: .working, detail: "Running swift test after adding SevenDayView", since: Date().addingTimeInterval(-42))
     _ = try? Activity.request(attributes: attributes, content: ActivityContent(state: state, staleDate: nil), pushType: nil)
   }
 

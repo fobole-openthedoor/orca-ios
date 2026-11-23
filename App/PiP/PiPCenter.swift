@@ -54,15 +54,18 @@ final class PiPCenter: NSObject {
     }
   }
 
-  /// Launch with ORCA_DEBUG_PIP=1 to write the frame the window would show to tmp/pip.png, a few seconds
-  /// after a session opens (the simulator has no picture in picture to look at).
+  /// Launch with ORCA_DEBUG_PIP=1 to write the frame the window would show to tmp/pip.png, every second
+  /// while a session is open (the simulator has no picture in picture to look at).
   private func dumpForDebugging() {
-    guard ProcessInfo.processInfo.environment["ORCA_DEBUG_PIP"] == "1" else { return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-      guard let frame = self?.source?(), let image = PiPRenderer.image(for: frame, size: Self.size) else { return }
-      try? image.pngData()?.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("pip.png"))
+    guard ProcessInfo.processInfo.environment["ORCA_DEBUG_PIP"] == "1", debugTimer == nil else { return }
+    debugTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let frame = self?.source?(), let image = PiPRenderer.image(for: frame, size: Self.size) else { return }
+        try? image.pngData()?.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("pip.png"))
+      }
     }
   }
+  private var debugTimer: Timer?
 
   private let host = UIView()
   private let layer = AVSampleBufferDisplayLayer()
