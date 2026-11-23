@@ -54,6 +54,7 @@ final class AppModel {
       sessions[replaced.id]?.stop()
       sessions[replaced.id] = nil
       hosts = try await store.remove(replaced.id)
+      PersistedConnectionLog.shared.discard(hostId: replaced.id.uuidString)
     }
     hosts = try await store.add(host)
     startSession(for: host)
@@ -64,6 +65,8 @@ final class AppModel {
     sessions[id]?.stop()
     sessions[id] = nil
     hosts = try await store.remove(id)
+    // A removed host's history goes with it, as the official discardConnectionLogs.
+    PersistedConnectionLog.shared.discard(hostId: id.uuidString)
   }
 
   /// Edit host: saves the phone's name and address for a desktop; its session redials a new address.

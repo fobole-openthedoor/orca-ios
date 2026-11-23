@@ -13,6 +13,8 @@ final class BrowserTabViewController: UIViewController, WorkspaceContent, UIText
   private let api: HostAPI
   private let worktreeId: String
   private let streamingSupported: Bool?
+  /// The host takes a certificate warning's Proceed from a phone.
+  private let certificateTrustSupported: Bool
   private var page: BrowserTabState
 
   private let toolbar = UIView()
@@ -28,9 +30,15 @@ final class BrowserTabViewController: UIViewController, WorkspaceContent, UIText
   private let overlay = UIStackView()
   private let spinner = UIActivityIndicatorView(style: .medium)
   private let errorLabel = StreamErrorLabel()
-  private let failure = UIStackView()
-  private let failureTitle = TextLabel(size: 16, weight: .semibold, alignment: .center, lines: 0)
-  private let failureText = TextLabel(size: Typography.bodySize, color: Palette.textSecondary, alignment: .center, lines: 0)
+  private let failure = UIView()
+  private let failureTitle = TextLabel(size: Typography.titleSize, weight: .semibold, lines: 0)
+  private let failureText = TextLabel(size: Typography.bodySize, color: Palette.textSecondary, lineHeight: 20, lines: 0)
+  private let failureCode = TextLabel(size: Typography.metaSize, color: Palette.textMuted, lines: 0)
+  private let proceedError = TextLabel(size: Typography.metaSize, color: Palette.statusRed, lineHeight: 18, lines: 0)
+  private let retryButton = UIButton(type: .system)
+  private let proceedButton = UIButton(type: .system)
+  /// Proceed for one challenge: on its way, or what the host said instead.
+  private var proceed: (challengeId: String, failure: BrowserCertificateProceedFailure?)?
   private var modifierButtons: [Modifier: UIButton] = [:]
   private var keyButtons: [UIButton] = []
   private let input = UITextField()
@@ -56,11 +64,12 @@ final class BrowserTabViewController: UIViewController, WorkspaceContent, UIText
   private var panZoomStart: BrowserFrameGeometry.Zoom?
   private var pinchStart: BrowserFrameGeometry.Zoom?
 
-  init(api: HostAPI, worktreeId: String, tab: BrowserTabState, streamingSupported: Bool?) {
+  init(api: HostAPI, worktreeId: String, tab: BrowserTabState, streamingSupported: Bool?, certificateTrustSupported: Bool = false) {
     self.api = api
     self.worktreeId = worktreeId
     self.page = tab
     self.streamingSupported = streamingSupported
+    self.certificateTrustSupported = certificateTrustSupported
     viewMode = BrowserViewMode.initial(for: tab.url)
     super.init(nibName: nil, bundle: nil)
   }
@@ -280,32 +289,50 @@ final class BrowserTabViewController: UIViewController, WorkspaceContent, UIText
     viewport.addSubview(overlay)
     overlay.pin(to: viewport)
 
-    // A page that failed to load: what went wrong, and Retry for the address that failed.
-    var retry = UIButton.Configuration.filled()
-    retry.title = String(localized: "browser.loadFailure.retry", defaultValue: "Retry")
-    retry.baseBackgroundColor = Palette.textPrimary
-    retry.baseForegroundColor = Palette.bgBase
-    retry.cornerStyle = .fixed
-    retry.background.cornerRadius = Radius.control
-    let retryButton = UIButton(configuration: retry, primaryAction: UIAction { [weak self] _ in self?.retryFailedLoad() })
-    failure.addArrangedSubview(failureTitle)
-    failure.addArrangedSubview(failureText)
-    failure.addArrangedSubview(retryButton)
-    failure.axis = .vertical
-    failure.alignment = .center
-    failure.spacing = Spacing.sm
-    failure.setCustomSpacing(Spacing.lg, after: failureText)
-    failure.isLayoutMarginsRelativeArrangement = true
-    failure.directionalLayoutMargins = NSDirectionalEdgeInsets(
-      top: Spacing.xl, leading: Spacing.xl, bottom: Spacing.xl, trailing: Spacing.xl)
+    // A page that failed to load (MobileBrowserLoadFailure.tsx): the desktop failure page's words over the frame,
+    // which shows only a blank page; Retry loads the failed address, Proceed passes a certificate warning.
+    retryButton.configuration = Self.failureButton(primary: true)
+    retryButton.addAction(UIAction { [weak self] _ in self?.retryFailedLoad() }, for: .primaryActionTriggered)
+    proceedButton.configuration = Self.failureButton(primary: false)
+    proceedButton.addAction(UIAction { [weak self] _ in self?.proceedCertificate() }, for: .primaryActionTriggered)
+    failureCode.font = Typography.mono(Typography.metaSize)
+    let actions = UIStackView(arrangedSubviews: [retryButton, proceedButton, UIView()])
+    actions.spacing = Spacing.sm
+    let column = UIStackView(arrangedSubviews: [failureTitle, failureText, failureCode, proceedError, actions])
+    column.axis = .vertical
+    column.spacing = Spacing.sm
+    column.setCustomSpacing(Spacing.sm + Spacing.xs, after: failureText)
+    column.setCustomSpacing(Spacing.sm + Spacing.xs, after: failureCode)
+    column.setCustomSpacing(Spacing.sm + Spacing.md, after: proceedError)
+    column.translatesAutoresizingMaskIntoConstraints = false
+    failure.addSubview(column)
     failure.backgroundColor = Palette.bgBase
-    failure.translatesAutoresizingMaskIntoConstraints = false
     viewport.addSubview(failure)
+    failure.pin(to: viewport)
+    let width = column.widthAnchor.constraint(equalTo: failure.widthAnchor, constant: -2 * Spacing.xl)
+    width.priority = .defaultHigh
     NSLayoutConstraint.activate([
-      failure.leadingAnchor.constraint(equalTo: viewport.leadingAnchor),
-      failure.trailingAnchor.constraint(equalTo: viewport.trailingAnchor),
-      failure.centerYAnchor.constraint(equalTo: viewport.centerYAnchor),
+      column.centerXAnchor.constraint(equalTo: failure.centerXAnchor),
+      column.centerYAnchor.constraint(equalTo: failure.centerYAnchor),
+      column.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+      column.widthAnchor.constraint(lessThanOrEqualTo: failure.widthAnchor, constant: -2 * Spacing.xl),
+      width,
     ])
+  }
+
+  /// The failure page's buttons: Retry filled in the primary colour, Proceed bare, both 34 pt.
+  private static func failureButton(primary: Bool) -> UIButton.Configuration {
+    var configuration = UIButton.Configuration.filled()
+    configuration.baseBackgroundColor = primary ? Palette.textPrimary : .clear
+    configuration.baseForegroundColor = primary ? Palette.bgBase : Palette.textSecondary
+    configuration.cornerStyle = .fixed
+    configuration.background.cornerRadius = Radius.control
+    configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: Spacing.md, bottom: 8, trailing: Spacing.md)
+    return configuration
+  }
+
+  private static func failureButtonTitle(_ title: String) -> AttributedString {
+    AttributedString(title, attributes: AttributeContainer([.font: Typography.font(Typography.bodySize, .semibold)]))
   }
 
   private func keyButton(_ title: String, action: @escaping () -> Void) -> UIButton {
@@ -455,15 +482,7 @@ final class BrowserTabViewController: UIViewController, WorkspaceContent, UIText
     sendButton.alpha = canSend ? 1 : 0.35
     progress.isHidden = !page.loading
     progress.setProgress(page.loading ? 0.6 : 0, animated: false)
-    if let loadError = page.loadError {
-      failure.isHidden = false
-      let host = URL(string: loadError.validatedUrl)?.host() ?? URL(string: page.url)?.host() ?? ""
-      failureTitle.text = host.isEmpty ? loadError.description : host
-      failureText.text = host.isEmpty ? nil : loadError.description
-      failureText.isHidden = host.isEmpty
-    } else {
-      failure.isHidden = true
-    }
+    renderFailure(controlsDisabled: disabled)
     spinner.isHidden = !(busy || (!hasFrame && error == nil))
     if spinner.isHidden { spinner.stopAnimating() } else { spinner.startAnimating() }
     errorLabel.text = error
@@ -846,6 +865,155 @@ final class BrowserTabViewController: UIViewController, WorkspaceContent, UIText
 
   func textFieldDidBeginEditing(_ textField: UITextField) {
     if textField === address { textField.selectAll(nil) }
+  }
+
+  // MARK: Load failure
+
+  private var shownFailure: BrowserLoadFailure?
+
+  /// The failure page for a network or certificate failure; any other the streamed page shows itself.
+  private func renderFailure(controlsDisabled: Bool) {
+    let shown = page.loadError.flatMap {
+      BrowserLoadFailure(
+        loadError: $0, certificateFailure: page.certificateFailure, pageId: page.pageId, canProceed: certificateTrustSupported)
+    }
+    shownFailure = shown
+    failure.isHidden = shown == nil
+    guard let shown else { return }
+    let text = Self.failureText(shown)
+    failureTitle.text = text.title
+    failureText.text = text.description
+    failureText.isHidden = text.description == nil
+    failureCode.text = shown.errorName
+    failureCode.isHidden = shown.errorName == nil
+    // Proceed's state belongs to the challenge it answered; a new challenge starts clean.
+    let active = shown.proceedChallenge.flatMap { challenge in proceed?.challengeId == challenge.challengeId ? proceed : nil }
+    let submitting = active != nil && active?.failure == nil
+    proceedError.text = active?.failure.map(Self.proceedFailureText)
+    proceedError.isHidden = proceedError.text == nil
+    retryButton.configuration?.attributedTitle = Self.failureButtonTitle(
+      String(localized: "browser.loadFailure.retry", defaultValue: "Retry"))
+    retryButton.isEnabled = !controlsDisabled && !submitting
+    retryButton.alpha = retryButton.isEnabled ? 1 : 0.5
+    proceedButton.isHidden = shown.proceedChallenge == nil
+    proceedButton.configuration?.attributedTitle = Self.failureButtonTitle(
+      submitting
+        ? String(localized: "browser.loadFailure.connecting", defaultValue: "Connecting…")
+        : String(localized: "browser.loadFailure.proceedUnsafe", defaultValue: "Proceed Anyway (Unsafe)"))
+    proceedButton.isEnabled = !submitting
+    proceedButton.alpha = submitting ? 0.5 : 1
+  }
+
+  /// Accepts the host's certificate challenge, as desktop's Proceed; on success the host reloads the page and
+  /// this view goes away, so the button stays on Connecting… until then.
+  private func proceedCertificate() {
+    guard let challenge = shownFailure?.proceedChallenge, let pageId = page.pageId,
+      proceed?.challengeId != challenge.challengeId || proceed?.failure != nil
+    else { return }
+    proceed = (challenge.challengeId, nil)
+    updateControls()
+    let api = api
+    let worktreeId = worktreeId
+    Task { [weak self] in
+      let refused = await api.browserCertificateProceed(worktreeId: worktreeId, pageId: pageId, challengeId: challenge.challengeId)
+      guard let self, let refused, self.proceed?.challengeId == challenge.challengeId else { return }
+      self.proceed = (challenge.challengeId, refused)
+      self.updateControls()
+    }
+  }
+
+  /// The headline, and a sentence only when it adds something (browser-load-failure.ts, desktop's words).
+  private static func failureText(_ shown: BrowserLoadFailure) -> (title: String, description: String?) {
+    let host = shown.host ?? ""
+    func withHost(_ format: String) -> String { String(format: format, host) }
+    switch shown.presentation {
+    case .certificate(let reason):
+      let host = shown.host ?? String(localized: "orcaios.browser.loadFailure.thisAddress", defaultValue: "this address")
+      let format =
+        switch reason {
+        case .nameMismatch:
+          String(localized: "browser.loadFailure.certificateNameMismatch", defaultValue: "The certificate doesn't match %1$@.")
+        case .dateInvalid:
+          String(
+            localized: "browser.loadFailure.certificateDateInvalid",
+            defaultValue: "The certificate for %1$@ isn't valid at the current date and time.")
+        case .authorityInvalid:
+          String(
+            localized: "browser.loadFailure.certificateAuthorityInvalid",
+            defaultValue: "Orca doesn't trust the authority that issued the certificate for %1$@.")
+        case .unverified:
+          String(localized: "browser.loadFailure.certificateVerificationFailed", defaultValue: "Orca couldn't verify the certificate for %1$@.")
+        }
+      return (
+        String(localized: "browser.loadFailure.connectionNotSecure", defaultValue: "Connection isn't secure"), String(format: format, host)
+      )
+    case .network(let kind):
+      switch kind {
+      case .notRunning:
+        return (
+          withHost(String(localized: "orcaios.browser.loadFailure.notRunningTitle", defaultValue: "Nothing is running on %1$@ yet")),
+          String(localized: "orcaios.browser.loadFailure.notRunningDescription", defaultValue: "Start the dev server for this address.")
+        )
+      case .refused:
+        return (
+          withHost(String(localized: "orcaios.browser.loadFailure.refusedTitle", defaultValue: "%1$@ refused to connect")),
+          String(
+            localized: "orcaios.browser.loadFailure.refusedDescription", defaultValue: "The site may be down, or the address may be wrong.")
+        )
+      case .dns:
+        return (
+          withHost(String(localized: "orcaios.browser.loadFailure.dnsTitle", defaultValue: "Couldn't find %1$@")),
+          String(localized: "orcaios.browser.loadFailure.dnsDescription", defaultValue: "Check the address for typos.")
+        )
+      case .offline:
+        return (String(localized: "orcaios.browser.loadFailure.offlineTitle", defaultValue: "You're offline"), nil)
+      case .timeout:
+        return (withHost(String(localized: "orcaios.browser.loadFailure.timeoutTitle", defaultValue: "%1$@ took too long to respond")), nil)
+      case .reset:
+        return (
+          withHost(String(localized: "orcaios.browser.loadFailure.resetTitle", defaultValue: "The connection to %1$@ was interrupted")), nil
+        )
+      case .blocked:
+        return (
+          withHost(String(localized: "orcaios.browser.loadFailure.blockedTitle", defaultValue: "%1$@ is blocked")),
+          String(
+            localized: "orcaios.browser.loadFailure.blockedDescription",
+            defaultValue: "An extension blocked this page. To open it, allow this site in the extension, then retry.")
+        )
+      case .other:
+        return (
+          shown.host == nil
+            ? String(localized: "orcaios.browser.loadFailure.otherTitleWithoutHost", defaultValue: "Can't load this page")
+            : withHost(String(localized: "orcaios.browser.loadFailure.otherTitle", defaultValue: "Can't reach %1$@")),
+          nil
+        )
+      }
+    }
+  }
+
+  private static func proceedFailureText(_ failure: BrowserCertificateProceedFailure) -> String {
+    switch failure {
+    case .hostUpdateNeeded:
+      String(
+        localized: "browser.loadFailure.certificateProceedNeedsHostUpdate",
+        defaultValue: "Update Orca on this host to accept certificate warnings from your phone.")
+    case .expired:
+      String(
+        localized: "browser.loadFailure.certificateChallengeExpired",
+        defaultValue: "This certificate approval expired. Retry the page to request a new one.")
+    case .changed:
+      String(
+        localized: "browser.loadFailure.certificateChallengeChanged",
+        defaultValue: "The certificate request changed. Retry the page and review the new warning.")
+    case .requestFailed:
+      String(
+        localized: "browser.loadFailure.certificateProceedFailed",
+        defaultValue: "Orca could not approve this certificate request. Retry the page and try again.")
+    case .unavailable:
+      String(
+        localized: "browser.loadFailure.certificateChallengeUnavailable",
+        defaultValue: "This certificate request is no longer available. Retry the page to request a new one.")
+    }
   }
 
   // MARK: Dialogs

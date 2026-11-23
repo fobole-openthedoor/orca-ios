@@ -3,10 +3,18 @@ import UIKit
 
 /// Host ⋯ › Network diagnostics (app/connection-log.tsx, diagnostics/connection-diagnostics-view.tsx): the
 /// connection's state, what the recorded events suggest, and every step of dialing this desktop, copyable as a report.
+/// With more than one desktop paired, chips above switch between them; a Relay failure offers Send diagnostics.
 final class NetworkDiagnosticsViewController: UIViewController {
-  private let session: HostSession
+  private enum Submission { case sending, sent, failed }
+
+  private var session: HostSession
   private let scroll = UIScrollView()
   private let stack = UIStackView()
+  private let hostChips = UIStackView()
+  private let privacyHint = TextLabel(size: 11, color: Palette.textMuted, lineHeight: 15, lines: 0)
+  private let sendButton = UIButton(type: .system)
+  /// Each reported incident's sending, by host and the failure's event id, so a new incident starts fresh.
+  private var submissions: [String: Submission] = [:]
   private let stateLabel = TextLabel(size: 12, color: Palette.textSecondary)
   private let copyButton = UIButton(type: .system)
   private let causeLabel = TextLabel(size: 12, lineHeight: 18, lines: 0)
@@ -47,6 +55,13 @@ final class NetworkDiagnosticsViewController: UIViewController {
       stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -Spacing.xl),
     ])
 
+    // One chip per paired desktop, wrapping onto rows, when there is more than one to read.
+    hostChips.axis = .vertical
+    hostChips.alignment = .leading
+    hostChips.spacing = Spacing.sm
+    stack.addArrangedSubview(hostChips)
+    stack.setCustomSpacing(Spacing.md, after: hostChips)
+
     // The state on the left, Copy report on the right.
     var copy = UIButton.Configuration.filled()
     copy.baseBackgroundColor = Palette.bgRaised
@@ -64,9 +79,26 @@ final class NetworkDiagnosticsViewController: UIViewController {
     let heading = TextLabel(
       String(localized: "diagnostics.connectionDiagnosticsView.diagnosisHeading", defaultValue: "What this suggests"), size: 12,
       weight: .semibold)
-    let diagnosis = UIStackView(arrangedSubviews: [heading, causeLabel, nextLabel])
+    privacyHint.text = String(
+      localized: "diagnostics.connectionDiagnosticsView.privacyHint",
+      defaultValue:
+        "Sends a size-limited redacted report including host name, endpoint, versions, connection state, and events—never terminal contents or credentials."
+    )
+    var send = UIButton.Configuration.filled()
+    send.baseBackgroundColor = Palette.bgRaised
+    send.baseForegroundColor = Palette.textPrimary
+    send.background.cornerRadius = Radius.control
+    send.cornerStyle = .fixed
+    send.contentInsets = NSDirectionalEdgeInsets(top: Spacing.sm, leading: Spacing.md, bottom: Spacing.sm, trailing: Spacing.md)
+    send.imagePadding = Spacing.xs
+    sendButton.configuration = send
+    sendButton.addAction(UIAction { [weak self] _ in self?.sendDiagnostics() }, for: .primaryActionTriggered)
+    let sendRow = UIStackView(arrangedSubviews: [sendButton, UIView()])
+    let diagnosis = UIStackView(arrangedSubviews: [heading, causeLabel, nextLabel, privacyHint, sendRow])
     diagnosis.axis = .vertical
     diagnosis.spacing = Spacing.xs
+    diagnosis.setCustomSpacing(Spacing.sm, after: nextLabel)
+    diagnosis.setCustomSpacing(Spacing.md, after: privacyHint)
     stack.addArrangedSubview(card(diagnosis, insets: UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)))
 
     logTitle.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -86,8 +118,15 @@ final class NetworkDiagnosticsViewController: UIViewController {
     renderCopy()
   }
 
+  private var chipsWidth: CGFloat = 0
+
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
+    // The chips wrap by the page's width, which is known only now.
+    if view.bounds.width != chipsWidth {
+      chipsWidth = view.bounds.width
+      renderHostChips()
+    }
     // Open on the newest events, as the official log scrolls to its end.
     guard !scrolledToEnd, !shownEntries.isEmpty, scroll.contentSize.height > 0 else { return }
     scrolledToEnd = true
@@ -110,6 +149,8 @@ final class NetworkDiagnosticsViewController: UIViewController {
       endpoint: session.host.endpoint, state: state, path: logPath, entries: entries)
     causeLabel.text = diagnosis.likelyCause
     nextLabel.text = diagnosis.nextStep
+    renderSend(incident: diagnosis.reportableIncidentId)
+    renderHostChips()
     guard entries != shownEntries else { return }
     let atEnd = scroll.contentOffset.y >= scroll.contentSize.height - scroll.bounds.height - 40
     shownEntries = entries
@@ -143,12 +184,130 @@ final class NetworkDiagnosticsViewController: UIViewController {
     scroll.setContentOffset(CGPoint(x: 0, y: bottom), animated: animated)
   }
 
-  private func copyReport() {
-    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-    UIPasteboard.general.string = ConnectionReport.build(
+  private var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?" }
+
+  private func report() -> String {
+    ConnectionReport.build(
       hostName: session.name, endpoint: session.host.endpoint, state: session.connectionState, path: logPath,
-      lastConnectedAt: session.lastConnectedAt, appVersion: version, platform: "ios \(UIDevice.current.systemVersion)",
+      lastConnectedAt: session.lastConnectedAt, appVersion: appVersion, platform: "ios \(UIDevice.current.systemVersion)",
       desktopAppVersion: session.status?.appVersion, entries: session.connectionLog)
+  }
+
+  // MARK: Hosts
+
+  /// The paired desktops' chips; the one shown reads in the primary colour on the panel fill, outlined.
+  private func renderHostChips() {
+    let sessions = AppModel.shared.orderedHosts.compactMap { AppModel.shared.session(for: $0.id) }
+    hostChips.arrangedSubviews.forEach { $0.removeFromSuperview() }
+    hostChips.isHidden = sessions.count < 2
+    guard sessions.count >= 2 else { return }
+    // Rows filled to the page's width, as the official chips wrap.
+    let available = max(view.bounds.width - 2 * Spacing.lg, 200)
+    var row = chipRow()
+    var used: CGFloat = 0
+    for candidate in sessions {
+      let chip = hostChip(candidate)
+      let width = chip.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width
+      if used > 0, used + Spacing.sm + width > available {
+        hostChips.addArrangedSubview(row)
+        row = chipRow()
+        used = 0
+      }
+      row.addArrangedSubview(chip)
+      used += (used > 0 ? Spacing.sm : 0) + width
+    }
+    hostChips.addArrangedSubview(row)
+  }
+
+  private func chipRow() -> UIStackView {
+    let row = UIStackView()
+    row.spacing = Spacing.sm
+    return row
+  }
+
+  private func hostChip(_ candidate: HostSession) -> UIButton {
+    let selected = candidate === session
+    var configuration = UIButton.Configuration.filled()
+    configuration.baseBackgroundColor = selected ? Palette.bgPanel : Palette.bgRaised
+    configuration.baseForegroundColor = selected ? Palette.textPrimary : Palette.textSecondary
+    configuration.cornerStyle = .capsule
+    configuration.background.strokeColor = selected ? Palette.borderSubtle : nil
+    configuration.background.strokeWidth = selected ? 1 : 0
+    configuration.contentInsets = NSDirectionalEdgeInsets(top: Spacing.xs + 2, leading: Spacing.md, bottom: Spacing.xs + 2, trailing: Spacing.md)
+    configuration.titleLineBreakMode = .byTruncatingTail
+    configuration.attributedTitle = AttributedString(
+      candidate.name, attributes: AttributeContainer([.font: Typography.font(Typography.metaSize, selected ? .semibold : .regular)]))
+    let chip = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.show(candidate) })
+    chip.widthAnchor.constraint(lessThanOrEqualToConstant: 160 + 2 * Spacing.md).isActive = true
+    chip.accessibilityTraits.insert(selected ? .selected : [])
+    return chip
+  }
+
+  /// Reads another desktop's history in place.
+  private func show(_ next: HostSession) {
+    guard next !== session else { return }
+    Haptics.select()
+    session = next
+    logTitle.text = next.name.uppercased()
+    shownEntries = []
+    scrolledToEnd = false
+    copied = false
+    renderCopy()
+    setNeedsUpdateProperties()
+    scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top), animated: false)
+  }
+
+  // MARK: Send diagnostics
+
+  private func submissionKey(_ incident: String?) -> String? {
+    incident.map { "\(session.host.id.uuidString):\($0)" }
+  }
+
+  /// Offered only while the failure is Orca Relay's to look into (reportability `orca-relay`).
+  private func renderSend(incident: String?) {
+    let key = submissionKey(incident)
+    privacyHint.isHidden = key == nil
+    sendButton.superview?.isHidden = key == nil
+    guard let key else { return }
+    let state = submissions[key]
+    var configuration = sendButton.configuration
+    configuration?.image = (state == .sent ? Lucide.check : Lucide.send).image(size: 14, strokeWidth: 2)
+    configuration?.imageColorTransformer = UIConfigurationColorTransformer { _ in
+      state == .sent ? Palette.statusGreen : Palette.textPrimary
+    }
+    let title =
+      switch state {
+      case .sending: String(localized: "diagnostics.connectionDiagnosticsView.sending", defaultValue: "Sending…")
+      case .sent: String(localized: "diagnostics.connectionDiagnosticsView.sent", defaultValue: "Diagnostics sent")
+      case .failed: String(localized: "diagnostics.connectionDiagnosticsView.retrySending", defaultValue: "Retry sending")
+      case nil: String(localized: "diagnostics.connectionDiagnosticsView.sendDiagnostics", defaultValue: "Send diagnostics")
+      }
+    configuration?.attributedTitle = AttributedString(
+      title, attributes: AttributeContainer([.font: Typography.font(Typography.metaSize, .semibold)]))
+    sendButton.configuration = configuration
+    sendButton.isEnabled = state != .sending
+  }
+
+  /// Sends the redacted report for this incident after the tap; a report whose incident changed meanwhile isn't sent.
+  private func sendDiagnostics() {
+    let incident = ConnectionDiagnosis.diagnose(
+      endpoint: session.host.endpoint, state: session.connectionState, path: logPath, entries: session.connectionLog
+    ).reportableIncidentId
+    guard let key = submissionKey(incident), submissions[key] != .sending else { return }
+    submissions[key] = .sending
+    setNeedsUpdateProperties()
+    let report = report()
+    let version = appVersion
+    Task { [weak self] in
+      let error = await ConnectionDiagnosticsSubmission.submit(report: report, appVersion: version, platform: "ios")
+      guard let self else { return }
+      self.submissions[key] = error == nil ? .sent : .failed
+      self.setNeedsUpdateProperties()
+    }
+  }
+
+  private func copyReport() {
+    UIPasteboard.general.string = report()
     Haptics.select()
     copied = true
     renderCopy()

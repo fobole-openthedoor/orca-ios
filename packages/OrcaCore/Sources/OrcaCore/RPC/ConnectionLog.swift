@@ -8,6 +8,8 @@ public struct ConnectionLogEntry: Sendable, Equatable, Identifiable {
   /// The evidence the diagnosis reads, as ConnectionDiagnosticCode.
   public enum Code: String, Sendable {
     case clientSessionStarted = "client-session-started"
+    case appResumed = "app-resumed"
+    case networkChanged = "network-changed"
     case connectTimeout = "connect-timeout"
     case handshakeTimeout = "handshake-timeout"
     case authenticationRejected = "authentication-rejected"
@@ -15,13 +17,15 @@ public struct ConnectionLogEntry: Sendable, Equatable, Identifiable {
     case livenessTimeout = "liveness-timeout"
     case retryScheduled = "retry-scheduled"
     case relayDialFailed = "relay-dial-failed"
+    case relaySessionFailed = "relay-session-failed"
     case relayConnected = "relay-connected"
     case directConnected = "direct-connected"
   }
 
   public enum Path: String, Sendable { case lan, tailscale, relay }
 
-  public let id: Int
+  /// Unique across launches, so history kept on disk never collides with this run's events.
+  public let id: String
   public let date: Date
   public let level: Level
   public let message: String
@@ -31,8 +35,18 @@ public struct ConnectionLogEntry: Sendable, Equatable, Identifiable {
   /// The relay cell's close code, kept apart so the diagnosis need not parse `detail`.
   public let relayCloseCode: Int?
 
+  /// An event of this run: its counter, behind this launch's own token.
   public init(
     id: Int, date: Date = Date(), level: Level, message: String, detail: String? = nil, code: Code? = nil,
+    path: Path? = nil, relayCloseCode: Int? = nil
+  ) {
+    self.init(
+      id: "\(Self.launchToken)-\(id)", date: date, level: level, message: message, detail: detail, code: code, path: path,
+      relayCloseCode: relayCloseCode)
+  }
+
+  public init(
+    id: String, date: Date = Date(), level: Level, message: String, detail: String? = nil, code: Code? = nil,
     path: Path? = nil, relayCloseCode: Int? = nil
   ) {
     self.id = id
@@ -62,12 +76,17 @@ public struct ConnectionLogEntry: Sendable, Equatable, Identifiable {
     case .error: "✕"
     }
   }
+
+  static let launchToken =
+    String(Int(Date().timeIntervalSince1970 * 1000), radix: 36) + "-" + String(UInt32.random(in: 0...UInt32.max), radix: 36)
 }
 
 /// What the recorded events suggest (connection-diagnostics-analysis.ts), in the official English.
 public struct ConnectionDiagnosis: Sendable, Equatable {
   public var likelyCause: String
   public var nextStep: String
+  /// The failure's event id when it is Orca Relay's to look into, which offers Send diagnostics; nil otherwise.
+  public var reportableIncidentId: String? = nil
 
   public static func diagnose(
     endpoint: String, state: ConnectionState, path: ConnectionLogEntry.Path?, entries: [ConnectionLogEntry]
@@ -89,7 +108,13 @@ public struct ConnectionDiagnosis: Sendable, Equatable {
       let who = failure.path == .relay ? "Relay" : "The connected host"
       return .init(
         likelyCause: "\(who) stopped answering authenticated health checks.",
-        nextStep: "Orca closed the stale session and started recovery.")
+        nextStep: "Orca closed the stale session and started recovery.",
+        reportableIncidentId: failure.path == .relay ? failure.id : nil)
+    case .relaySessionFailed:
+      return .init(
+        likelyCause: "The active Relay session closed unexpectedly.",
+        nextStep: "Orca started Relay recovery; the event history includes the cell close reason.",
+        reportableIncidentId: failure.path == .relay ? failure.id : nil)
     case .authenticationRejected:
       return .init(
         likelyCause: "The desktop rejected this device during authentication.",
@@ -132,7 +157,7 @@ public struct ConnectionDiagnosis: Sendable, Equatable {
   }
 
   private static let failureCodes: Set<ConnectionLogEntry.Code> = [
-    .connectTimeout, .handshakeTimeout, .authenticationRejected, .livenessTimeout, .relayDialFailed,
+    .connectTimeout, .handshakeTimeout, .authenticationRejected, .livenessTimeout, .relayDialFailed, .relaySessionFailed,
   ]
 
   static func name(of path: ConnectionLogEntry.Path) -> String {

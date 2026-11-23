@@ -18,8 +18,9 @@ public final class HostSession {
   /// True until the first workspace list arrives.
   public private(set) var isLoading = true
   public private(set) var loadError: String?
-  /// Every step of dialing this desktop since the app started, oldest first, for Network diagnostics.
+  /// The newest steps of dialing this desktop, oldest first, for Network diagnostics: kept across launches.
   public private(set) var connectionLog: [ConnectionLogEntry] = []
+  @ObservationIgnored private let logStore: PersistedConnectionLog?
   /// When the connection last came up, for the diagnostics report.
   public private(set) var lastConnectedAt: Date?
 
@@ -36,9 +37,12 @@ public final class HostSession {
   /// `onRelayUpdate` receives relay assignments and credentials to save with the host.
   public init(
     host: PairedHost, clientId: String, dialer: any WebSocketDialer = URLSessionWebSocketDialer(),
+    logStore: PersistedConnectionLog? = .shared,
     onRelayUpdate: (@Sendable (RelayEndpoint, RelayCredentialBundle) -> Void)? = nil
   ) {
     self.host = host
+    self.logStore = logStore
+    connectionLog = PersistedConnectionLog.merge(stored: logStore?.load(hostId: host.id.uuidString) ?? [], live: [])
     var configuration = host.connectionConfiguration
     configuration.clientCapabilities = ClientCapability.all
     configuration.onRelayUpdate = onRelayUpdate
@@ -90,10 +94,8 @@ public final class HostSession {
         guard let self else {
           return
         }
-        self.connectionLog.append(entry)
-        if self.connectionLog.count > OrcaConnection.logLimit {
-          self.connectionLog.removeFirst()
-        }
+        self.connectionLog = PersistedConnectionLog.trimmed(self.connectionLog + [entry.redacted()])
+        self.logStore?.save(hostId: self.host.id.uuidString, entries: self.connectionLog)
       }
     })
     tasks.append(Task { [weak self] in

@@ -21,6 +21,8 @@ final class SessionViewController: UIViewController {
 
   /// The chat to bring to the front once the tabs arrive, as an item or a past session asked.
   private var focusSessionId: String?
+  /// The profile a new browser tab opens in; nil lets the host apply desktop's rule (repo, workspace, host default).
+  private var browserProfileId: String?
   /// The title for a workspace the list doesn't carry, such as the Floating Workspace.
   var fallbackTitle: String?
 
@@ -255,7 +257,8 @@ final class SessionViewController: UIViewController {
       // The desktop's page, streamed; nil support means the host's capabilities haven't been read yet.
       next = BrowserTabViewController(
         api: session.api, worktreeId: worktreeId, tab: tab?.browser ?? BrowserTabState([:]),
-        streamingSupported: session.status?.supports(BrowserCapability.screencast))
+        streamingSupported: session.status?.supports(BrowserCapability.screencast),
+        certificateTrustSupported: session.status?.supports(BrowserCertificateTrustCapability.certificateTrust) == true)
     case nil where tabsLoaded:
       let api = session.api
       let selector = selector
@@ -435,12 +438,44 @@ final class SessionViewController: UIViewController {
             UIAction(
               title: String(localized: "session.sheets.browser", defaultValue: "Browser"), image: Lucide.globe.image(size: 18)
             ) { [weak self] _ in self?.promptNewBrowser() },
+            browserProfileMenu(),
             UIAction(
               title: String(localized: "session.sheets.markdownNote", defaultValue: "Markdown Note"),
               image: Lucide.fileText.image(size: 18)
             ) { [weak self] _ in self?.run { try await api.createMarkdownNote(worktree: selector) } },
           ]),
       ])
+  }
+
+  /// The new-tab sheet's Profile row (MobileBrowserProfilePicker.tsx): which of the host's browser profiles a
+  /// new browser tab opens in, read when the menu opens. Hidden with one profile, or on a host that lists none.
+  private func browserProfileMenu() -> UIMenuElement {
+    let api = session.api
+    let streams = session.status?.supports(BrowserCapability.screencast) == true
+    return UIDeferredMenuElement.uncached { [weak self] completion in
+      guard streams else { return completion([]) }
+      Task { @MainActor in
+        let profiles = await api.browserProfiles()
+        guard let self, profiles.count >= 2 else { return completion([]) }
+        let defaultLabel = String(localized: "session.browserProfile.default", defaultValue: "Default")
+        let workspaceDefault = String(localized: "session.browserProfile.workspaceDefault", defaultValue: "Workspace default")
+        // A profile deleted on the host since it was picked falls back to the workspace default.
+        if let chosen = self.browserProfileId, !profiles.contains(where: { $0.id == chosen }) { self.browserProfileId = nil }
+        let chosen = self.browserProfileId
+        let options: [(id: String?, title: String)] =
+          [(nil, workspaceDefault)] + profiles.map { ($0.id, BrowserProfile.label($0.label, id: $0.id, defaultLabel: defaultLabel)) }
+        let menu = UIMenu(
+          title: String(localized: "session.browserProfile.title", defaultValue: "Profile"),
+          subtitle: options.first { $0.id == chosen }?.title,
+          image: Lucide.userRound.image(size: 18),
+          children: options.map { option in
+            UIAction(title: option.title, state: option.id == chosen ? .on : .off) { [weak self] _ in
+              self?.browserProfileId = option.id
+            }
+          })
+        completion([menu])
+      }
+    }
   }
 
   /// The official New Browser prompt: a URL, or blank for a new tab. Hosts that can't stream a page to the
@@ -472,7 +507,8 @@ final class SessionViewController: UIViewController {
           String(localized: "session.useContentCreateActions.invalidUrl", defaultValue: "Enter a valid URL"), kind: .error)
         return
       }
-      self?.run { try await api.createBrowserTab(worktree: selector, url: url) }
+      let profileId = self?.browserProfileId
+      self?.run { try await api.createBrowserTab(worktree: selector, url: url, profileId: profileId) }
     }
     alert.addAction(open)
     alert.preferredAction = open

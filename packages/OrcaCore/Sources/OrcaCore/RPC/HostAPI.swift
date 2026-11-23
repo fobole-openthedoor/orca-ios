@@ -140,9 +140,11 @@ public struct HostAPI: Sendable {
   }
 
   /// A browser tab on a blank page (`browser.tabCreate`), shown on the desktop as the workspace's new tab.
-  public func createBrowserTab(worktree selector: String, url: String = "about:blank") async throws {
-    _ = try await connection.request(
-      "browser.tabCreate", ["worktree": .string(selector), "url": .string(url), "activate": true])
+  /// No `profileId` lets the host pick the profile by desktop's rule.
+  public func createBrowserTab(worktree selector: String, url: String = "about:blank", profileId: String? = nil) async throws {
+    var params: [String: JSONValue] = ["worktree": .string(selector), "url": .string(url), "activate": true]
+    if let profileId { params["profileId"] = .string(profileId) }
+    _ = try await connection.request("browser.tabCreate", .object(params))
   }
 
   /// A new Markdown note opened as a tab, as the official New tab sheet makes one: `untitled.md`, or the first

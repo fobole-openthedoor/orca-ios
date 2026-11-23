@@ -9,6 +9,8 @@ public struct BrowserTabState: Sendable, Equatable {
   public var canGoBack: Bool
   public var canGoForward: Bool
   public var loadError: BrowserLoadError?
+  /// The host's certificate challenge for this page, while a certificate stops it.
+  public var certificateFailure: BrowserCertificateFailure?
   public var profileId: String?
 
   public init(_ json: JSONValue) {
@@ -18,6 +20,7 @@ public struct BrowserTabState: Sendable, Equatable {
     canGoBack = json["canGoBack"]?.boolValue ?? false
     canGoForward = json["canGoForward"]?.boolValue ?? false
     loadError = json["loadError"].flatMap(BrowserLoadError.init)
+    certificateFailure = json["certificateFailure"].flatMap(BrowserCertificateFailure.init)
     profileId = json["browserProfileId"]?.stringValue
   }
 }
@@ -27,6 +30,12 @@ public struct BrowserLoadError: Sendable, Equatable {
   public var code: Int
   public var description: String
   public var validatedUrl: String
+
+  public init(code: Int, description: String, validatedUrl: String) {
+    self.code = code
+    self.description = description
+    self.validatedUrl = validatedUrl
+  }
 
   init?(_ json: JSONValue) {
     guard let description = json["description"]?.stringValue else { return nil }

@@ -107,6 +107,24 @@
         "activityFooter": "A working agent shows on the Lock Screen and in the Dynamic Island until it stops.",
         "activityToggle": "Show working agents",
         "showTips": "Show tips again"
+      },
+      "browser": {
+        "loadFailure": {
+          "notRunningTitle": "Nothing is running on {{host}} yet",
+          "notRunningDescription": "Start the dev server for this address.",
+          "refusedTitle": "{{host}} refused to connect",
+          "refusedDescription": "The site may be down, or the address may be wrong.",
+          "dnsTitle": "Couldn't find {{host}}",
+          "dnsDescription": "Check the address for typos.",
+          "offlineTitle": "You're offline",
+          "timeoutTitle": "{{host}} took too long to respond",
+          "resetTitle": "The connection to {{host}} was interrupted",
+          "blockedTitle": "{{host}} is blocked",
+          "blockedDescription": "An extension blocked this page. To open it, allow this site in the extension, then retry.",
+          "otherTitle": "Can't reach {{host}}",
+          "otherTitleWithoutHost": "Can't load this page",
+          "thisAddress": "this address"
+        }
       }
     }
   },
@@ -218,6 +236,24 @@
         "activityFooter": "智能体工作时显示在锁定屏幕和灵动岛上，停下后消失。",
         "activityToggle": "显示工作中的智能体",
         "showTips": "重新显示操作提示"
+      },
+      "browser": {
+        "loadFailure": {
+          "notRunningTitle": "{{host}} 上还没有运行任何服务",
+          "notRunningDescription": "请启动此地址的开发服务器",
+          "refusedTitle": "{{host}} 拒绝了连接",
+          "refusedDescription": "网站可能已关闭，或地址有误",
+          "dnsTitle": "找不到 {{host}}",
+          "dnsDescription": "请检查地址是否有拼写错误",
+          "offlineTitle": "你已离线",
+          "timeoutTitle": "{{host}} 响应时间过长",
+          "resetTitle": "与 {{host}} 的连接已中断",
+          "blockedTitle": "{{host}} 已被阻止",
+          "blockedDescription": "某个扩展程序阻止了此页面。要打开它，请在该扩展程序中允许此网站，然后重试",
+          "otherTitle": "无法访问 {{host}}",
+          "otherTitleWithoutHost": "无法加载此页面",
+          "thisAddress": "此地址"
+        }
       }
     },
     "overrides": {
@@ -351,6 +387,24 @@
         "activityFooter": "代理工作時顯示在鎖定畫面和動態島上，停下後消失。",
         "activityToggle": "顯示工作中的代理",
         "showTips": "重新顯示操作提示"
+      },
+      "browser": {
+        "loadFailure": {
+          "notRunningTitle": "{{host}} 上尚未執行任何服務",
+          "notRunningDescription": "請啟動此位址的開發伺服器。",
+          "refusedTitle": "{{host}} 拒絕連線",
+          "refusedDescription": "網站可能無法使用，或網址有誤。",
+          "dnsTitle": "找不到 {{host}}",
+          "dnsDescription": "請檢查網址是否有拼字錯誤。",
+          "offlineTitle": "已離線",
+          "timeoutTitle": "{{host}} 回應時間過長",
+          "resetTitle": "與 {{host}} 的連線已中斷",
+          "blockedTitle": "{{host}} 已遭封鎖",
+          "blockedDescription": "擴充功能封鎖了此頁面。若要開啟，請在該擴充功能中允許此網站，然後重試。",
+          "otherTitle": "無法存取 {{host}}",
+          "otherTitleWithoutHost": "無法載入此頁面",
+          "thisAddress": "此位址"
+        }
       }
     }
   }
