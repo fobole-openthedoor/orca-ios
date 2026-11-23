@@ -388,6 +388,8 @@ public struct ChatTranscript: Sendable, Equatable {
       byId = [:]
       submissions = [:]
       oldestCursor = nil
+      // A snapshot restates the live state; anything a cache restored before it is dropped.
+      hostWorking = nil
       if let page = frame["page"] {
         merge(page: page, replacingWindow: true)
       }
@@ -419,6 +421,18 @@ public struct ChatTranscript: Sendable, Equatable {
   /// Merges an older page from `agentSession.history`.
   public mutating func prepend(page: JSONValue) {
     merge(page: page, replacingWindow: false)
+  }
+
+  /// What a cache restored is history only: whether the agent works, its background tasks and queue, and
+  /// the fence and cursor a write would cite are the host's to say again, so they are dropped until its
+  /// snapshot arrives.
+  public mutating func forgetLiveState() {
+    hostWorking = false
+    backgroundTasks = []
+    stopsBackgroundTasks = false
+    queuedMessages = []
+    fence = nil
+    cursor = nil
   }
 
   /// The fence a mutation reply reported.

@@ -535,21 +535,44 @@ final class ChatViewController: UIViewController {
   /// The chat for picture in picture: what the agent is doing now, then its newest words, calls and thoughts.
   func pipLines() -> (working: Bool, lines: [(text: String, style: PiPFrame.Style)]) {
     var lines: [(text: String, style: PiPFrame.Style)] = []
-    for item in model.transcript.items.suffix(14) where item.agentId == nil {
+    let items = Array(model.transcript.items.suffix(24).filter { $0.agentId == nil })
+    let detailed = PiPCenter.showsCommands
+    var index = 0
+    while index < items.count {
+      let item = items[index]
       switch item.body {
+      case .toolCall(let call) where !detailed:
+        // As the chat draws them: a run of calls is one line saying what it did.
+        var calls = [call]
+        while index + 1 < items.count, case .toolCall(let next) = items[index + 1].body {
+          calls.append(next)
+          index += 1
+        }
+        let running = model.isWorking && index == items.count - 1
+        lines.append((ToolCategory.sentence(for: calls, live: running), .muted))
+      case .toolCall(let call):
+        lines.append(("$ \(call.name) \(call.summary.replacingOccurrences(of: "\n", with: " ").prefix(120))", .call))
       case .message(let message) where message.role == "reasoning":
-        let thought = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !thought.isEmpty { lines.append((String(thought.suffix(240)), .muted)) }
+        if detailed {
+          let thought = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !thought.isEmpty { lines.append((String(thought.suffix(240)), .muted)) }
+        } else {
+          // Consecutive thoughts read as one "Thought" line.
+          while index + 1 < items.count, case .message(let next) = items[index + 1].body, next.role == "reasoning" { index += 1 }
+          let live = model.isWorking && index == items.count - 1
+          lines.append((live ? String(localized: "chat.turnStatus.thinking", defaultValue: "Thinking") : "Thought", .muted))
+        }
       case .message(let message) where message.role == "user":
         let words = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !words.isEmpty { lines.append(("› " + String(words.prefix(160)), .muted)) }
       case .message(let message):
-        let words = Self.plain(message.text)
+        // A bot's quiet marker goes before the Markdown is flattened, as the chat hides it.
+        let text = isBotChat ? BotQuietResult.strip(message.text).words : message.text
+        let words = Self.plain(text)
         if !words.isEmpty { lines.append((String(words.suffix(600)), .body)) }
-      case .toolCall(let call):
-        lines.append(("$ \(call.name) \(call.summary.replacingOccurrences(of: "\n", with: " ").prefix(120))", .call))
       default: break
       }
+      index += 1
     }
     if let activity = model.transcript.activity, model.isWorking, !activity.isEmpty {
       lines.append(("… " + activity, .muted))

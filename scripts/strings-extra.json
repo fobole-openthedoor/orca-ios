@@ -81,7 +81,8 @@
       },
       "pip": {
         "start": "Picture in Picture",
-        "onLeave": "Picture in Picture on leaving"
+        "onLeave": "Picture in Picture on leaving",
+        "commands": "Show each command in Picture in Picture"
       }
     }
   },
@@ -167,7 +168,8 @@
       },
       "pip": {
         "start": "画中画",
-        "onLeave": "离开时打开画中画"
+        "onLeave": "离开时打开画中画",
+        "commands": "画中画中显示每条命令"
       }
     },
     "overrides": {
@@ -275,7 +277,8 @@
       },
       "pip": {
         "start": "子母畫面",
-        "onLeave": "離開時開啟子母畫面"
+        "onLeave": "離開時開啟子母畫面",
+        "commands": "子母畫面中顯示每條命令"
       }
     }
   }

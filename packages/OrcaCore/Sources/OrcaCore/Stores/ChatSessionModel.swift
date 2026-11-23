@@ -101,9 +101,19 @@ public final class ChatSessionModel {
 
   // MARK: Stream
 
+  /// The last frames this session showed, kept across launches (`FrameCache`).
+  @ObservationIgnored private lazy var cache = FrameCache(name: "chat-" + sessionId)
+
   public func start() {
     guard streamTask == nil else {
       return
+    }
+    // What was here last time shows at once; the live snapshot replaces it when it arrives.
+    if transcript.items.isEmpty {
+      let cached = cache.load()
+      for frame in cached { transcript.apply(frame) }
+      transcript.forgetLiveState()
+      if !transcript.items.isEmpty { phase = .ready }
     }
     streamTask = Task { [weak self] in
       var delay: Duration = .milliseconds(500)
@@ -274,6 +284,8 @@ public final class ChatSessionModel {
 
   private func apply(_ frame: JSONValue) {
     transcript.apply(frame)
+    let type = frame["type"]?.stringValue
+    if type != "end" { cache.record(frame, isSnapshot: type == "snapshot") }
     if phase != .ready, frame["type"]?.stringValue != "end" {
       phase = .ready
     }

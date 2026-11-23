@@ -92,10 +92,17 @@ final class SessionViewController: UIViewController {
     let api = session.api
     let selector = selector
     Task { await api.activate(worktree: selector) }
+    // The tabs this workspace had last time show at once, so its chat opens without waiting for the desktop.
+    let tabsCache = FrameCache(name: "tabs-" + session.host.id.uuidString + "-" + worktreeId)
+    if let cached = tabsCache.load().last {
+      let restored = SessionTabs(cached)
+      if !restored.tabs.isEmpty, !restored.removed { apply(restored, cached: true) }
+    }
     tabsTask = Task { [weak self] in
       let subscription = await api.tabs(worktree: selector)
       do {
         for try await frame in subscription.events {
+          tabsCache.record(frame, isSnapshot: true)
           self?.apply(SessionTabs(frame))
         }
       } catch {}
@@ -133,9 +140,11 @@ final class SessionViewController: UIViewController {
     updateStrip()
   }
 
-  private func apply(_ next: SessionTabs) {
+  /// `cached`: the tabs from last time, shown until the desktop's own list arrives; an empty workspace isn't
+  /// concluded from them.
+  private func apply(_ next: SessionTabs, cached: Bool = false) {
     tabs = next
-    tabsLoaded = true
+    tabsLoaded = !cached
     if next.removed {
       navigationController?.popViewController(animated: true)
       return
@@ -490,6 +499,10 @@ final class SessionViewController: UIViewController {
               title: String(localized: "orcaios.pip.onLeave", defaultValue: "Picture in Picture on leaving"),
               image: UIImage(systemName: "rectangle.on.rectangle"), state: PiPCenter.startsOnLeave ? .on : .off
             ) { _ in PiPCenter.startsOnLeave.toggle() },
+            UIAction(
+              title: String(localized: "orcaios.pip.commands", defaultValue: "Show each command in Picture in Picture"),
+              image: UIImage(systemName: "list.bullet.rectangle"), state: PiPCenter.showsCommands ? .on : .off
+            ) { _ in PiPCenter.showsCommands.toggle() },
           ] : []),
       UIAction(
         title: String(localized: "session.header.fileExplorer", defaultValue: "File explorer"),

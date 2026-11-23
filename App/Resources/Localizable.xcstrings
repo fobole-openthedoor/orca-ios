@@ -90261,6 +90261,29 @@
         }
       }
     },
+    "orcaios.pip.commands": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show each command in Picture in Picture"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画中画中显示每条命令"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子母畫面中顯示每條命令"
+          }
+        }
+      }
+    },
     "orcaios.pip.onLeave": {
       "extractionState": "manual",
       "localizations": {

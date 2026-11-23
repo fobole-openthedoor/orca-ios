@@ -37,6 +37,15 @@ final class PiPCenter: NSObject {
     }
   }
 
+  /// A chat in the window lists each command; off, a run of them reads as one line, as in the chat.
+  static var showsCommands: Bool {
+    get { UserDefaults.standard.bool(forKey: "orca.pip.commands") }
+    set {
+      UserDefaults.standard.set(newValue, forKey: "orca.pip.commands")
+      shared.draw(force: true)
+    }
+  }
+
   /// The frame for the session on screen; nil when there is nothing to show.
   var source: (() -> PiPFrame?)? {
     didSet {
