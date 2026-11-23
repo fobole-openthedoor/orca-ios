@@ -4,7 +4,7 @@ import UIKit
 /// The session's tabs as iGhostVT's strip draws them: every open tab as a chip in one glass capsule, sharing
 /// its width as Safari's do and scrolling once they would get too narrow, the shown one on a soft capsule;
 /// a glass + beside it for a new tab. A working agent's chip spins; one waiting on you carries the
-/// attention dot. Long-pressing a chip offers to close it.
+/// attention dot. Each chip closes with its ×, or from its long-press menu.
 final class SessionTabStrip: UIView {
   /// What a new tab can be; built when + is tapped.
   var newTabMenu: (() -> UIMenu)?
@@ -98,6 +98,11 @@ final class SessionTabStrip: UIView {
           self.onSelect?(tab)
         }, for: .touchUpInside)
         chip.addInteraction(UIContextMenuInteraction(delegate: self))
+        chip.onClose = { [weak self, weak chip] in
+          guard let self, let chip, let tab = self.tabs.first(where: { $0.id == chip.tabId }) else { return }
+          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+          self.onClose?(tab)
+        }
         chips.addArrangedSubview(chip)
         let width = chip.widthAnchor.constraint(equalToConstant: Self.minimumChip)
         width.isActive = true
@@ -169,6 +174,8 @@ extension SessionTabStrip: UIContextMenuInteractionDelegate {
 /// tab reads in the primary colour on a soft capsule; the rest are bare, secondary text.
 private final class TabChip: UIControl {
   private(set) var tabId: String?
+  var onClose: (() -> Void)?
+  private let close = UIButton(type: .system)
   private let fill = UIView()
   private let mark = FilledIconView(size: 14)
   private let icon = LucideView(.squareTerminal, size: 14, strokeWidth: 2.1, color: Palette.textSecondary)
@@ -197,6 +204,16 @@ private final class TabChip: UIControl {
     row.isUserInteractionEnabled = false
     row.translatesAutoresizingMaskIntoConstraints = false
     addSubview(row)
+    // The × closes the tab in one tap, as iGhostVT's chips do; it is its own target, not the chip's.
+    var closeConfig = UIButton.Configuration.plain()
+    closeConfig.image = Lucide.x.image(size: 12, strokeWidth: 2.4)
+    closeConfig.baseForegroundColor = Palette.textMuted
+    closeConfig.contentInsets = .init(top: 6, leading: 6, bottom: 6, trailing: 6)
+    close.configuration = closeConfig
+    close.accessibilityLabel = String(localized: "session.bulkTabClose.confirm", defaultValue: "Close tab")
+    close.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .primaryActionTriggered)
+    close.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(close)
     NSLayoutConstraint.activate([
       heightAnchor.constraint(equalToConstant: 32),
       fill.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -204,9 +221,14 @@ private final class TabChip: UIControl {
       fill.topAnchor.constraint(equalTo: topAnchor),
       fill.bottomAnchor.constraint(equalTo: bottomAnchor),
       row.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
-      row.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
-      row.centerXAnchor.constraint(equalTo: centerXAnchor),
+      row.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -2),
+      close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+      close.centerYAnchor.constraint(equalTo: centerYAnchor),
+      close.widthAnchor.constraint(equalToConstant: 26),
+      close.heightAnchor.constraint(equalToConstant: 26),
       row.centerYAnchor.constraint(equalTo: centerYAnchor),
+      // Centred in the chip when there is room, as before the ×.
+      { let center = row.centerXAnchor.constraint(equalTo: centerXAnchor); center.priority = .defaultHigh; return center }(),
       dot.widthAnchor.constraint(equalToConstant: 6),
       dot.heightAnchor.constraint(equalToConstant: 6),
     ])
@@ -232,6 +254,7 @@ private final class TabChip: UIControl {
     dot.backgroundColor = AgentStatusDot.color(for: state ?? "idle")
     accessibilityLabel = text
     accessibilityTraits = shown ? [.button, .selected] : .button
+    close.configuration?.baseForegroundColor = shown ? Palette.textSecondary : Palette.textMuted
   }
 
   override var isHighlighted: Bool {
