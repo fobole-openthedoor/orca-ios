@@ -33,10 +33,14 @@ final class BotImportViewController: UITableViewController {
 
   private var found: Int { sources.reduce(0) { $0 + $1.bots.count } }
 
-  override func numberOfSections(in tableView: UITableView) -> Int { max(1, sources.count) }
+  // The found apps' bots, then Another app… for one Orca can't see.
+  private var foundSections: Int { max(1, sources.count) }
+
+  override func numberOfSections(in tableView: UITableView) -> Int { foundSections + 1 }
 
   override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-    sources.isEmpty ? 0 : sources[section].bots.count
+    if section == foundSections { return loading ? 0 : 1 }
+    return sources.isEmpty ? 0 : sources[section].bots.count
   }
 
   override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
@@ -48,7 +52,10 @@ final class BotImportViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-    guard section == max(1, sources.count) - 1, !loading else { return nil }
+    if section == foundSections {
+      return loading ? nil : String(localized: "bots.import.otherAppNote", defaultValue: "Your old bot copies its files for you")
+    }
+    guard section == foundSections - 1, !loading else { return nil }
     return [
       String(localized: "bots.import.description", defaultValue: "Your new bot reads the old one and sets itself up."),
       String(localized: "bots.import.keysStay", defaultValue: "Keys and logins stay behind"),
@@ -56,6 +63,16 @@ final class BotImportViewController: UITableViewController {
   }
 
   override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+    if indexPath.section == foundSections {
+      let cell = tableView.dequeueReusableCell(withIdentifier: "row", for: indexPath)
+      var content = UIListContentConfiguration.cell()
+      content.text = String(localized: "bots.import.otherApp", defaultValue: "Another app…")
+      content.image = Lucide.folderPlus.image(size: 18)
+      content.imageProperties.tintColor = Palette.textSecondary
+      cell.contentConfiguration = content
+      cell.accessoryType = .disclosureIndicator
+      return cell
+    }
     let source = sources[indexPath.section]
     let bot = source.bots[indexPath.row]
     let cell = tableView.dequeueReusableCell(withIdentifier: "row", for: indexPath)
@@ -75,6 +92,10 @@ final class BotImportViewController: UITableViewController {
 
   override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
     tableView.deselectRow(at: indexPath, animated: true)
+    if indexPath.section == foundSections {
+      navigationController?.pushViewController(BotImportExportViewController(session: session, onPick: onPick), animated: true)
+      return
+    }
     let source = sources[indexPath.section]
     let bot = source.bots[indexPath.row]
     onPick(

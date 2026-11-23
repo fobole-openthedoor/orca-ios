@@ -189,3 +189,31 @@ extension HostAPI {
     return result["review"].flatMap(BotShareReview.init)
   }
 }
+
+/// One folder on the desktop (`files.browseServerDir`); `~` is the home folder there.
+public struct HostDirectory: Sendable, Equatable {
+  public var path: String
+  public var folders: [String]
+  /// Everything in it that isn't hidden.
+  public var itemCount: Int
+  public var windows: Bool
+
+  public func child(_ name: String) -> String {
+    let separator = windows ? "\\" : "/"
+    return path.hasSuffix(separator) ? path + name : path + separator + name
+  }
+}
+
+extension HostAPI {
+  public func browseDirectory(_ path: String) async throws -> HostDirectory {
+    let result = try await connection.request("files.browseServerDir", ["path": .string(path)])
+    let entries = (result["entries"]?.arrayValue ?? []).compactMap { entry -> (String, Bool)? in
+      guard let name = entry["name"]?.stringValue, !name.hasPrefix(".") else { return nil }
+      return (name, entry["isDirectory"]?.boolValue ?? false)
+    }
+    return HostDirectory(
+      path: result["resolvedPath"]?.stringValue ?? path,
+      folders: entries.filter(\.1).map(\.0).sorted { $0.localizedStandardCompare($1) == .orderedAscending },
+      itemCount: entries.count, windows: result["pathFlavor"]?.stringValue == "win32")
+  }
+}
