@@ -63,6 +63,11 @@ final class PiPCenter: NSObject {
   private var lastDrawn = Date.distantPast
   private let silence = SilentAudio()
   private(set) var isActive = false
+  /// The system starts picture in picture on leaving only from media that plays; idle, the frames read as
+  /// paused, so nothing opens. Read from the playback delegate, off the main actor.
+  nonisolated(unsafe) private static var playing = false
+  /// The window was opened from the session menu: it stays even while idle.
+  private var openedByHand = false
 
   /// The window's picture: 4:3, drawn at 2× for a sharp PiP window.
   private static let size = CGSize(width: 400, height: 300)
@@ -114,10 +119,22 @@ final class PiPCenter: NSObject {
 
   /// Leaving opens the window only while the agent is working: there is nothing to watch otherwise.
   private func updateAutoStart() {
-    let wanted = Self.startsOnLeave && (last?.working ?? false)
+    let working = last?.working ?? false
+    let wanted = Self.startsOnLeave && working
     if controller?.canStartPictureInPictureAutomaticallyFromInline != wanted {
       controller?.canStartPictureInPictureAutomaticallyFromInline = wanted
     }
+    if Self.playing != working {
+      Self.playing = working
+      controller?.invalidatePlaybackState()
+    }
+  }
+
+  /// The app is about to go: decide from what is on screen right now, not the last frame drawn.
+  func appWillResignActive() {
+    guard host.superview != nil else { return }
+    draw(force: true)
+    updateAutoStart()
   }
 
   /// Back in the app, the window goes: the session it showed is on screen again.
@@ -127,6 +144,7 @@ final class PiPCenter: NSObject {
   }
 
   func start() {
+    openedByHand = true
     draw(force: true)
     controller?.startPictureInPicture()
   }
@@ -161,12 +179,15 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
     MainActor.assumeIsolated {
       isActive = true
       startTimer(interval: 0.5)
+      // Opened on its own while nothing runs: close it again.
+      if !openedByHand, !(last?.working ?? false) { controller.stopPictureInPicture() }
     }
   }
 
   nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
     MainActor.assumeIsolated {
       isActive = false
+      openedByHand = false
       startTimer(interval: 1)
     }
   }
@@ -187,7 +208,9 @@ extension PiPCenter: AVPictureInPictureSampleBufferPlaybackDelegate {
     CMTimeRange(start: .negativeInfinity, duration: .positiveInfinity)
   }
 
-  nonisolated func pictureInPictureControllerIsPlaybackPaused(_ controller: AVPictureInPictureController) -> Bool { false }
+  nonisolated func pictureInPictureControllerIsPlaybackPaused(_ controller: AVPictureInPictureController) -> Bool {
+    !PiPCenter.playing
+  }
 
   nonisolated func pictureInPictureController(
     _ controller: AVPictureInPictureController, didTransitionToRenderSize newRenderSize: CMVideoDimensions

@@ -63,6 +63,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
   }
 
+  func sceneWillResignActive(_ scene: UIScene) {
+    PiPCenter.shared.appWillResignActive()
+  }
+
   func sceneWillEnterForeground(_ scene: UIScene) {
     PiPCenter.shared.appBecameActive()
     if background != .invalid {
