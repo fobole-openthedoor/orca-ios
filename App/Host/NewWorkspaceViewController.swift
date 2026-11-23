@@ -2,8 +2,9 @@ import OrcaCore
 import UIKit
 
 /// Create worktree (new-workspace/creation/forms/NewWorktreeFormSheet.tsx): where it goes (project and the host it
-/// runs on), what it starts from (a name, or an issue, pull request or branch), the agent that starts in it, and
-/// folded options. The button at the bottom makes it on this desktop and opens it.
+/// runs on, connecting an SSH one first), what it starts from (a name, or an issue, pull or merge request, Linear or
+/// Jira issue, or branch), the agent that starts in it, and folded options with the setup script. The button at the
+/// bottom makes it on this desktop, asking first before running a setup script it hasn't trusted, and opens it.
 final class NewWorkspaceViewController: UITableViewController {
   /// An agent choice; a nil id is a blank terminal.
   struct Agent: Equatable {
@@ -43,8 +44,15 @@ final class NewWorkspaceViewController: UITableViewController {
 
   private static func agentChoice(_ id: String) -> Agent { Agent(id: id, title: agentNames[id] ?? id) }
 
-  private enum Section { case location, start, agent, options }
-  private enum Row { case project, runOn, start, agent, name, branchName, note }
+  private enum Section { case location, ssh, start, agent, options, setup }
+  private enum Row { case project, runOn, ssh, start, agent, name, branchName, note, setupRun, setupSkip, setupToggle }
+
+  /// How a create's setup was settled: a forced choice from the trust prompt, and the approval it carries.
+  private struct SetupApproval {
+    var decision: String
+    /// nil: repo-wide trust, nothing pinned.
+    var hash: String?
+  }
 
   private let session: HostSession
   private let onCreated: (String) -> Void
@@ -56,16 +64,37 @@ final class NewWorkspaceViewController: UITableViewController {
   private var agentOverridden = false
   private var agentsFor: String?
 
+  private var availability = WorkspaceSourceAvailability()
+  private var trust = OrcaHookTrust(nil)
+
   private var start: WorkspaceStart = .name
   /// The workspace name: typed, or seeded by the source picked.
   private var name = ""
   /// The name came from the picked source and changes with it.
   private var nameAutoManaged = false
   private var branchName = ""
-  private var note = ""
+  /// Kept on the phone per desktop until a create succeeds (drafts/durable-draft-fields.ts).
+  private var note = "" {
+    didSet { UserDefaults.standard.set(note.isEmpty ? nil : note, forKey: noteKey) }
+  }
   private var optionsOpen = false
   private var creating = false
   private var errorText: String?
+
+  /// A pull or merge request's start point, read when it is picked.
+  private var base: WorkspaceCreateRequest.HostedBase?
+  private var baseTask: Task<Void, Never>?
+
+  /// The picked project's setup script (`repo.hooks`) and what the user chose for it.
+  private var setup: RepoSetupHooks?
+  private var setupFor: String?
+  private var setupChoice: String?
+  private var runSetup = true
+
+  /// The picked SSH project's connection.
+  private var ssh: SSHConnectionState?
+  private var sshFor: String?
+  private var connecting = false
 
   private let createButton = UIButton(configuration: .prominentGlass())
   private let errorLabel = UILabel()
@@ -76,9 +105,14 @@ final class NewWorkspaceViewController: UITableViewController {
     // The caller's pick of projects only chooses where the form opens; the picker lists every project.
     repo = projects.first ?? session.repos.first
     super.init(style: .insetGrouped)
+    note = UserDefaults.standard.string(forKey: noteKey) ?? ""
+    // A kept note opens Options, so it isn't sent unseen.
+    optionsOpen = !note.isEmpty
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  private var noteKey: String { "orca.newWorkspace.note.\(session.host.id.uuidString)" }
 
   static func sheet(session: HostSession, projects: [Repo], onCreated: @escaping (String) -> Void) -> UIViewController {
     let navigation = UINavigationController(
@@ -130,6 +164,9 @@ final class NewWorkspaceViewController: UITableViewController {
 
   private var isGit: Bool { repo.map { !$0.isFolder } ?? true }
 
+  /// An SSH project that isn't connected can't make a workspace or search its sources yet.
+  private var sshGated: Bool { repo?.connectionId != nil && ssh?.isConnected != true }
+
   private var formTitle: String {
     isGit
       ? String(localized: "components.newWorktreeFormSheet.createWorktree", defaultValue: "Create worktree")
@@ -138,17 +175,25 @@ final class NewWorkspaceViewController: UITableViewController {
 
   private var sections: [(section: Section, rows: [Row])] {
     var options: [Row] = []
+    var setupRows: [Row] = []
     if optionsOpen {
       if start != .name { options.append(.name) }
       if isGit {
         switch start {
         case .name, .branch, .newBranch: options.append(.branchName)
-        case .workItem: break
+        default: break
         }
       }
       options.append(.note)
+      if setup?.command != nil {
+        setupRows = setup?.runPolicy == "ask" ? [.setupRun, .setupSkip] : [.setupToggle]
+      }
     }
-    return [(.location, [.project, .runOn]), (.start, [.start]), (.agent, [.agent]), (.options, options)]
+    var result: [(Section, [Row])] = [(.location, [.project, .runOn])]
+    if repo?.connectionId != nil { result.append((.ssh, [.ssh])) }
+    result += [(.start, [.start]), (.agent, [.agent]), (.options, options)]
+    if !setupRows.isEmpty { result.append((.setup, setupRows)) }
+    return result
   }
 
   private func refresh() {
@@ -164,18 +209,36 @@ final class NewWorkspaceViewController: UITableViewController {
     tableView.reloadData()
   }
 
-  /// The SSH targets' names, then the agents the picked project's host has.
+  /// The SSH targets' names, the sources and trusted scripts this desktop has, then what the picked project needs.
   private func loadTargets() {
     let api = session.api
     Task {
-      sshLabels = await api.sshTargetLabels()
+      async let labels = api.sshTargetLabels()
+      async let gitlab = api.gitlabAvailable()
+      async let linear = try? api.linearAccount()
+      async let jira = try? api.jiraAccount()
+      async let trusted = api.orcaHookTrust()
+      let (sshLabels, gitlabInstalled, linearAccount, jiraAccount, trust) = await (labels, gitlab, linear, jira, trusted)
+      self.sshLabels = sshLabels
+      self.trust = trust
+      availability = WorkspaceSourceAvailability(
+        gitlab: gitlabInstalled, linear: linearAccount?.connected == true, jira: jiraAccount?.connected == true,
+        linearWorkspaceId: linearAccount?.selectedWorkspaceId, jiraSites: jiraAccount?.sites ?? [],
+        jiraSiteId: jiraAccount?.selection)
       tableView.reloadData()
     }
+    loadRepoState()
+  }
+
+  /// The picked project's agents, setup script and SSH connection.
+  private func loadRepoState() {
     loadAgents()
+    loadSetup()
+    loadSSH()
   }
 
   private func loadAgents() {
-    guard let repo, agentsFor != repo.id else { return }
+    guard let repo, agentsFor != repo.id, !sshGated else { return }
     agentsFor = repo.id
     let api = session.api
     let repoId = repo.id
@@ -204,6 +267,73 @@ final class NewWorkspaceViewController: UITableViewController {
         agentOverridden = false
       }
       refresh()
+    }
+  }
+
+  /// use-new-workspace-setup-script.ts: the command, where it comes from and the project's run policy. A script that
+  /// asks every time opens Options so the choice is seen.
+  private func loadSetup() {
+    guard let repo, setupFor != repo.id else { return }
+    setupFor = repo.id
+    setup = nil
+    setupChoice = nil
+    runSetup = true
+    let api = session.api
+    let repoId = repo.id
+    Task {
+      let hooks = try? await api.setupHooks(repoId: repoId)
+      guard setupFor == repoId else { return }
+      setup = hooks
+      runSetup = hooks?.runPolicy != "skip-by-default"
+      if hooks?.command != nil, hooks?.runPolicy == "ask" { optionsOpen = true }
+      refresh()
+    }
+  }
+
+  /// use-new-workspace-execution-target.ts: an SSH project's connection, read when it is picked.
+  private func loadSSH() {
+    guard let repo else { return }
+    guard let targetId = repo.connectionId else {
+      ssh = nil
+      sshFor = nil
+      return
+    }
+    guard sshFor != targetId else { return }
+    sshFor = targetId
+    ssh = nil
+    let api = session.api
+    Task {
+      let state: SSHConnectionState
+      do {
+        state = try await api.sshState(targetId: targetId)
+      } catch {
+        state = SSHConnectionState(status: "error", error: TasksViewController.message(error))
+      }
+      guard sshFor == targetId else { return }
+      ssh = state
+      refresh()
+      loadAgents()
+    }
+  }
+
+  private func connectSSH() {
+    guard let targetId = repo?.connectionId, !connecting else { return }
+    connecting = true
+    ssh = SSHConnectionState(status: "connecting")
+    refresh()
+    let api = session.api
+    Task {
+      let state: SSHConnectionState
+      do {
+        state = try await api.connectSSH(targetId: targetId)
+      } catch {
+        state = SSHConnectionState(status: "error", error: TasksViewController.message(error))
+      }
+      connecting = false
+      guard sshFor == targetId else { return }
+      ssh = state
+      refresh()
+      loadAgents()
     }
   }
 
@@ -241,50 +371,143 @@ final class NewWorkspaceViewController: UITableViewController {
     return stack
   }
 
-  private func create() {
-    guard let repo, !creating else { return }
-    view.endEditing(true)
+  // MARK: Create
+
+  /// The request for what the form holds, before its setup is settled.
+  private func makeRequest(repo: Repo) -> WorkspaceCreateRequest {
     let typed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    let request: WorkspaceCreateRequest
     let branch = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
     let agentId = agent.id
     let note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+    // A source's own name stands until the user types another (workspace-create-params.ts).
+    let auto = nameAutoManaged || typed.isEmpty
+    func sourced(_ repoId: String, _ named: (seed: String, display: String), _ source: WorkspaceCreateRequest.Source)
+      -> WorkspaceCreateRequest
+    {
+      WorkspaceCreateRequest(
+        repoId: repoId, name: typed.isEmpty ? named.seed : typed, displayName: auto ? named.display : typed,
+        nameWasGenerated: auto, source: source, agent: agentId, note: note, base: base)
+    }
     switch start {
     case .name:
       // No name typed: a sea creature, as the desktop names one.
       let generated = typed.isEmpty
       let baseName =
         generated ? WorkspaceNames.suggested(taken: session.worktrees.map { ($0.path as NSString).lastPathComponent }) : typed
-      request = WorkspaceCreateRequest(
+      return WorkspaceCreateRequest(
         repoId: repo.id, name: baseName, displayName: generated ? nil : typed, nameWasGenerated: generated,
         branchName: branch, agent: agentId, note: note)
     case .workItem(let item):
-      let seed = WorkspaceStart.slug(item.title)
-      let fallback = "\(item.kind == .pr ? "pr" : "issue")-\(item.number)"
-      let auto = nameAutoManaged || typed.isEmpty
-      request = WorkspaceCreateRequest(
-        repoId: item.repoId, name: typed.isEmpty ? (seed.isEmpty ? fallback : seed) : typed,
-        displayName: auto ? item.title : typed, nameWasGenerated: auto, source: .workItem(item), agent: agentId,
-        note: note)
+      return sourced(
+        item.repoId, WorkspaceSourceName.hosted(title: item.title, number: item.number, kind: item.kind.rawValue),
+        .workItem(item))
+    case .gitlab(let item):
+      return sourced(
+        item.repoId,
+        WorkspaceSourceName.hosted(title: item.title, number: item.number, kind: item.kind == .pr ? "mr" : "issue"),
+        .gitlab(item))
+    case .linear(let issue):
+      return sourced(repo.id, WorkspaceSourceName.identified(identifier: issue.identifier, title: issue.title), .linear(issue))
+    case .jira(let issue):
+      return sourced(repo.id, WorkspaceSourceName.identified(identifier: issue.identifier, title: issue.title), .jira(issue))
     case .branch(let ref):
-      request = WorkspaceCreateRequest(
+      return WorkspaceCreateRequest(
         repoId: repo.id, name: typed.isEmpty ? ref.localBranchName : typed, displayName: typed.isEmpty ? nil : typed,
         nameWasGenerated: false, source: .branch(refName: ref.refName), branchName: branch, agent: agentId, note: note)
     case .newBranch(let newBranch):
-      request = WorkspaceCreateRequest(
-        repoId: repo.id, name: typed.isEmpty ? newBranch : typed, displayName: typed.isEmpty ? newBranch : typed,
-        nameWasGenerated: false, branchName: branch.isEmpty ? newBranch : branch, agent: agentId, note: note)
+      return WorkspaceCreateRequest(
+        repoId: repo.id, name: branch.isEmpty ? newBranch : branch, displayName: typed.isEmpty ? nil : typed,
+        nameWasGenerated: false, source: .newBranch, agent: agentId, note: note)
+    }
+  }
+
+  /// use-new-workspace-create-submit.ts: connect first, resolve a pull or merge request's head, settle the setup
+  /// script (asking when it isn't trusted), then create with retries for a taken name.
+  private func create(approval: SetupApproval? = nil) {
+    guard let repo, !creating else { return }
+    view.endEditing(true)
+    if sshGated {
+      errorText = "Connect \(repo.displayName) before creating a workspace."
+      refresh()
+      return
+    }
+    var decision = approval?.decision ?? "inherit"
+    if approval == nil, let setup, setup.command != nil {
+      if setup.runPolicy == "ask" {
+        guard let setupChoice else {
+          errorText = "Choose whether to run the setup script."
+          optionsOpen = true
+          refresh()
+          return
+        }
+        decision = setupChoice
+      } else {
+        decision = runSetup ? "run" : "skip"
+      }
     }
     creating = true
     errorText = nil
     refresh()
     let api = session.api
+    let start = start
     Task {
       do {
-        guard let id = try await api.createWorkspace(request) else { throw CancellationError() }
+        // A pull or merge request starts from its head; resolved now if the pick's read hasn't landed.
+        if base == nil {
+          switch start {
+          case .workItem(let item) where item.kind == .pr:
+            base = try? await api.resolvePullRequestBase(repoId: item.repoId, number: item.number)
+          case .gitlab(let item) where item.kind == .pr:
+            base = try? await api.resolveMergeRequestBase(repoId: item.repoId, iid: item.number)
+          default: break
+          }
+        }
+        var request = makeRequest(repo: repo)
+        request.setupDecision = decision
+        // Setup is checked for the project the create lands in, which a work item may not share.
+        guard let setupRepo = session.repos.first(where: { $0.id == request.repoId }) ?? (request.repoId == repo.id ? repo : nil)
+        else {
+          throw TaskMessage("This item's project isn't available on this host.")
+        }
+        if let approval {
+          request.approvedSetupHash = approval.hash
+        } else if needsTrustCheck(sameRepo: setupRepo.id == repo.id, decision: decision) {
+          switch try await settleTrust(setupRepo, request: request) {
+          case .approved(let hash): request.approvedSetupHash = hash
+          case .ask(let prompt):
+            creating = false
+            refresh()
+            askTrust(prompt) { run, alwaysTrust in
+              // Repo-wide trust runs whatever comes; a version approval pins what was shown.
+              self.navigationController?.popViewController(animated: true)
+              self.create(
+                approval: SetupApproval(
+                  decision: run ? "run" : "skip",
+                  hash: run && !(alwaysTrust && !prompt.versionOnly) ? prompt.script.contentHash : nil))
+            }
+            return
+          }
+        }
+        let result = try await api.createWorkspace(request)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-        await session.refresh()
-        dismiss(animated: true) { self.onCreated(id) }
+        if let mismatch = result.setupMismatch {
+          // The host skipped setup: the created branch's differs from the one approved. Ask before running it there.
+          creating = false
+          refresh()
+          let prompt = SetupHookTrustViewController.Prompt(
+            repoId: setupRepo.id, repoName: setupRepo.displayName, script: mismatch,
+            previouslyApproved: trust.wasPreviouslyApproved(repoId: setupRepo.id),
+            versionOnly: hostCount(setupRepo.id) > 1, createdBranch: true)
+          askTrust(prompt) { run, _ in
+            Task {
+              // Declining leaves the workspace as it is; either way it opens.
+              if run { _ = try? await api.runApprovedSetup(worktreeId: result.worktreeId, contentHash: mismatch.contentHash) }
+              await self.finishCreated(result.worktreeId, sent: request.note)
+            }
+          }
+          return
+        }
+        await finishCreated(result.worktreeId, sent: request.note)
       } catch {
         UINotificationFeedbackGenerator().notificationOccurred(.error)
         creating = false
@@ -292,6 +515,82 @@ final class NewWorkspaceViewController: UITableViewController {
         refresh()
       }
     }
+  }
+
+  /// createSetupNeedsTrustCheck: setup that may run is checked; one landing in another project is checked unless
+  /// skipped, as the picked project's policy says nothing about it.
+  private func needsTrustCheck(sameRepo: Bool, decision: String) -> Bool {
+    guard sameRepo else { return decision != "skip" }
+    return decision == "run" || (decision == "inherit" && setup?.runPolicy != "skip-by-default")
+  }
+
+  private func hostCount(_ repoId: String) -> Int { session.repos.filter { $0.id == repoId }.count }
+
+  private enum TrustOutcome {
+    case approved(String?)
+    case ask(SetupHookTrustViewController.Prompt)
+  }
+
+  /// resolveCreateSetupApproval: trusted projects run without asking; otherwise the setup of the ref the create
+  /// checks out is read, and a version not approved before is asked about.
+  private func settleTrust(_ setupRepo: Repo, request: WorkspaceCreateRequest) async throws -> TrustOutcome {
+    let hosts = hostCount(setupRepo.id)
+    // Read again: an approval made on the desktop since the form opened counts.
+    trust = await session.api.orcaHookTrust()
+    if trust.isRepoTrusted(repoId: setupRepo.id, hostsWithRepo: hosts) { return .approved(nil) }
+    let source: SetupCreateSource
+    switch request.source {
+    case .branch(let refName): source = .base(baseBranch: refName)
+    default: source = .base(baseBranch: request.base?.baseBranch)
+    }
+    let hooks = try await session.api.setupHooks(repoId: setupRepo.id, createSource: source)
+    guard let script = hooks.trust else {
+      // Approving no shared setup pins empty content, so setup the created branch adds is asked about.
+      return .approved(hooks.readsSetupConfig ? OrcaHookTrust.emptyContentHash : nil)
+    }
+    if trust.isApproved(repoId: setupRepo.id, contentHash: script.contentHash) { return .approved(script.contentHash) }
+    return .ask(
+      SetupHookTrustViewController.Prompt(
+        repoId: setupRepo.id, repoName: setupRepo.displayName, script: script,
+        previouslyApproved: trust.wasPreviouslyApproved(repoId: setupRepo.id), versionOnly: hosts > 1,
+        createdBranch: false))
+  }
+
+  /// Shows the trust prompt. An approval is saved to the desktop (`ui.set`) before `onAnswer` runs; Don't run goes
+  /// straight to it. A save that fails returns to the form saying why.
+  private func askTrust(
+    _ prompt: SetupHookTrustViewController.Prompt, onAnswer: @escaping (_ run: Bool, _ alwaysTrust: Bool) -> Void
+  ) {
+    let api = session.api
+    let controller = SetupHookTrustViewController(prompt: prompt) { [weak self] run, alwaysTrust in
+      guard let self else { return }
+      guard run else {
+        onAnswer(false, false)
+        return
+      }
+      // Run once stores nothing unless the id is on several hosts; Always trust stores repo trust.
+      var next = prompt.versionOnly ? self.trust.confirming(repoId: prompt.repoId, contentHash: prompt.script.contentHash) : self.trust
+      if alwaysTrust { next = next.alwaysTrusting(repoId: prompt.repoId) }
+      Task {
+        do {
+          if next != self.trust { try await api.saveOrcaHookTrust(next) }
+          self.trust = next
+          onAnswer(true, alwaysTrust)
+        } catch {
+          self.errorText = TasksViewController.message(error)
+          self.navigationController?.popViewController(animated: true)
+          self.refresh()
+        }
+      }
+    }
+    push(controller, large: true)
+  }
+
+  private func finishCreated(_ worktreeId: String, sent: String?) async {
+    // The kept note was sent; one typed since stays.
+    if note.trimmingCharacters(in: .whitespacesAndNewlines) == (sent ?? "") { note = "" }
+    await session.refresh()
+    dismiss(animated: true) { self.onCreated(worktreeId) }
   }
 
   // MARK: Pickers
@@ -324,12 +623,8 @@ final class NewWorkspaceViewController: UITableViewController {
     guard next.id != repo?.id else { return }
     repo = next
     // A source belongs to its project; a new project starts from a name again.
-    if start != .name {
-      start = .name
-      if nameAutoManaged { name = "" }
-      nameAutoManaged = false
-    }
-    loadAgents()
+    clearSource(reload: false)
+    loadRepoState()
   }
 
   private func openProjects() {
@@ -375,28 +670,61 @@ final class NewWorkspaceViewController: UITableViewController {
     guard let repo else { return }
     errorText = nil
     let picker = WorkspaceSourcePickerViewController(
-      session: session, repo: repo, name: name,
+      session: session, repo: repo, name: name, availability: availability, repoReady: !sshGated,
       onName: { [weak self] text in
         guard let self else { return }
         self.name = text
         self.nameAutoManaged = false
       },
-      onPick: { [weak self] start, seededName in
+      onPick: { [weak self] start, seededName in self?.pick(start, seededName: seededName) },
+      onSwitchRepo: { [weak self] target, item in
         guard let self else { return }
-        self.start = start
-        if let seededName {
-          self.name = seededName
-          self.nameAutoManaged = start != .name
-        }
+        self.select(target)
+        self.pick(.workItem(item), seededName: WorkspaceSourceName.hosted(title: item.title, number: item.number, kind: item.kind.rawValue).seed)
       })
     push(picker, large: true)
   }
 
-  private func clearSource() {
+  /// A picked source seeds the name; a pull or merge request's head is read now, so create starts from it.
+  private func pick(_ next: WorkspaceStart, seededName: String?) {
+    start = next
+    if let seededName {
+      name = seededName
+      nameAutoManaged = next != .name
+    }
+    base = nil
+    baseTask?.cancel()
+    let api = session.api
+    let read: (() async throws -> WorkspaceCreateRequest.HostedBase?)?
+    switch next {
+    case .workItem(let item) where item.kind == .pr:
+      read = { try await api.resolvePullRequestBase(repoId: item.repoId, number: item.number) }
+    case .gitlab(let item) where item.kind == .pr:
+      read = { try await api.resolveMergeRequestBase(repoId: item.repoId, iid: item.number) }
+    default:
+      read = nil
+    }
+    guard let read else { return }
+    baseTask = Task { [weak self] in
+      do {
+        let resolved = try await read()
+        guard !Task.isCancelled, let self, self.start == next else { return }
+        self.base = resolved
+      } catch {
+        guard !Task.isCancelled, let self, self.start == next else { return }
+        self.errorText = TasksViewController.message(error)
+        self.refresh()
+      }
+    }
+  }
+
+  private func clearSource(reload: Bool = true) {
     if nameAutoManaged { name = "" }
     nameAutoManaged = false
     start = .name
-    refresh()
+    base = nil
+    baseTask?.cancel()
+    if reload { refresh() }
   }
 
   private func push(_ controller: UIViewController, large: Bool = false) {
@@ -420,6 +748,21 @@ final class NewWorkspaceViewController: UITableViewController {
       .withTintColor(Palette.textMuted, renderingMode: .alwaysOriginal)
   }
 
+  /// tasks.workspaceSshGate labels.
+  private static func sshStatusLabel(_ status: String?) -> String {
+    switch status {
+    case "connected": String(localized: "tasks.workspaceSshGate.connected", defaultValue: "Connected")
+    case "connecting": String(localized: "tasks.workspaceSshGate.connecting", defaultValue: "Connecting")
+    case "deploying-relay": String(localized: "tasks.workspaceSshGate.deployingRelay", defaultValue: "Deploying relay")
+    case "reconnecting": String(localized: "tasks.workspaceSshGate.reconnecting", defaultValue: "Reconnecting")
+    case "auth-failed":
+      String(localized: "tasks.workspaceSshGate.authenticationFailed", defaultValue: "Authentication failed")
+    case "reconnection-failed": String(localized: "tasks.workspaceSshGate.reconnectFailed", defaultValue: "Reconnect failed")
+    case "error": String(localized: "tasks.workspaceSshGate.connectionFailed", defaultValue: "Connection failed")
+    default: String(localized: "tasks.workspaceSshGate.disconnected", defaultValue: "Disconnected")
+    }
+  }
+
   // MARK: Table
 
   override func numberOfSections(in tableView: UITableView) -> Int { sections.count }
@@ -433,6 +776,8 @@ final class NewWorkspaceViewController: UITableViewController {
     switch sections[section].section {
     case .location:
       header?.show(String(localized: "components.newWorktreeProjectTargetFields.where", defaultValue: "Where"))
+    case .ssh:
+      header?.show(String(localized: "components.newWorkspaceSshConnectionField.label", defaultValue: "SSH Connection"))
     case .start:
       header?.show(
         isGit
@@ -447,20 +792,31 @@ final class NewWorkspaceViewController: UITableViewController {
       ) { [weak self] in
         guard let self else { return }
         self.optionsOpen.toggle()
-        self.tableView.reloadSections([section], with: .automatic)
+        self.tableView.reloadData()
       }
+    case .setup:
+      header?.show(
+        String(localized: "components.newWorkspaceSetupScriptField.label", defaultValue: "Setup script"),
+        trailing: setup?.source == "orca.yaml" ? "orca.yaml" : nil)
     }
     return header
   }
 
-  override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat { .leastNonzeroMagnitude }
+  override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
+    if sections[section].section == .ssh, ssh?.error != nil { return UITableView.automaticDimension }
+    return .leastNonzeroMagnitude
+  }
+
+  override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+    sections[section].section == .ssh ? ssh?.error : nil
+  }
 
   override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
     let row = sections[indexPath.section].rows[indexPath.row]
     switch row {
     case .start:
       let cell = tableView.dequeueReusableCell(withIdentifier: "start", for: indexPath) as! StartFieldCell
-      cell.show(start, name: name, enabled: repo != nil) { [weak self] in self?.clearSource() }
+      cell.show(start, name: name, enabled: repo != nil && !sshGated) { [weak self] in self?.clearSource() }
       return cell
     case .name, .branchName, .note:
       let cell = tableView.dequeueReusableCell(withIdentifier: "field", for: indexPath) as! LabeledFieldCell
@@ -498,6 +854,8 @@ final class NewWorkspaceViewController: UITableViewController {
     content.imageProperties.reservedLayoutSize = CGSize(width: 22, height: 22)
     content.secondaryTextProperties.color = Palette.textSecondary
     cell.accessoryType = .disclosureIndicator
+    cell.accessoryView = nil
+    cell.accessibilityLabel = nil
     var enabled = true
     switch row {
     case .project:
@@ -515,12 +873,74 @@ final class NewWorkspaceViewController: UITableViewController {
       content.image = Self.hostIcon(repo)
       // A run target belongs to a project; until one is picked there is nothing to choose.
       enabled = repo != nil
+    case .ssh:
+      // NewWorkspaceSshConnectionField.tsx: a status dot, the project and its state, and Connect until connected.
+      content = .subtitleCell()
+      content.text = repo?.displayName
+      content.secondaryText = Self.sshStatusLabel(ssh?.status)
+      content.secondaryTextProperties.color = Palette.textSecondary
+      let dotColor =
+        ssh?.isConnected == true ? Palette.statusGreen : (connecting || ssh?.inProgress == true) ? Palette.statusAmber : Palette.textMuted
+      content.image = UIGraphicsImageRenderer(size: CGSize(width: 10, height: 10)).image { _ in
+        dotColor.setFill()
+        UIBezierPath(ovalIn: CGRect(x: 0, y: 0, width: 10, height: 10)).fill()
+      }
+      content.imageProperties.reservedLayoutSize = CGSize(width: 22, height: 22)
+      cell.accessoryType = .none
+      if ssh?.isConnected != true {
+        let busy = connecting || ssh?.inProgress == true
+        var configuration = UIButton.Configuration.glass()
+        configuration.title =
+          busy
+          ? String(localized: "components.newWorkspaceSshConnectionField.connecting", defaultValue: "Connecting...")
+          : String(localized: "components.newWorkspaceSshConnectionField.connect", defaultValue: "Connect")
+        configuration.buttonSize = .small
+        let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.connectSSH() })
+        button.isEnabled = !busy
+        button.sizeToFit()
+        cell.accessoryView = button
+      }
+      cell.selectionStyle = .none
+      cell.contentConfiguration = content
+      return cell
+    case .setupRun, .setupSkip:
+      // An "ask" project: Run setup (showing the command) or Skip, one checked.
+      content = .subtitleCell()
+      let isRun = row == .setupRun
+      content.text =
+        isRun
+        ? String(localized: "components.newWorkspaceSetupScriptField.runSetup", defaultValue: "Run setup")
+        : String(localized: "components.newWorkspaceSetupScriptField.skip", defaultValue: "Skip")
+      content.secondaryText = isRun ? setup?.command : nil
+      content.secondaryTextProperties.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+      content.secondaryTextProperties.color = Palette.textSecondary
+      cell.accessoryType = setupChoice == (isRun ? "run" : "skip") ? .checkmark : .none
+      cell.tintColor = Palette.textPrimary
+      cell.contentConfiguration = content
+      return cell
+    case .setupToggle:
+      content = .subtitleCell()
+      content.text = String(localized: "components.newWorkspaceSetupScriptField.runSetup", defaultValue: "Run setup")
+      content.secondaryText = setup?.command
+      content.secondaryTextProperties.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+      content.secondaryTextProperties.color = Palette.textSecondary
+      let toggle = UISwitch()
+      toggle.isOn = runSetup
+      toggle.accessibilityLabel = content.text
+      toggle.addAction(UIAction { [weak self, weak toggle] _ in self?.runSetup = toggle?.isOn ?? true }, for: .valueChanged)
+      cell.accessoryType = .none
+      cell.accessoryView = toggle
+      cell.selectionStyle = .none
+      cell.contentConfiguration = content
+      return cell
     default:
       content.text = agent.title
       content.image = agent.image
+      enabled = !sshGated
       cell.accessibilityLabel = "\(String(localized: "components.newWorktreeFormSheet.agent", defaultValue: "Agent")), \(agent.title)"
     }
     content.textProperties.color = enabled ? Palette.textPrimary : Palette.textMuted
+    cell.selectionStyle = .default
     cell.contentConfiguration = content
     cell.isUserInteractionEnabled = enabled
     return cell
@@ -533,6 +953,11 @@ final class NewWorkspaceViewController: UITableViewController {
     case .runOn: openRunTargets()
     case .agent: openAgents()
     case .start: if start == .name { openSource() }
+    case .setupRun, .setupSkip:
+      Haptics.select()
+      setupChoice = sections[indexPath.section].rows[indexPath.row] == .setupRun ? "run" : "skip"
+      errorText = nil
+      refresh()
     default: break
     }
   }
@@ -556,6 +981,10 @@ extension UIColor {
 enum WorkspaceStart: Equatable {
   case name
   case workItem(GitHubWorkItem)
+  /// A GitLab issue, or a merge request (`.pr`).
+  case gitlab(GitHubWorkItem)
+  case linear(TrackerIssue)
+  case jira(TrackerIssue)
   case branch(BranchRef)
   /// A branch made under the typed name.
   case newBranch(String)
@@ -563,7 +992,8 @@ enum WorkspaceStart: Equatable {
   var title: String {
     switch self {
     case .name: ""
-    case .workItem(let item): item.title
+    case .workItem(let item), .gitlab(let item): item.title
+    case .linear(let issue), .jira(let issue): "\(issue.identifier) \(issue.title)"
     case .branch(let ref): ref.label
     case .newBranch(let name): name
     }
@@ -572,21 +1002,15 @@ enum WorkspaceStart: Equatable {
   var icon: Lucide {
     switch self {
     case .workItem(let item): item.kind == .pr ? .gitPullRequest : .circleDot
+    case .gitlab(let item): item.kind == .pr ? .gitMerge : .circleDot
+    case .linear: .listTodo
+    case .jira: .listChecks
     default: .gitBranch
     }
   }
 
   /// A title made branch-safe the way the desktop seeds names from one (slugifyForWorkspaceName).
-  static func slug(_ input: String) -> String {
-    var text = input.replacingOccurrences(of: "'", with: "").trimmingCharacters(in: .whitespaces).lowercased()
-    text = text.replacingOccurrences(of: "[\\\\/\\s]+", with: "-", options: .regularExpression)
-    text = text.replacingOccurrences(of: "[^a-z0-9._-]+", with: "-", options: .regularExpression)
-    text = text.replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
-    text = text.replacingOccurrences(of: "\\.{2,}", with: ".", options: .regularExpression)
-    text = text.replacingOccurrences(of: "^[.-]+|[.-]+$", with: "", options: .regularExpression)
-    text = String(text.prefix(48))
-    return text.replacingOccurrences(of: "[-._]+$", with: "", options: .regularExpression)
-  }
+  static func slug(_ input: String) -> String { WorkspaceSourceName.slug(input) }
 }
 
 /// A form section's label (components/list/ListGroup.tsx SectionHeader): 13 pt secondary text, with a muted note at

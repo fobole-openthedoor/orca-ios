@@ -134,6 +134,12 @@
         "addVideos": "Add {{count}} videos",
         "addPhotos": "Add {{count}} photos",
         "addItems": "Add {{count}} items"
+      },
+      "tasks": {
+        "makeDefault": "Make Default",
+        "repositoryCount_one": "{{count}} repository",
+        "repositoryCount_other": "{{count}} repositories",
+        "partialFailure": "{{failed}} of {{count}} repositories failed to load."
       }
     }
   },
@@ -272,6 +278,11 @@
         "addVideos": "添加 {{count}} 个视频",
         "addPhotos": "添加 {{count}} 张照片",
         "addItems": "添加 {{count}} 项"
+      },
+      "tasks": {
+        "makeDefault": "设为默认",
+        "repositoryCount_other": "{{count}} 个仓库",
+        "partialFailure": "{{count}} 个仓库中有 {{failed}} 个加载失败。"
       }
     },
     "overrides": {
@@ -432,6 +443,11 @@
         "addVideos": "加入 {{count}} 段影片",
         "addPhotos": "加入 {{count}} 張照片",
         "addItems": "加入 {{count}} 項"
+      },
+      "tasks": {
+        "makeDefault": "設為預設",
+        "repositoryCount_other": "{{count}} 個儲存庫",
+        "partialFailure": "{{count}} 個儲存庫中有 {{failed}} 個載入失敗。"
       }
     }
   }

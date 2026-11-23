@@ -9,6 +9,8 @@ public struct TaskRepo: Sendable, Equatable, Identifiable {
   /// The SSH connection of a remote project; nil for a local one.
   public var connectionId: String?
   public var addedAt: Double
+  /// Where GitHub issues are read and filed for a fork: `upstream`, `origin` or `auto` (nil reads as upstream).
+  public var issueSourcePreference: String?
 
   init?(_ json: JSONValue) {
     guard let id = json["id"]?.stringValue, let displayName = json["displayName"]?.stringValue,
@@ -18,6 +20,7 @@ public struct TaskRepo: Sendable, Equatable, Identifiable {
     self.displayName = displayName
     connectionId = json["connectionId"]?.stringValue
     addedAt = json["addedAt"]?.doubleValue ?? 0
+    issueSourcePreference = json["issueSourcePreference"]?.stringValue
     projectKey = json["gitRemoteIdentity"]?["canonicalKey"]?.stringValue.map { "remote:\($0)" } ?? "repo:\(id)"
   }
 }
