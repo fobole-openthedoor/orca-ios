@@ -201,6 +201,8 @@ private final class BotRowView: UIView, UIContentView {
       leading,
       // At least 64 pt, the picture and the text centred in it.
       heightAnchor.constraint(greaterThanOrEqualToConstant: 64),
+      // Hug the 64 pt minimum; taller text pushes past it. Without it the height is open-ended.
+      { let hug = heightAnchor.constraint(equalToConstant: 64); hug.priority = .defaultLow; return hug }(),
       avatar.centerYAnchor.constraint(equalTo: centerYAnchor),
       text.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: Spacing.md),
       text.centerYAnchor.constraint(equalTo: centerYAnchor),
