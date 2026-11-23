@@ -14,27 +14,15 @@ final class UsageViewController: UIViewController {
   private var loadedAt: Date?
   private var loading = false
   private var refresh: UIBarButtonItem!
-  /// Set when a desktop's ⋯ menu opened this page (`/h/<id>/accounts`): that desktop only, no picker.
-  private let pinnedHostId: PairedHost.ID?
-
-  init(hostId: PairedHost.ID? = nil) {
-    pinnedHostId = hostId
-    self.hostId = hostId
-    super.init(nibName: nil, bundle: nil)
-    hidesBottomBarWhenPushed = hostId != nil
-  }
-
-  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
   override func viewDidLoad() {
     super.viewDidLoad()
     NotificationCenter.default.addObserver(forName: UsagePercentageDisplay.changed, object: nil, queue: .main) { [weak self] _ in
       MainActor.assumeIsolated { self?.render() }
     }
-    title =
-      pinnedHostId == nil ? HomeTab.usage.title : String(localized: "hostScreen.hostScreenHeader.accounts", defaultValue: "Accounts")
+    title = HomeTab.usage.title
     view.backgroundColor = Palette.bgBase
-    navigationItem.largeTitleDisplayMode = pinnedHostId == nil ? .inline : .never
+    navigationItem.largeTitleDisplayMode = .inline
     refresh = UIBarButtonItem(
       image: Lucide.refreshCw.image(size: 20, strokeWidth: 2), primaryAction: UIAction { [weak self] _ in self?.load() })
     refresh.accessibilityLabel = String(localized: "home.usage.refresh", defaultValue: "Refresh usage")
@@ -66,7 +54,7 @@ final class UsageViewController: UIViewController {
   override func updateProperties() {
     super.updateProperties()
     let hosts = model.orderedHosts
-    if pinnedHostId == nil, hostId == nil || !hosts.contains(where: { $0.id == hostId }) {
+    if hostId == nil || !hosts.contains(where: { $0.id == hostId }) {
       hostId = hosts.first?.id
       stats = nil
       accounts = nil
@@ -101,11 +89,7 @@ final class UsageViewController: UIViewController {
   private func render() {
     stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
     guard let session else { return }
-    if pinnedHostId != nil {
-      navigationItem.subtitle = session.name
-    } else {
-      addHostPicker(session)
-    }
+    addHostPicker(session)
 
     stack.addArrangedSubview(heading(String(localized: "home.stats.heading", defaultValue: "Your stats"), aside: nil, top: 20))
     stack.addArrangedSubview(StatsCard(stats: stats))

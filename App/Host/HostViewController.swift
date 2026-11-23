@@ -411,10 +411,10 @@ final class HostViewController: UIViewController {
     var navigation = [
       item(String(localized: "hostScreen.hostScreenHeader.tasks", defaultValue: "Tasks"), .list) { $0.openTasks() },
       item(String(localized: "hostScreen.hostScreenHeader.automations", defaultValue: "Automations"), .calendarClock) {
-        $0.push(AutomationsViewController(hostId: $0.session.host.id))
+        $0.push(HostAutomationsViewController(session: $0.session))
       },
       item(String(localized: "hostScreen.hostScreenHeader.accounts", defaultValue: "Accounts"), .userCircle) {
-        $0.push(UsageViewController(hostId: $0.session.host.id))
+        $0.push(HostAccountsViewController(session: $0.session))
       },
     ]
     // The desktop's own bot links, once it lists bots.

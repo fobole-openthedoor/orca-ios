@@ -135,7 +135,10 @@ final class AutomationEditorViewController: UIViewController {
 
   private let session: HostSession
   private let automation: Automation?
-  private let onSaved: () -> Void
+  /// After a save, a run or a delete: the saved automation's id, nil after a run or a delete.
+  private let onSaved: (String?) -> Void
+  /// Run now and Delete in the bar, for a page without the official detail view (the home tab).
+  private let showsActions: Bool
 
   private var targets: AutomationTargets?
   private var loadError: String?
@@ -182,9 +185,10 @@ final class AutomationEditorViewController: UIViewController {
     if wasValid != self.validTime { self.rebuild() }
   }
 
-  init(session: HostSession, automation: Automation?, onSaved: @escaping () -> Void) {
+  init(session: HostSession, automation: Automation?, showsActions: Bool = true, onSaved: @escaping (String?) -> Void) {
     self.session = session
     self.automation = automation
+    self.showsActions = showsActions
     self.onSaved = onSaved
     let rrule = automation?.rrule ?? "0 9 * * 1-5"
     draft = AutomationDraft(
@@ -207,7 +211,7 @@ final class AutomationEditorViewController: UIViewController {
     navigationItem.subtitle = session.name
     navigationItem.largeTitleDisplayMode = .never
     navigationItem.backAction = UIAction { [weak self] _ in self?.cancel() }
-    if automation != nil {
+    if automation != nil, showsActions {
       // The official page's detail actions, for the automation being edited.
       navigationItem.rightBarButtonItem = UIBarButtonItem(
         image: Lucide.ellipsis.image(size: 20), menu: UIMenu(children: [
@@ -855,14 +859,16 @@ final class AutomationEditorViewController: UIViewController {
     setBusy(true)
     Task {
       do {
+        let id: String?
         if let automation {
           try await session.api.updateAutomation(automation, draft: draft, original: original, targets: targets)
+          id = automation.id
         } else {
-          try await session.api.createAutomation(draft, targets: targets)
+          id = try await session.api.createAutomation(draft, targets: targets)
         }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         original = draft
-        onSaved()
+        onSaved(id)
         navigationController?.popViewController(animated: true)
       } catch {
         setBusy(false)
@@ -880,7 +886,7 @@ final class AutomationEditorViewController: UIViewController {
         try await session.api.runAutomationNow(automation)
         setBusy(false)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-        onSaved()
+        onSaved(nil)
       } catch {
         setBusy(false)
         self.error = Self.message(error)
@@ -912,7 +918,7 @@ final class AutomationEditorViewController: UIViewController {
         try await session.api.deleteAutomation(automation)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         original = draft
-        onSaved()
+        onSaved(nil)
         navigationController?.popViewController(animated: true)
       } catch {
         setBusy(false)
@@ -950,9 +956,14 @@ final class AutomationEditorViewController: UIViewController {
     present(alert, animated: true)
   }
 
-  private static func agentName(_ id: String) -> String { agentNames[id] ?? id }
+  /// An agent's name (mobileTuiAgentLabel); a newer host's agent reads as its id.
+  static func agentName(_ id: String) -> String { agentNames[id] ?? id }
 
-  private static func message(_ error: Error) -> String {
+  /// The schedule's words (automation-schedule-label.ts formatAutomationSchedule).
+  static func scheduleLabel(_ expression: String) -> String { Schedule.label(expression) }
+
+  /// A failed action in the official words.
+  static func message(_ error: Error) -> String {
     if let error = error as? RPCError { return error.message }
     if error as? AutomationEditError == .unknownDestination {
       return String(
@@ -970,16 +981,18 @@ final class AutomationEditorViewController: UIViewController {
 }
 
 /// The automation page's button (AutomationControls.tsx AutomationButton): bgRaised, 12 pt corners, 44 pt tall,
-/// a centred 14 pt semibold label; the primary one is textPrimary with bgBase text. With a menu it picks.
-private final class AutomationButton: UIButton {
+/// a centred 14 pt semibold label; the primary one is textPrimary with bgBase text, a destructive one red text.
+/// With a menu it picks.
+final class AutomationButton: UIButton {
   var label = "" { didSet { configuration?.attributedTitle = AttributedString(label, attributes: titleAttributes) } }
   var onPress: (() -> Void)?
   private let primary: Bool
+  var destructive = false { didSet { configuration?.attributedTitle = AttributedString(label, attributes: titleAttributes) } }
 
   private var titleAttributes: AttributeContainer {
     AttributeContainer([
       .font: UIFont.systemFont(ofSize: Typography.bodySize, weight: .semibold),
-      .foregroundColor: primary ? Palette.bgBase : Palette.textPrimary,
+      .foregroundColor: destructive ? Palette.statusRed : primary ? Palette.bgBase : Palette.textPrimary,
     ])
   }
 

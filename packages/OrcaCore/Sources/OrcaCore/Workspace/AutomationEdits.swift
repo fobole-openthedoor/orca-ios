@@ -243,11 +243,12 @@ extension HostAPI {
     _ = try await connection.request("automation.delete", .object(params))
   }
 
-  /// Starts a run now, outside the schedule.
-  public func runAutomationNow(_ automation: Automation) async throws {
+  /// Starts a run now, outside the schedule; the run the host started, when it reads.
+  @discardableResult
+  public func runAutomationNow(_ automation: Automation) async throws -> AutomationRun? {
     var params: [String: JSONValue] = ["id": .string(automation.id)]
     if let owner = automation.expectedOwner { params["expectedOwner"] = owner }
-    _ = try await connection.request("automation.runNow", .object(params))
+    return try await connection.request("automation.runNow", .object(params))["run"].flatMap(AutomationRun.init)
   }
 
   private func editableFields(_ draft: AutomationDraft) -> [String: JSONValue] {
