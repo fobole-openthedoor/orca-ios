@@ -1,0 +1,21 @@
+{
+  "name": "orca-ios-push-gateway-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Orca push gateway as a Cloudflare Worker with a SQLite-backed Durable Object.",
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "test": "npm run build && node --test test/",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail orca-push"
+  },
+  "dependencies": {
+    "tweetnacl": "1.0.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "wrangler": "4.166.0",
+    "zod": "4.6.7"
+  }
+}

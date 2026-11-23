@@ -1,0 +1,41 @@
+# Orca push gateway on Cloudflare Workers (see ../gateway/README.md).
+name = "orca-push"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Reachable at https://orca-push.<account>.workers.dev only; no routes or custom domain here.
+workers_dev = true
+preview_urls = false
+
+[vars]
+# Must equal the desktop's ORCA_PUSH_GATEWAY_URL exactly (it is signed into the handshake).
+PUBLIC_ORIGIN = "https://orca-push.huami.dev"
+APNS_TEAM_ID = "S639XDDS5S"
+APNS_DEFAULT_TOPIC = "com.thm.orcaios"
+LOG_LEVEL = "info"
+# APNs keys. Topic-specific keys work in ONE environment, so each environment
+# has its own key; APNS_KEY / APNS_KEY_ID is the fallback for an environment
+# without one. Fill in the key ids once the .p8 files exist, then redeploy:
+# APNS_SANDBOX_KEY_ID = "XXXXXXXXXX"
+# APNS_PRODUCTION_KEY_ID = "YYYYYYYYYY"
+# APNS_KEY_ID = "ZZZZZZZZZZ"
+# Optional:
+# ALLOWED_HOST_FINGERPRINTS = "fp1,fp2"
+# APNS_ALLOWED_TOPICS = "com.thm.orcaios"
+# SESSION_TTL_MS = "86400000"
+#
+# Secrets (never in this file), from this directory:
+#   npx wrangler secret put APNS_SANDBOX_KEY < AuthKey_XXXXXXXXXX.p8
+#   npx wrangler secret put APNS_PRODUCTION_KEY < AuthKey_YYYYYYYYYY.p8
+
+[[durable_objects.bindings]]
+name = "GATEWAY"
+class_name = "GatewayDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GatewayDurableObject"]
+
+[observability]
+enabled = true

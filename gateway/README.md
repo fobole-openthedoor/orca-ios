@@ -119,6 +119,72 @@ ingress:
 
 然后运行 `cloudflared tunnel run orca-push`，网关设置 `PUBLIC_ORIGIN=https://push.example.com`、`TRUST_PROXY=1`。
 
+## 部署到 Cloudflare Workers（`../gateway-worker`）
+
+`gateway-worker/` 是同一个网关的 Worker 版本，跑在 Cloudflare 上，不需要一台常开的 Mac。接口、握手字节、校验规则、限额和 TTL 与 Node 版完全一致，桌面端看不出区别。
+
+和 Node 版的差别：
+
+- 状态不再写 `state.json`，而是放在一个 SQLite 存储的 Durable Object（类名 `GatewayDurableObject`，实例名 `global`）里。所有 `/v1/*` 请求都转给这一个实例，相当于 Node 版的单进程，读写天然串行。表结构：
+
+  | 表 | 内容 |
+  | --- | --- |
+  | `sessions` | 会话 token 的 sha256、桌面指纹、过期时间。每台桌面只留一行。 |
+  | `registrations` | 注册 id、桌面指纹、`deviceId`、环境、原始 token、解码后的 device（JSON）、`device_token`（算角标总数用）。`(桌面指纹, deviceId)` 唯一，每台桌面最多 64 条。 |
+  | `badges` | 每条注册最后上报的未读数。 |
+  | `challenges` | 握手 challenge：指纹、期望 proof 的摘要、过期时间、是否已用。10 秒有效，过期 30 秒后清掉，最多 2000 条。 |
+  | `rate_limits` | 握手接口每个 IP 每分钟 60 次的计数。 |
+  | `meta` | 表结构版本，以及每个 APNs Key 当前的 provider JWT（50 分钟内复用，对象重启也不会重新签）。 |
+
+- APNs 用 `fetch()` 直连 `api[.sandbox].push.apple.com`（Cloudflare 走 HTTP/2），JWT 用 WebCrypto 做 ES256 签名。
+- 客户端 IP 直接取 `CF-Connecting-IP`，没有 `TRUST_PROXY`。`HOST`、`PORT`、`DATA_DIR`、`APNS_KEY_PATH`、`ENV_FILE` 在 Worker 里没有意义。
+- `/health` 由 Worker 直接回答，不唤醒 Durable Object。
+
+### 配置
+
+普通变量写在 `gateway-worker/wrangler.toml` 的 `[vars]` 里，改完重新部署；私钥用 secret，不进仓库。
+
+| 名称 | 类型 | 说明 |
+| --- | --- | --- |
+| `PUBLIC_ORIGIN` | var | 同 Node 版，必须和桌面端的 `ORCA_PUSH_GATEWAY_URL` 完全一致。现在是 `https://orca-push.huami.dev`。 |
+| `APNS_TEAM_ID` | var | `S639XDDS5S` |
+| `APNS_DEFAULT_TOPIC` | var | `com.thm.orcaios` |
+| `APNS_SANDBOX_KEY` / `APNS_SANDBOX_KEY_ID` | secret / var | sandbox 环境用的 .p8 和它的 Key ID。 |
+| `APNS_PRODUCTION_KEY` / `APNS_PRODUCTION_KEY_ID` | secret / var | production 环境用的 .p8 和它的 Key ID。 |
+| `APNS_KEY` / `APNS_KEY_ID` | secret / var | 可选的兜底 Key：哪个环境没有自己的 Key，就用它。 |
+| `ALLOWED_HOST_FINGERPRINTS`、`APNS_ALLOWED_TOPICS`、`SESSION_TTL_MS`、`LOG_LEVEL` | var | 含义同 Node 版。 |
+
+为什么分两把 Key：这个团队只能建 Topic Specific 的 Key，而这种 Key 只对一个环境有效。每次发送按注册时上报的 `apnsEnvironment` 选 Key，每把 Key 各自缓存一个 JWT。某个环境没有 Key 时，发往该环境设备的推送返回 `error`，日志里的原因是 `apns_sandbox_not_configured` 或 `apns_production_not_configured`；另一个环境不受影响。两个环境都没有 Key 时，握手和注册照常，`/health` 返回 `apnsConfigured:false`，所有发送都返回 `error`。
+
+### 部署
+
+```sh
+cd gateway-worker
+npm install
+npm test                 # 先用 wrangler 打出 dist/，再在本地 workerd 里跑全部测试
+npx wrangler deploy      # 部署为 orca-push，地址 https://orca-push.huami1314.workers.dev
+```
+
+拿到 .p8 之后（命令在 `gateway-worker/` 下执行，文件名换成实际的）：
+
+```sh
+# 1. 在 wrangler.toml 的 [vars] 里填 APNS_SANDBOX_KEY_ID / APNS_PRODUCTION_KEY_ID，然后
+npx wrangler deploy
+
+# 2. 上传私钥（secret 立即生效，不用再部署）
+npx wrangler secret put APNS_SANDBOX_KEY < AuthKey_XXXXXXXXXX.p8
+npx wrangler secret put APNS_PRODUCTION_KEY < AuthKey_YYYYYYYYYY.p8
+
+# 3. 确认
+curl https://orca-push.huami1314.workers.dev/health   # apnsConfigured 应为 true
+```
+
+注意：`wrangler deploy` 会用 `wrangler.toml` 里的 `[vars]` 覆盖控制台上手动改过的变量，Key ID 请写在文件里；secret 不受影响。
+
+`PUBLIC_ORIGIN` 已经写成 `https://orca-push.huami.dev`。在自定义域名接到这个 Worker 之前，桌面端只能通过 workers.dev 地址访问，而 transcript 里的 origin 对不上，握手会被桌面端拒绝；这是预期的，域名切过来后就能用。切换时在 Cloudflare 控制台（或 `wrangler.toml` 的 `routes`/`custom_domain`）把 `orca-push.huami.dev` 指到 Worker，并停掉原来指向 Mac 的隧道路由。
+
+看日志：`npx wrangler tail orca-push`。
+
 ## 让桌面端使用这个网关
 
 `ORCA_PUSH_GATEWAY_URL` 必须在 Orca 进程启动时就存在。它的值必须是不带路径的源，例如 `https://push.example.com`（末尾多一个 `/` 没关系，带其他路径不行）。格式不对或不是 https 时，桌面端不会报错，而是直接退回官方网关。
@@ -200,3 +266,11 @@ npm test
 - `test/desktop-interop.test.js`：把 Orca 仓库里桌面端真正的 `PushGatewayClient` 及其依赖的 TS 文件复制到临时目录，用 esbuild 即时编译后跑注册、发送和删除。找不到 Orca 仓库时会跳过，可以用 `ORCA_REPO=/path/to/orca` 指定位置。
 
 测试只使用 18431–18434、18441、18442 端口。
+
+Worker 版的测试在 `gateway-worker/test/`，`npm test` 先执行 `wrangler deploy --dry-run --outdir dist`，再用 Miniflare 在本地 workerd 里运行这份与线上相同的 bundle，APNs 请求由测试里的假服务接住：
+
+- 上面三组测试都移植了过来，断言不变；原来读 `state.json` 的地方改为读 Durable Object 的 SQLite。
+- `worker.test.js`：没有 Key 时的行为、404 和响应头、每 IP 每分钟 60 次的限流、JWT 复用。
+- `apns-keys.test.js`：sandbox / production 各用各的 Key、只有一个环境有 Key、`APNS_KEY` 兜底、每把 Key 单独缓存和作废 JWT。
+
+Worker 版测试使用 18431–18433、18441、18451、18452、18461–18463 端口，和 Node 版的测试不要同时跑。
