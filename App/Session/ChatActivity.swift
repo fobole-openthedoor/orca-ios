@@ -216,11 +216,61 @@ final class ThoughtTextView: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+  /// The row should re-measure: a streaming thought grew a line.
+  var onHeightChange: (() -> Void)?
+  private var identity: String?
+  private var full: [Character] = []
+  private var shown = 0
+  private var link: CADisplayLink?
+  private var lastHeight: CGFloat = 0
+
   /// Reasoning arrives in pieces that start and end with blank lines; drawn as is, the gaps between pieces
-  /// pile up. Each piece shows trimmed, with at most one blank line between its paragraphs.
-  func show(_ text: String) {
-    label.text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-      .replacingOccurrences(of: "\n[ \t]*(\n[ \t]*)+", with: "\n\n", options: .regularExpression)
+  /// pile up. Each piece shows trimmed, with at most one blank line between its paragraphs. While the thought
+  /// is still being written, what arrives types out over a moment instead of landing as a block.
+  func show(_ text: String, id: String, streaming: Bool) {
+    let target = Array(
+      text.trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "\n[ \t]*(\n[ \t]*)+", with: "\n\n", options: .regularExpression))
+    let grew = id == identity && target.count > shown && target.starts(with: full.prefix(shown))
+    identity = id
+    full = target
+    if streaming && grew {
+      if link == nil {
+        let link = CADisplayLink(target: self, selector: #selector(step))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+      }
+    } else {
+      stop()
+      shown = full.count
+      label.text = String(full)
+    }
+  }
+
+  @objc private func step() {
+    let remaining = full.count - shown
+    guard remaining > 0, window != nil else {
+      stop()
+      shown = full.count
+      label.text = String(full)
+      return
+    }
+    // About a third of a second for whatever is pending, never slower than a couple of characters a frame.
+    shown += max(2, Int((Double(remaining) / 20).rounded(.up)))
+    shown = min(shown, full.count)
+    label.text = String(full.prefix(shown))
+    let height = label.sizeThatFits(CGSize(width: label.bounds.width, height: .greatestFiniteMagnitude)).height
+    if abs(height - lastHeight) > 0.5 {
+      lastHeight = height
+      invalidateIntrinsicContentSize()
+      onHeightChange?()
+    }
+    if shown == full.count { stop() }
+  }
+
+  private func stop() {
+    link?.invalidate()
+    link = nil
   }
 }
 

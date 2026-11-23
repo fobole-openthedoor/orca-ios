@@ -461,6 +461,11 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     refresh()
   }
 
+  /// Raises the keyboard in the field, as after choosing to quote something.
+  func focus() {
+    textView.becomeFirstResponder()
+  }
+
   /// Puts text in the field (a rewound message, ready to edit), with the keyboard up.
   func setText(_ value: String) {
     textView.text = value

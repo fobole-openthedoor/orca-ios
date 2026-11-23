@@ -16,6 +16,8 @@ final class ChatViewController: UIViewController {
   var edgeScrollView: UIScrollView { collection }
   private var dataSource: UICollectionViewDiffableDataSource<Int, ChatLine>!
   private let composer = ChatComposerView()
+  /// What the next message quotes, shown over the composer until sent or dismissed.
+  private let quoteBar = ChatQuoteBar()
   private let dock = ChatDockView()
   private let suggestions = ChatSuggestionPanel()
   /// Dims the chat behind a full-screen composer.
@@ -78,6 +80,9 @@ final class ChatViewController: UIViewController {
     dim.translatesAutoresizingMaskIntoConstraints = false
     view.insertSubview(dim, aboveSubview: collection)
     view.addSubview(dock)
+    quoteBar.isHidden = true
+    quoteBar.onDismiss = { [weak self] in self?.setQuote(nil) }
+    view.addSubview(quoteBar)
     view.addSubview(suggestions)
     collection.translatesAutoresizingMaskIntoConstraints = false
 
@@ -110,7 +115,10 @@ final class ChatViewController: UIViewController {
       toBottom.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Spacing.lg),
       dock.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       dock.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-      dock.bottomAnchor.constraint(equalTo: composer.topAnchor),
+      quoteBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Spacing.lg),
+      quoteBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Spacing.lg),
+      quoteBar.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -Spacing.xs),
+
       toBottom.bottomAnchor.constraint(equalTo: dock.topAnchor, constant: -Spacing.sm),
       suggestions.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       suggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -120,6 +128,8 @@ final class ChatViewController: UIViewController {
       dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
       dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
     ])
+    dockAboveQuote = dock.bottomAnchor.constraint(equalTo: composer.topAnchor)
+    dockAboveQuote?.isActive = true
     view.keyboardLayoutGuide.usesBottomSafeArea = true
 
     // What was typed here before, and not sent, comes back.
@@ -127,8 +137,11 @@ final class ChatViewController: UIViewController {
     composer.restore(text: draft.text, attachments: draft.attachments)
     NotificationCenter.default.addObserver(
       self, selector: #selector(saveDraft), name: UIApplication.willResignActiveNotification, object: nil)
-    composer.onSend = { [weak self] text, attachments, queue in
+    composer.onSend = { [weak self] typed, attachments, queue in
       guard let self else { return }
+      // A quote goes first, as a Markdown block quote the agent reads as quoted.
+      let text = ChatQuote.wrap(self.quoteBar.quoted, around: typed)
+      self.setQuote(nil)
       ChatDraftStore.save(self.model.sessionId, text: "", attachments: [])
       self.followsBottom = true
       Task {
@@ -210,7 +223,7 @@ final class ChatViewController: UIViewController {
     super.viewDidLayoutSubviews()
     // The transcript scrolls under the composer; its last row stops above it.
     // The docked strips sit over the transcript's tail too.
-    let top = dock.isHidden ? composer.frame.minY : dock.frame.minY
+    let top = !dock.isHidden ? dock.frame.minY : !quoteBar.isHidden ? quoteBar.frame.minY : composer.frame.minY
     let bottom = view.bounds.height - top + Spacing.sm - view.safeAreaInsets.bottom
     if collection.contentInset.bottom != bottom {
       collection.contentInset.bottom = bottom
@@ -818,6 +831,7 @@ final class ChatViewController: UIViewController {
       view.onFork = { [weak self] in self?.onFork?(id) }
       view.onScrollToTop = { [weak self] in self?.scrollToTop(line) }
       view.onOpenPath = { [weak self] path in self?.onOpenPath?(path) }
+      view.onQuote = { [weak self] text in self?.quote(text) }
     }
     let activity = registration(ActivityRowView.init) { [weak self] view, line in
       guard let self else { return }
@@ -862,7 +876,8 @@ final class ChatViewController: UIViewController {
     }
     let thoughtText = registration(ThoughtTextView.init) { [weak self] view, line in
       guard let self, case .thoughtText(let id) = line, let item = self.projection.items[id], case .message(let message) = item.body else { return }
-      view.show(message.text)
+      view.show(message.text, id: id, streaming: message.isStreaming)
+      view.onHeightChange = { [weak self] in self?.answerGrew() }
     }
     let files = registration(ChangedFilesView.init) { [weak self] view, line in
       guard let self, case .files(let key) = line, let list = self.projection.files[key] else { return }
@@ -1023,6 +1038,25 @@ final class ChatViewController: UIViewController {
       self.present(popover, animated: true)
     }
   }
+
+  /// Selected words, quoted into the next message.
+  private func quote(_ text: String) {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    Haptics.select()
+    setQuote(trimmed)
+    composer.focus()
+  }
+
+  private func setQuote(_ text: String?) {
+    quoteBar.show(text)
+    dockAboveQuote?.isActive = false
+    dockAboveQuote = dock.bottomAnchor.constraint(equalTo: text == nil ? composer.topAnchor : quoteBar.topAnchor, constant: text == nil ? 0 : -Spacing.xs)
+    dockAboveQuote?.isActive = true
+    UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+  }
+
+  private var dockAboveQuote: NSLayoutConstraint?
 
   /// The last thing a thought said: its final non-empty line, without markdown emphasis.
   private static func latestThought(_ item: TranscriptItem) -> String? {

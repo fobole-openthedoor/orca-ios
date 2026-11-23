@@ -1,3 +1,4 @@
+import Litext
 import MarkdownParser
 import MarkdownView
 import UIKit
@@ -9,6 +10,10 @@ final class ChatAnswerMarkdownView: UIView {
   /// A tapped link, or a file path written as code.
   var onOpenURL: ((URL) -> Void)?
   var onOpenPath: ((String) -> Void)?
+  /// Selected words the reader chose to quote.
+  var onQuote: ((String) -> Void)? {
+    didSet { markdown.onQuote = onQuote }
+  }
   /// The content's height changed after it was laid out (a stream added a line): the row should re-measure.
   var onHeightChange: (() -> Void)?
 
@@ -144,6 +149,25 @@ final class ChatAnswerMarkdownView: UIView {
 /// A stream view that says when a new document has been laid out, so its row can re-measure.
 private final class ReportingStreamView: MarkdownStreamView {
   var onApplied: (() -> Void)?
+  var onQuote: ((String) -> Void)?
+
+  /// The selection's menu: the system's (Copy, Look Up, Translate, Share) with Quote after Copy, which puts
+  /// the selected words over the composer as a quote.
+  override func textLabelView(
+    _ label: TextLabelView, editMenuForSelection range: NSRange, suggestedActions: [UIMenuElement]
+  ) -> UIMenu? {
+    guard let onQuote else { return nil }
+    let quote = UIAction(
+      title: String(localized: "orcaios.chat.quote", defaultValue: "Quote"), image: UIImage(systemName: "text.quote")
+    ) { [weak label] _ in
+      guard let label, let text = label.selectionGroup?.selectedPlainText() ?? label.selectedPlainText() else { return }
+      label.clearSelection()
+      onQuote(text)
+    }
+    var actions = suggestedActions
+    actions.insert(quote, at: min(1, actions.count))
+    return UIMenu(children: actions)
+  }
 
   override func applyDocument(_ document: NSAttributedString, newContextViews: [UIView], animated: Bool) {
     super.applyDocument(document, newContextViews: newContextViews, animated: animated)

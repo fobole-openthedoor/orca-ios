@@ -21,7 +21,9 @@
         "cancelled": "Cancelled",
         "sendHeading": "SENDING",
         "sendFooter": "While the agent works, tapping send does this; holding send offers the other.",
-        "sendWhileWorking": "Send while working"
+        "sendWhileWorking": "Send while working",
+        "quote": "Quote",
+        "quoting": "Quoting"
       },
       "dictation": {
         "denied": "Allow Microphone and Speech Recognition for Orca in Settings.",
@@ -150,7 +152,9 @@
         "cancelled": "已取消",
         "sendHeading": "发送",
         "sendFooter": "智能体工作时，轻点发送按这里的方式发出；长按发送可以选另一种。",
-        "sendWhileWorking": "工作中点发送"
+        "sendWhileWorking": "工作中点发送",
+        "quote": "引用",
+        "quoting": "引用"
       },
       "dictation": {
         "denied": "请在“设置”中允许 Orca 使用麦克风和语音识别。",
@@ -301,7 +305,9 @@
         "cancelled": "已取消",
         "sendHeading": "傳送",
         "sendFooter": "代理工作時，輕點傳送按這裡的方式送出；長按傳送可以選另一種。",
-        "sendWhileWorking": "工作中點傳送"
+        "sendWhileWorking": "工作中點傳送",
+        "quote": "引用",
+        "quoting": "引用"
       },
       "dictation": {
         "denied": "請在「設定」中允許 Orca 使用麥克風和語音辨識。",

@@ -370,6 +370,7 @@ final class MessageMetaView: UIStackView {
 final class UserMessageView: UIView {
   private let bubble = UIView()
   private let text = TextLabel(size: ChatProse.bodySize, lines: 0)
+  private let quoted = ChatQuoteBlock()
   private let meta = MessageMetaView(trailing: true, actions: [.copy, .reply])
   private let images = ChatImageStack()
   private var raw = ""
@@ -388,7 +389,7 @@ final class UserMessageView: UIView {
     bubble.backgroundColor = Palette.chatUserSurface
     bubble.layer.cornerRadius = Radius.surface
     bubble.layer.borderWidth = 1
-    let column = UIStackView(arrangedSubviews: [text, images])
+    let column = UIStackView(arrangedSubviews: [quoted, text, images])
     column.axis = .vertical
     column.alignment = .leading
     column.spacing = Spacing.sm
@@ -421,8 +422,11 @@ final class UserMessageView: UIView {
     text value: String, images sources: [ImageViewerController.Source] = [], at time: Double?, sending: Bool
   ) {
     raw = value
-    text.styledText = ChatMarkdown.linkingPaths(ChatMarkdown.inline(value, color: Palette.chatForegroundStrong))
-    text.isHidden = value.isEmpty
+    // A quote it opens with draws as its own block over the words.
+    let parts = ChatQuote.split(value)
+    quoted.show(parts.quote)
+    text.styledText = ChatMarkdown.linkingPaths(ChatMarkdown.inline(parts.body, color: Palette.chatForegroundStrong))
+    text.isHidden = parts.body.isEmpty
     images.show(sources)
     if let time { meta.set(time: time) }
     meta.isHidden = time == nil
@@ -598,6 +602,10 @@ final class AnswerView: UIView {
   }
   var onOpenPath: ((String) -> Void)? {
     didSet { body.onOpenPath = onOpenPath }
+  }
+  /// Selected words, sent to the composer as a quote.
+  var onQuote: ((String) -> Void)? {
+    didSet { body.onQuote = onQuote }
   }
   var onFork: (() -> Void)?
   var onScrollToTop: (() -> Void)?
