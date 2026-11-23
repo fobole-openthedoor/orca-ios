@@ -229,7 +229,10 @@ final class ChatViewController: UIViewController {
     snapshot.reconfigureItems(projection.lines)
     // A turn ending folds its thoughts and calls into one line: animated, so they gather rather than vanish.
     let folding = lastWorking == true && !model.isWorking && fadesNewLines
-    dataSource.apply(snapshot, animatingDifferences: folding) { [weak self] in
+    // A tap that opens or closes a row animates it, so its contents unfold instead of popping in.
+    let animated = folding || animatesNextChange
+    animatesNextChange = false
+    dataSource.apply(snapshot, animatingDifferences: animated) { [weak self] in
       guard let self else { return }
       if self.followsBottom {
         self.scrollToBottom(animated: false)
@@ -993,7 +996,11 @@ final class ChatViewController: UIViewController {
     if followsBottom { scrollToBottom(animated: false) }
     watchSendTip()
     // What was there on opening just shows; what arrives after fades in.
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.fadesNewLines = true }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+      self?.fadesNewLines = true
+      // One page back read ahead of time, so the first scroll up doesn't wait for it.
+      self?.loadOlderNearTop(force: true)
+    }
   }
 
   /// The send hint, once: shortly after the first chat settles on screen, unless something else is up.
@@ -1027,6 +1034,8 @@ final class ChatViewController: UIViewController {
   /// Lines already shown once; a line seen for the first time after the chat has loaded fades in rather
   /// than popping, so a turn's new thoughts, calls and words arrive smoothly.
   private var shownLines: Set<ChatLine> = []
+  /// Set by a tap that opens or closes a row; the next change to the list animates.
+  private var animatesNextChange = false
   private var fadesNewLines = false
 
   func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
@@ -1069,10 +1078,12 @@ extension ChatViewController: UICollectionViewDelegate {
     loadOlderNearTop()
   }
 
-  /// Nearing the top of what is loaded reads the page before it, as the official list does.
-  private func loadOlderNearTop() {
+  /// Nearing the top of what is loaded reads the page before it, well ahead of the top (a few screens), so
+  /// the rows are in place before the reader gets there; it keeps reading while they are still near.
+  private func loadOlderNearTop(force: Bool = false) {
+    let ahead = max(1600, collection.bounds.height * 3)
     guard model.transcript.hasOlder, !model.isLoadingOlder, olderAnchor == nil,
-      collection.contentOffset.y + collection.adjustedContentInset.top < 600,
+      force || collection.contentOffset.y + collection.adjustedContentInset.top < ahead,
       let first = collection.indexPathsForVisibleItems.min(),
       let line = dataSource.itemIdentifier(for: first),
       let frame = collection.layoutAttributesForItem(at: first)?.frame
@@ -1096,6 +1107,8 @@ extension ChatViewController: UICollectionViewDelegate {
     if abs(target - collection.contentOffset.y) > 0.5 {
       collection.setContentOffset(CGPoint(x: 0, y: target), animated: false)
       olderAnchor = nil
+      // Still near the top: the next page now, not when the reader hits the edge.
+      DispatchQueue.main.async { [weak self] in self?.loadOlderNearTop() }
     }
   }
 
@@ -1137,17 +1150,20 @@ extension ChatViewController: UICollectionViewDelegate {
       followsBottom = false
       UISelectionFeedbackGenerator().selectionChanged()
       if expanded.contains(key) { expanded.remove(key) } else { expanded.insert(key) }
+      animatesNextChange = true
       setNeedsUpdateProperties()
     case .thoughts(let key):
       followsBottom = false
       UISelectionFeedbackGenerator().selectionChanged()
       if openThoughts.contains(key) { openThoughts.remove(key) } else { openThoughts.insert(key) }
+      animatesNextChange = true
       setNeedsUpdateProperties()
     case .run(let key):
       // Opens in place to its calls, as the official tool lines do.
       followsBottom = false
       UISelectionFeedbackGenerator().selectionChanged()
       if openRuns.contains(key) { openRuns.remove(key) } else { openRuns.insert(key) }
+      animatesNextChange = true
       setNeedsUpdateProperties()
     case .call(let id):
       followsBottom = false
