@@ -370,7 +370,10 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     attachmentStrip.isHidden = isCollapsed || attachments.isEmpty
     if summarizing {
       let words = currentText.replacingOccurrences(of: "\n", with: " ")
-      let files = attachments.isEmpty ? nil : "📎 \(attachments.count)"
+      var files = attachments.isEmpty && reading == 0 ? nil : "📎 \(attachments.count + reading)"
+      if !uploading.isEmpty || reading > 0 {
+        files = (files ?? "") + " " + String(localized: "orcaios.composer.uploading", defaultValue: "Uploading…")
+      }
       placeholder.text = [files, words.isEmpty ? nil : words].compactMap { $0 }.joined(separator: "  ")
       placeholder.textColor = Palette.textPrimary
       placeholder.isHidden = false
@@ -381,6 +384,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     }
     let action: Action = !currentText.isEmpty || !attachments.isEmpty ? .send : working ? .stop : .dictate
     sendButton.set(action)
+    // Held until every attachment is on the host.
+    sendButton.alpha = action == .send && (!uploading.isEmpty || reading > 0) ? 0.4 : 1
     // Full screen holds its height; the drag owns it.
     guard fullScreenProgress == 0 else { return }
     if isCollapsed != !textView.isFirstResponder {
@@ -430,6 +435,12 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private func send(queue: Bool) {
     let text = textView.text ?? ""
     guard !currentText.isEmpty || !attachments.isEmpty else { return }
+    if let waiting = attachments.first(where: { uploading.contains($0.id) }) ?? (reading > 0 ? attachments.first : nil) {
+      UINotificationFeedbackGenerator().notificationOccurred(.warning)
+      onError?(String(format: String(localized: "bots.failures.attachmentUploading", defaultValue: "%1$@ is still uploading."), waiting.name))
+      return
+    }
+    if reading > 0 { return }
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     let sending = attachments
     textView.text = ""
@@ -446,6 +457,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   func restore(text: String, attachments saved: [OutgoingAttachment]) {
     textView.text = text
     attachments = saved
+    saved.forEach(startUpload)
     refresh()
   }
 
@@ -490,14 +502,52 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
 
   // MARK: Attachments
 
+  /// Uploads an attachment to the host, reporting progress; set by the chat.
+  var upload: ((OutgoingAttachment, @escaping @Sendable (Double) -> Void) async throws -> String)?
+  /// Attachments on their way to the host; the message can't go until they're there.
+  private var uploading: Set<UUID> = []
+  /// Picks still being read off the device (a video from Photos takes a moment), each a spinning chip.
+  private var reading = 0 { didSet { drawAttachments() } }
+
   func add(_ new: [OutgoingAttachment]) {
     guard !new.isEmpty else { return }
     attachments += new
+    new.forEach(startUpload)
     refresh()
   }
 
+  /// Shows a spinning chip while `load` reads the picked items, then adds them.
+  func adding(_ load: @escaping () async -> [OutgoingAttachment]) {
+    reading += 1
+    Task {
+      let loaded = await load()
+      reading -= 1
+      add(loaded)
+    }
+  }
+
+  private func startUpload(_ attachment: OutgoingAttachment) {
+    guard attachment.uploadedPath == nil, !uploading.contains(attachment.id), let upload else { return }
+    let id = attachment.id
+    uploading.insert(id)
+    drawAttachments()
+    refresh()
+    Task {
+      do {
+        let path = try await upload(attachment) { _ in }
+        if let index = attachments.firstIndex(where: { $0.id == id }) { attachments[index].uploadedPath = path }
+      } catch {
+        attachments.removeAll { $0.id == id }
+        onError?(ChatSessionModel.uploadFailure(error))
+      }
+      uploading.remove(id)
+      drawAttachments()
+      refresh()
+    }
+  }
+
   private func take(_ providers: [NSItemProvider]) {
-    Task { add(await AttachmentIntake.load(providers)) }
+    adding { await AttachmentIntake.load(providers) }
   }
 
   private func attachMenu() -> [UIMenuElement] {
@@ -530,15 +580,52 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private func drawAttachments() {
     attachmentRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
     for attachment in attachments {
-      attachmentRow.addArrangedSubview(chip(for: attachment))
+      let chip = chip(for: attachment)
+      if uploading.contains(attachment.id) { Self.spin(over: chip, label: attachment.kind == .image
+        ? String(localized: "chat.composerAttachments.uploadingImage", defaultValue: "Uploading image")
+        : String(format: String(localized: "chat.composerAttachments.uploadingFile", defaultValue: "Uploading %1$@"), attachment.name)) }
+      attachmentRow.addArrangedSubview(chip)
     }
-    let shown = !attachments.isEmpty
+    for _ in 0..<reading {
+      let chip = UIView()
+      chip.backgroundColor = Palette.bgRaised
+      chip.layer.cornerRadius = Radius.control
+      chip.layer.cornerCurve = .continuous
+      chip.translatesAutoresizingMaskIntoConstraints = false
+      NSLayoutConstraint.activate([
+        chip.widthAnchor.constraint(equalToConstant: 48), chip.heightAnchor.constraint(equalToConstant: 48),
+      ])
+      Self.spin(over: chip, label: String(localized: "chat.composerAttachments.uploadingFile", defaultValue: "Uploading %1$@")
+        .replacingOccurrences(of: "%1$@", with: "").trimmingCharacters(in: .whitespaces))
+      attachmentRow.addArrangedSubview(chip)
+    }
+    let shown = !attachments.isEmpty || reading > 0
     attachmentStrip.isHidden = !shown || isCollapsed
     if !isCollapsed {
       textTop.isActive = !shown
       textUnderChips.isActive = shown
     }
     onHeightChange?()
+  }
+
+  /// Dims a chip under a spinner while it uploads.
+  private static func spin(over chip: UIView, label: String) {
+    let shade = UIView()
+    shade.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+    shade.isUserInteractionEnabled = false
+    shade.translatesAutoresizingMaskIntoConstraints = false
+    let spinner = UIActivityIndicatorView(style: .medium)
+    spinner.color = .white
+    spinner.startAnimating()
+    spinner.translatesAutoresizingMaskIntoConstraints = false
+    chip.addSubview(shade)
+    shade.pin(to: chip)
+    shade.addSubview(spinner)
+    NSLayoutConstraint.activate([
+      spinner.centerXAnchor.constraint(equalTo: shade.centerXAnchor),
+      spinner.centerYAnchor.constraint(equalTo: shade.centerYAnchor),
+    ])
+    chip.accessibilityLabel = label
   }
 
   private func openImage(_ id: UUID) {

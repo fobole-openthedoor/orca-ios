@@ -18,6 +18,8 @@ public struct PendingSend: Sendable, Equatable, Identifiable {
   public var state: State
   /// When the send started, in the journal's epoch milliseconds.
   public var createdAt: Double = Date().timeIntervalSince1970 * 1000
+  /// Where its images went on the host, once uploaded: what a message of only images is known by.
+  public var imagePaths: [String] = []
 }
 
 /// One row of the conversation screen.
@@ -341,14 +343,17 @@ public final class ChatSessionModel {
 
   static func arrivedWithoutSubmission(_ send: PendingSend, in transcript: ChatTranscript) -> Bool {
     let text = send.text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else { return false }
+    // Words, or else the images it carried.
+    guard !text.isEmpty || !send.imagePaths.isEmpty else { return false }
     // A little slack for clock skew between the phone and the desktop.
     let earliest = send.createdAt - 5_000
     return transcript.items.contains { item in
       guard item.observedAt >= earliest, case .message(let message) = item.body, message.role == "user" else {
         return false
       }
-      return message.text.trimmingCharacters(in: .whitespacesAndNewlines) == text
+      let words = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !text.isEmpty { return words == text }
+      return words.isEmpty && (message.imagePaths == send.imagePaths || message.imagePaths.count == send.imagePaths.count)
     }
   }
 
@@ -368,16 +373,11 @@ public final class ChatSessionModel {
           let overall = (Double(index) + fraction) / Double(attachments.count)
           Task { @MainActor in self?.update(operationId) { $0.state = .uploading(progress: overall) } }
         }
+        let path: String
+        if let uploaded = attachment.uploadedPath { path = uploaded } else { path = try await upload(attachment, progress: report) }
         switch attachment.kind {
-        case .image:
-          let path = try await api.uploadImage(attachment.data, fileName: attachment.name, connectionId: connectionId, progress: report)
-          imagePaths.append(path)
-          onImageUploaded?(path, attachment.data)
-        case .file:
-          guard acceptsFiles else {
-            throw AttachmentError.unsupportedByHost
-          }
-          filePaths.append(try await api.uploadFile(attachment.data, name: attachment.name, sessionId: sessionId, progress: report))
+        case .image: imagePaths.append(path)
+        case .file: filePaths.append(path)
         }
       }
     } catch {
@@ -390,9 +390,31 @@ public final class ChatSessionModel {
       pending.removeAll { $0.id == operationId }
       return
     }
-    update(operationId) { $0.state = .sending }
+    update(operationId) {
+      $0.state = .sending
+      $0.imagePaths = imagePaths
+    }
     await write(operationId: operationId, body: body, queue: queue, retryOnStaleFence: true)
   }
+
+  /// Uploads one attachment to the host and returns where it put it. The composer calls this as soon as
+  /// something is attached, so the send itself doesn't wait on it.
+  public func upload(_ attachment: OutgoingAttachment, progress: @escaping @Sendable (Double) -> Void) async throws -> String {
+    switch attachment.kind {
+    case .image:
+      let path = try await api.uploadImage(attachment.data, fileName: attachment.name, connectionId: connectionId, progress: progress)
+      onImageUploaded?(path, attachment.data)
+      return path
+    case .file:
+      guard acceptsFiles else {
+        throw AttachmentError.unsupportedByHost
+      }
+      return try await api.uploadFile(attachment.data, name: attachment.name, sessionId: sessionId, progress: progress)
+    }
+  }
+
+  /// Why an upload failed, in words for the user.
+  public static func uploadFailure(_ error: Error) -> String { describeUpload(error) }
 
   private func write(operationId: String, body: JSONValue, queue: Bool = false, retryOnStaleFence: Bool) async {
     var fields: [String: JSONValue] = ["body": body]

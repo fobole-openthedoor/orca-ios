@@ -6,7 +6,8 @@
         "noDesktop": "Connect a desktop and try again."
       },
       "composer": {
-        "camera": "Take Photo"
+        "camera": "Take Photo",
+        "uploading": "Uploading…"
       },
       "chat": {
         "awaitingApproval": "Waiting for your approval",
@@ -116,7 +117,8 @@
         "noDesktop": "请先连接一台桌面再试。"
       },
       "composer": {
-        "camera": "拍照"
+        "camera": "拍照",
+        "uploading": "上传中…"
       },
       "chat": {
         "awaitingApproval": "等待你的批准",
@@ -248,7 +250,8 @@
         "noDesktop": "請先連接一台桌面再試。"
       },
       "composer": {
-        "camera": "拍照"
+        "camera": "拍照",
+        "uploading": "上傳中…"
       },
       "chat": {
         "awaitingApproval": "等待你的核准",

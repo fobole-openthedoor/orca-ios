@@ -12,12 +12,15 @@ public struct OutgoingAttachment: Sendable, Equatable, Identifiable {
   public var kind: Kind
   public var name: String
   public var data: Data
+  /// Where the host keeps it, once uploaded ahead of the send (the composer uploads as soon as it's added).
+  public var uploadedPath: String?
 
-  public init(id: UUID = UUID(), kind: Kind, name: String, data: Data) {
+  public init(id: UUID = UUID(), kind: Kind, name: String, data: Data, uploadedPath: String? = nil) {
     self.id = id
     self.kind = kind
     self.name = name
     self.data = data
+    self.uploadedPath = uploadedPath
   }
 }
 

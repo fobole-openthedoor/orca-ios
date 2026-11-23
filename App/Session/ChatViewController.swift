@@ -8,6 +8,9 @@ import UniformTypeIdentifiers
 /// One agent chat: the transcript over the glass composer.
 final class ChatViewController: UIViewController {
   let model: ChatSessionModel
+  /// The row on screen when an older page was asked for, and how far below the top it sat.
+  private var olderAnchor: (line: ChatLine, y: CGFloat)?
+
   private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: Self.layout())
   /// Runs under the navigation bar and the tab strip, which blur it with the soft scroll edge.
   var edgeScrollView: UIScrollView { collection }
@@ -133,6 +136,8 @@ final class ChatViewController: UIViewController {
       }
     }
     composer.onToken = { [weak self] token in self?.suggest(token) }
+    let uploader = model
+    composer.upload = { attachment, progress in try await uploader.upload(attachment, progress: progress) }
     // Full screen: the field grows to just under the top bar, the chat dims behind it.
     composer.fullTextHeight = { [weak self] in
       guard let self else { return 0 }
@@ -223,7 +228,13 @@ final class ChatViewController: UIViewController {
     snapshot.appendItems(projection.lines)
     snapshot.reconfigureItems(projection.lines)
     dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
-      if self?.followsBottom == true { self?.scrollToBottom(animated: false) }
+      guard let self else { return }
+      if self.followsBottom {
+        self.scrollToBottom(animated: false)
+      } else {
+        self.keepOlderAnchor()
+        self.clampOffset()
+      }
     }
     composer.setWorking(model.isWorking)
     // A turn's end moves the goal's time and status; read them again.
@@ -1017,6 +1028,48 @@ extension ChatViewController: UICollectionViewDelegate {
 
   func scrollViewDidScroll(_ scrollView: UIScrollView) {
     updateToBottomButton()
+    loadOlderNearTop()
+  }
+
+  /// Nearing the top of what is loaded reads the page before it, as the official list does.
+  private func loadOlderNearTop() {
+    guard model.transcript.hasOlder, !model.isLoadingOlder, olderAnchor == nil,
+      collection.contentOffset.y + collection.adjustedContentInset.top < 600,
+      let first = collection.indexPathsForVisibleItems.min(),
+      let line = dataSource.itemIdentifier(for: first),
+      let frame = collection.layoutAttributesForItem(at: first)?.frame
+    else { return }
+    olderAnchor = (line, frame.minY - collection.contentOffset.y)
+    let model = model
+    Task { [weak self] in
+      await model.loadOlder()
+      // Nothing came: let the next scroll ask again.
+      try? await Task.sleep(for: .milliseconds(300))
+      if self?.olderAnchor?.line == line { self?.olderAnchor = nil }
+    }
+  }
+
+  /// Rows read in above stay out of the way: the row that was on screen stays where it was.
+  private func keepOlderAnchor() {
+    guard let anchor = olderAnchor, let indexPath = dataSource.indexPath(for: anchor.line) else { return }
+    collection.layoutIfNeeded()
+    guard let frame = collection.layoutAttributesForItem(at: indexPath)?.frame else { return }
+    let target = frame.minY - anchor.y
+    if abs(target - collection.contentOffset.y) > 0.5 {
+      collection.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+      olderAnchor = nil
+    }
+  }
+
+  /// The transcript got shorter under a reader scrolled past its new end (a fresh snapshot, rows folding):
+  /// back to the end, rather than a screen of nothing.
+  private func clampOffset() {
+    let end = max(
+      -collection.adjustedContentInset.top,
+      collection.contentSize.height + collection.adjustedContentInset.bottom - collection.bounds.height)
+    if collection.contentOffset.y > end + 1 {
+      collection.setContentOffset(CGPoint(x: 0, y: end), animated: false)
+    }
   }
 
   func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
@@ -1157,7 +1210,7 @@ extension ChatViewController: PHPickerViewControllerDelegate, UIImagePickerContr
   func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
     picker.dismiss(animated: true)
     let providers = results.map(\.itemProvider)
-    Task { composer.add(await AttachmentIntake.load(providers)) }
+    composer.adding { await AttachmentIntake.load(providers) }
   }
 
   func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {

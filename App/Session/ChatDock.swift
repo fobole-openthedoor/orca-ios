@@ -21,6 +21,9 @@ final class ChatDockView: UIView {
   private var stopsAll = false
   private var goal: ChatOptions.Goal?
   private var queued: [QueuedMessage] = []
+  /// What the row shows, segment by segment: while it stays the same the buttons stay, so an open menu
+  /// isn't torn down by a running task's ticking time or tokens.
+  private var drawn: [String] = []
 
   init() {
     super.init(frame: .zero)
@@ -71,8 +74,7 @@ final class ChatDockView: UIView {
   }
 
   private func redraw() {
-    row.arrangedSubviews.forEach { $0.removeFromSuperview() }
-    var segments: [UIView] = []
+    var segments: [(key: String, make: () -> UIButton)] = []
     // Agents, shells, then everything else the host runs in the background, in the official order.
     let groups: [(kinds: Set<String>?, key: String, icon: Lucide)] = [
       (["agent"], "session.backgroundTask.countAgents", .bot),
@@ -81,20 +83,32 @@ final class ChatDockView: UIView {
       (["workflow"], "session.backgroundTask.countWorkflows", .workflow),
       (nil, "session.backgroundTask.countTasks", .listTodo),
     ]
-    let known: Set<String> = ["agent", "command", "monitor", "workflow"]
     for group in groups {
-      let members = tasks.filter { group.kinds?.contains($0.kind) ?? !known.contains($0.kind) }
-      guard !members.isEmpty else { continue }
-      let title = String(format: Bundle.main.localizedString(forKey: group.key, value: "%lld", table: nil), members.count)
-      segments.append(segment(icon: group.icon, title: title, menu: taskMenu(members)))
+      let count = members(of: group.kinds).count
+      guard count > 0 else { continue }
+      let title = String(format: Bundle.main.localizedString(forKey: group.key, value: "%lld", table: nil), count)
+      // Built as it opens, from the tasks as they are then.
+      segments.append((group.key + title, { [unowned self] in
+        self.segment(icon: group.icon, title: title) { [weak self] in self?.taskMenu(self?.members(of: group.kinds) ?? []) }
+      }))
     }
     if !queued.isEmpty {
       let title = String.localizedStringWithFormat(
         String(localized: "chat.queuedMessages.queuedCount", defaultValue: "%lld queued"), queued.count)
-      segments.insert(segment(icon: .listEnd, title: title, menu: queuedMenu()), at: 0)
+      segments.insert((title, { [unowned self] in
+        self.segment(icon: .listEnd, title: title) { [weak self] in self?.queuedMenu() }
+      }), at: 0)
     }
-    if let goal { segments.append(goalSegment(goal)) }
-    for (index, segment) in segments.enumerated() {
+    if let goal {
+      segments.append(("goal \(goal)", { [unowned self] in self.goalSegment(goal) }))
+    }
+    let keys = segments.map(\.key)
+    isHidden = segments.isEmpty
+    guard keys != drawn else { return }
+    drawn = keys
+    row.arrangedSubviews.forEach { $0.removeFromSuperview() }
+    let made = segments.map { $0.make() }
+    for (index, segment) in made.enumerated() {
       if index > 0 {
         let divider = UIView()
         divider.backgroundColor = Palette.borderSubtle
@@ -109,7 +123,12 @@ final class ChatDockView: UIView {
     isHidden = segments.isEmpty
   }
 
-  private func segment(icon: Lucide, title: String, color: UIColor = Palette.textPrimary, menu: UIMenu) -> UIButton {
+  private func members(of kinds: Set<String>?) -> [BackgroundTask] {
+    let known: Set<String> = ["agent", "command", "monitor", "workflow"]
+    return tasks.filter { kinds?.contains($0.kind) ?? !known.contains($0.kind) }
+  }
+
+  private func segment(icon: Lucide, title: String, color: UIColor = Palette.textPrimary, menu: @escaping () -> UIMenu?) -> UIButton {
     var configuration = UIButton.Configuration.plain()
     configuration.image = icon.image(size: 15, strokeWidth: 2)
     configuration.imagePadding = 6
@@ -122,7 +141,9 @@ final class ChatDockView: UIView {
     button.showsMenuAsPrimaryAction = true
     // Opening upward must not flip the order: looking comes before stopping.
     button.preferredMenuElementOrder = .fixed
-    button.menu = menu
+    button.menu = UIMenu(children: [
+      UIDeferredMenuElement.uncached { done in done(menu()?.children ?? []) }
+    ])
     return button
   }
 
@@ -233,7 +254,7 @@ final class ChatDockView: UIView {
     if goal.timeUsedSeconds > 0 { heading += "\n" + WorkSummaryView.duration(Int(goal.timeUsedSeconds)) }
     let button = segment(
       icon: .goal, title: status, color: goal.status == "active" ? Palette.textPrimary : Palette.statusAmber,
-      menu: UIMenu(title: heading, children: actions))
+      menu: { UIMenu(children: [UIMenu(title: heading, options: .displayInline, children: actions)]) })
     return button
   }
 
