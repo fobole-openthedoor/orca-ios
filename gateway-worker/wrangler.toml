@@ -4,8 +4,9 @@ main = "src/index.js"
 compatibility_date = "2026-11-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Reachable at https://orca-push.<account>.workers.dev only; no routes or custom domain here.
+# Served at https://orca-push.huami.dev (a Workers custom domain; must equal PUBLIC_ORIGIN).
 workers_dev = true
+routes = [{ pattern = "orca-push.huami.dev", custom_domain = true }]
 preview_urls = false
 
 [vars]
@@ -17,7 +18,7 @@ LOG_LEVEL = "info"
 # APNs keys. Topic-specific keys work in ONE environment, so each environment
 # has its own key; APNS_KEY / APNS_KEY_ID is the fallback for an environment
 # without one. Fill in the key ids once the .p8 files exist, then redeploy:
-# APNS_SANDBOX_KEY_ID = "XXXXXXXXXX"
+APNS_SANDBOX_KEY_ID = "JJF9L3V89W"
 # APNS_PRODUCTION_KEY_ID = "YYYYYYYYYY"
 # APNS_KEY_ID = "ZZZZZZZZZZ"
 # Optional:
