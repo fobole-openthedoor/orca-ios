@@ -1140,6 +1140,14 @@ final class ChatViewController: UIViewController {
       }
       popover.popoverPresentationController?.permittedArrowDirections = .down
       self.present(popover, animated: true)
+      // The popover's close button only invalidates the tip; the popover stays up until told otherwise.
+      Task { [weak self, weak popover] in
+        for await status in SendHoldTip().statusUpdates {
+          guard case .invalidated = status else { continue }
+          if let popover, popover.presentingViewController != nil { self?.dismiss(animated: true) }
+          return
+        }
+      }
     }
   }
 

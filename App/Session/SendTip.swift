@@ -19,9 +19,18 @@ struct SendHoldTip: Tip {
     [Action(id: "settings", title: String(localized: "orcaios.tip.openSettings", defaultValue: "Settings"))]
   }
 
+  /// A fresh id each time Settings brings the tip back, so TipKit doesn't still count it as closed.
+  var id: String { "sendHold.\(UserDefaults.standard.integer(forKey: "orca.tip.sendHold.round"))" }
+
   /// Shown already; cleared from Settings › Orca iOS to show it again.
   static var seen: Bool {
     get { UserDefaults.standard.bool(forKey: "orca.tip.sendHold") }
-    set { UserDefaults.standard.set(newValue, forKey: "orca.tip.sendHold") }
+    set {
+      UserDefaults.standard.set(newValue, forKey: "orca.tip.sendHold")
+      if !newValue {
+        let round = UserDefaults.standard.integer(forKey: "orca.tip.sendHold.round")
+        UserDefaults.standard.set(round + 1, forKey: "orca.tip.sendHold.round")
+      }
+    }
   }
 }
