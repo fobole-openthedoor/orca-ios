@@ -12,7 +12,7 @@ final class AgentStatusDot: UIView {
     case "active", "done": AgentColor.done
     case "permission", "failed", "blocked", "waiting": AgentColor.attention
     case "interrupted": Palette.textMuted
-    case "unconfirmed": Palette.statusAmber
+    case "unconfirmed", "unverifiable": Palette.statusAmber
     default: AgentColor.idle
     }
   }
@@ -78,6 +78,17 @@ struct WorkspaceRowConfiguration: UIContentConfiguration {
 
   func makeContentView() -> UIView & UIContentView { WorkspaceRowView(configuration: self) }
   func updated(for state: UIConfigurationState) -> WorkspaceRowConfiguration { self }
+}
+
+enum WorkspaceAgentRole {
+  case worker, subagent
+
+  var title: String {
+    switch self {
+    case .worker: String(localized: "orcaios.agents.worker", defaultValue: "Orca worker")
+    case .subagent: String(localized: "orcaios.agents.subagent", defaultValue: "Subagent")
+    }
+  }
 }
 
 /// A workspace row (worktree/row-presentation/WorktreeListRow.tsx): status column, the name with its glyphs,
@@ -149,35 +160,59 @@ final class WorkspaceRowView: UIView, UIContentView {
     terminalCount.isHidden = terminalCount.text == nil
 
     agents.arrangedSubviews.forEach { $0.removeFromSuperview() }
-    for agent in worktree.agents {
-      agents.addArrangedSubview(AgentLineView(agent: agent))
+    var labels: [String] = []
+    func addChild(_ branch: AgentBranch<Worktree.Agent.Child>, depth: Int) {
+      let child = branch.entry
+      let label = child.label ?? WorkspaceAgentRole.subagent.title
+      agents.addArrangedSubview(AgentLineView(
+        title: label, role: .subagent, detail: child.detail, state: child.state, agentType: child.agentType,
+        updatedAt: child.updatedAt, depth: depth))
+      labels.append(child.label.map { "\(WorkspaceAgentRole.subagent.title), \($0)" } ?? label)
+      for child in branch.children { addChild(child, depth: depth + 1) }
     }
+    func addAgent(_ branch: AgentBranch<Worktree.Agent>, depth: Int) {
+      let agent = branch.entry
+      let role: WorkspaceAgentRole? = agent.parentPaneKey != nil ? .worker : nil
+      agents.addArrangedSubview(AgentLineView(
+        title: agent.title, role: role, detail: agent.lastAssistantMessage, state: agent.mainState ?? agent.state,
+        agentType: agent.agentType, updatedAt: agent.updatedAt, depth: depth))
+      labels.append([role?.title, agent.title].compactMap { $0 }.joined(separator: ", "))
+      for child in agent.childLineage { addChild(child, depth: depth + 1) }
+      for worker in branch.children { addAgent(worker, depth: depth + 1) }
+    }
+    for root in Worktree.Agent.lineage(worktree.agents) { addAgent(root, depth: 0) }
     // An empty stack has no height of its own; hidden, the row's height comes from the name alone.
-    agents.isHidden = worktree.agents.isEmpty
+    agents.isHidden = labels.isEmpty
     glyphs.isHidden = glyphs.arrangedSubviews.isEmpty
     isAccessibilityElement = true
-    accessibilityLabel = ([name.text ?? ""] + worktree.agents.map(\.title)).joined(separator: ", ")
+    accessibilityLabel = ([name.text ?? ""] + labels).joined(separator: ", ")
   }
 }
 
 /// One agent under its workspace (worktree/agent-lineage/presentation/WorktreeAgentRow.tsx): dot, mark,
 /// "title · last message", and how long ago.
 private final class AgentLineView: UIView {
-  init(agent: Worktree.Agent) {
+  init(title: String, role: WorkspaceAgentRole?, detail: String?, state: String, agentType: String?, updatedAt: Double?, depth: Int) {
     super.init(frame: .zero)
     let dot = UIView()
     dot.translatesAutoresizingMaskIntoConstraints = false
-    dot.backgroundColor = AgentStatusDot.color(for: agent.state == "working" ? "active" : agent.state)
+    dot.backgroundColor = AgentStatusDot.color(for: state)
     dot.layer.cornerRadius = 3
     let mark = FilledIconView(size: 14)
-    mark.icon = AgentMark.icon(for: agent.agentType)
-    let summary = [agent.title, agent.lastAssistantMessage].compactMap { $0 }.filter { !$0.isEmpty }
+    mark.icon = AgentMark.icon(for: agentType)
+    let roleName = role?.title
+    let summary = [roleName == title ? nil : roleName, title, detail].compactMap { $0 }.filter { !$0.isEmpty }
       .map(MarkdownPreview.plain).joined(separator: " · ")
     let text = TextLabel(summary, size: 12, color: Palette.textSecondary)
     text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    let time = TextLabel(RelativeTime.short(agent.updatedAt), size: 11, color: Palette.textMuted)
+    let time = TextLabel(RelativeTime.short(updatedAt), size: 11, color: Palette.textMuted)
     time.setContentCompressionResistancePriority(.required, for: .horizontal)
-    let row = UIStackView(arrangedSubviews: [dot, mark, text, time])
+    var contents: [UIView] = []
+    if depth > 0 { contents.append(LucideView(.cornerDownRight, size: 11, strokeWidth: 2, color: Palette.textMuted)) }
+    contents.append(dot)
+    if mark.icon != nil { contents.append(mark) }
+    contents += [text, time]
+    let row = UIStackView(arrangedSubviews: contents)
     row.axis = .horizontal
     row.spacing = Spacing.xs + 2
     row.alignment = .center
@@ -187,7 +222,7 @@ private final class AgentLineView: UIView {
     NSLayoutConstraint.activate([
       dot.widthAnchor.constraint(equalToConstant: 6),
       dot.heightAnchor.constraint(equalToConstant: 6),
-      row.leadingAnchor.constraint(equalTo: leadingAnchor),
+      row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: CGFloat(min(depth, 3)) * 12),
       row.trailingAnchor.constraint(equalTo: trailingAnchor),
       row.topAnchor.constraint(equalTo: topAnchor, constant: 6),
       row.bottomAnchor.constraint(equalTo: bottomAnchor),

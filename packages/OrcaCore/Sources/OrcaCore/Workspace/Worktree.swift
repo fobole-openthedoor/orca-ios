@@ -23,9 +23,27 @@ public struct Worktree: Sendable, Equatable, Identifiable {
     public var lastAssistantMessage: String?
     public var toolName: String?
     public var orcaSessionId: String?
+    var structuredSessionId: String?
+    public var parentPaneKey: String?
+    /// The pane's own state, before the host rolls its child work into the pane status.
+    public var mainState: String?
+    private var workingMode: String?
+    private(set) var restoredUnconfirmed = false
+    public var children: [Child] = []
+    public var listed: Bool?
+    public var listTitle: String?
+    public var listState: String?
+    public var listSortAt: Double?
+    private var childOf: String?
     public var updatedAt: Double?
 
     public var id: String { paneKey }
+    public var listParentPaneKey: String? { listed == true ? childOf : parentPaneKey }
+    var isActivelyWorking: Bool {
+      guard !restoredUnconfirmed, listState != "unconfirmed", listState != "unverifiable" else { return false }
+      if let mainState { return mainState == "working" }
+      return workingMode != "monitoring" && (listState ?? state) == "working"
+    }
 
     /// The best one-line name for the row.
     public var title: String {
@@ -63,6 +81,29 @@ public struct Worktree: Sendable, Equatable, Identifiable {
       lastAssistantMessage = json["lastAssistantMessage"]?.stringValue
       toolName = json["toolName"]?.stringValue
       orcaSessionId = json["orcaSessionId"]?.stringValue
+      let address = json["address"]?.stringValue
+      let prefix = "orca_session_id:"
+      if let address, address.hasPrefix(prefix), address.count > prefix.count {
+        structuredSessionId = String(address.dropFirst(prefix.count))
+      } else if json["structuredHostOwned"]?.boolValue == true {
+        structuredSessionId = orcaSessionId
+      }
+      parentPaneKey = json["parentPaneKey"]?.stringValue
+      mainState = json["mainAgent"]?["state"]?.stringValue
+      workingMode = json["workingMode"]?.stringValue
+      restoredUnconfirmed = json["restoredUnconfirmed"]?.boolValue == true
+      let unverifiable = json["subagentObservation"]?.stringValue == "unverifiable"
+      if let modern = json["children"]?.arrayValue {
+        children = modern.compactMap { Child($0, legacy: false, unverifiable: unverifiable) }
+      } else {
+        children = (json["subagents"]?.arrayValue ?? []).compactMap { Child($0, legacy: true, unverifiable: unverifiable) }
+      }
+      let activity = json["activity"]
+      listed = activity?["listed"]?.boolValue
+      listTitle = activity?["title"]?.stringValue
+      listState = activity?["status"]?.stringValue
+      listSortAt = activity?["sortAt"]?.doubleValue
+      childOf = activity?["childOf"]?.stringValue
       updatedAt = json["updatedAt"]?.doubleValue
     }
   }

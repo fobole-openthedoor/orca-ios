@@ -1,6 +1,10 @@
 {
   "en": {
     "orcaios": {
+      "agents": {
+        "subagent": "Subagent",
+        "worker": "Orca worker"
+      },
       "push": {
         "gatewayFooter": "While Orca is open, alerts and Live Activities update right away. To get them after you close Orca, your desktop needs push turned on.",
         "noDesktop": "Connect a desktop and try again.",
@@ -14,6 +18,7 @@
         "uploading": "Uploading…"
       },
       "chat": {
+        "workers": "Orca workers",
         "awaitingApproval": "Waiting for your approval",
         "awaitingAnswer": "Waiting for your answer",
         "approvalTitle": "Needs your approval",
@@ -98,6 +103,13 @@
         "restartMessage": "Close Orca from the app switcher and open it again. Until then, Orca keeps its current language."
       },
       "pip": {
+        "compact": "Two-line mode",
+        "noWorkingAgents": "No agents working",
+        "statusUnavailable": "Agent status unavailable",
+        "workingAgents_one": "{{count}} working",
+        "workingAgents_other": "{{count}} working",
+        "workingHosts_one": "{{count}} host",
+        "workingHosts_other": "{{count}} hosts",
         "start": "Picture in Picture",
         "onLeave": "Open when leaving",
         "commands": "Show each command",
@@ -114,7 +126,7 @@
       "settings": {
         "title": "Orca iOS",
         "pipHeading": "PICTURE IN PICTURE",
-        "pipFooter": "Opens only while the agent works. The session's ⋯ menu opens it at any time.",
+        "pipFooter": "Two-line mode cycles through working agents on your paired desktops. The session's ⋯ menu opens Picture in Picture at any time.",
         "activityHeading": "LIVE ACTIVITIES",
         "activityFooter": "A working agent shows on the Lock Screen and in the Dynamic Island until it stops.",
         "activityToggle": "Show working agents",
@@ -173,6 +185,10 @@
   },
   "zh": {
     "orcaios": {
+      "agents": {
+        "subagent": "子代理",
+        "worker": "协作代理"
+      },
       "push": {
         "gatewayFooter": "Orca 打开时，通知和实时活动会直接更新。关掉 Orca 后还想收到，需要桌面开启推送。",
         "noDesktop": "请先连接一台桌面再试。",
@@ -186,6 +202,7 @@
         "uploading": "上传中…"
       },
       "chat": {
+        "workers": "Orca 协作代理",
         "awaitingApproval": "等待你的批准",
         "awaitingAnswer": "等待你的回答",
         "approvalTitle": "需要你批准",
@@ -270,6 +287,13 @@
         "restartMessage": "在多任务界面关闭 Orca 后再打开。在此之前，Orca 仍使用当前语言。"
       },
       "pip": {
+        "compact": "双行模式",
+        "noWorkingAgents": "没有代理在工作",
+        "statusUnavailable": "暂时无法获取代理状态",
+        "workingAgents_one": "{{count}} 个工作中",
+        "workingAgents_other": "{{count}} 个工作中",
+        "workingHosts_one": "{{count}} 台主机",
+        "workingHosts_other": "{{count}} 台主机",
         "start": "画中画",
         "onLeave": "离开时自动打开",
         "commands": "显示每条命令",
@@ -286,7 +310,7 @@
       "settings": {
         "title": "Orca iOS",
         "pipHeading": "画中画",
-        "pipFooter": "只在智能体工作时自动打开；会话的 ⋯ 菜单随时可以手动打开。",
+        "pipFooter": "双行模式轮换显示各台已配对主机上正在工作的代理。可从会话的 ⋯ 菜单手动打开画中画。",
         "activityHeading": "实时活动",
         "activityFooter": "智能体工作时显示在锁定屏幕和灵动岛上，停下后消失。",
         "activityToggle": "显示工作中的智能体",
@@ -366,6 +390,10 @@
   },
   "zh-Hant": {
     "orcaios": {
+      "agents": {
+        "subagent": "子代理",
+        "worker": "協作代理"
+      },
       "push": {
         "gatewayFooter": "Orca 開啟時，通知和即時動態會直接更新。關掉 Orca 後還想收到，需要桌面開啟推播。",
         "noDesktop": "請先連接一台桌面再試。",
@@ -379,6 +407,7 @@
         "uploading": "上傳中…"
       },
       "chat": {
+        "workers": "Orca 協作代理",
         "awaitingApproval": "等待你的核准",
         "awaitingAnswer": "等待你的回答",
         "approvalTitle": "需要你核准",
@@ -463,6 +492,13 @@
         "restartMessage": "在 App 切換器中關閉 Orca 後再開啟。在此之前，Orca 仍使用目前的語言。"
       },
       "pip": {
+        "compact": "雙行模式",
+        "noWorkingAgents": "沒有代理在工作",
+        "statusUnavailable": "暫時無法取得代理狀態",
+        "workingAgents_one": "{{count}} 個工作中",
+        "workingAgents_other": "{{count}} 個工作中",
+        "workingHosts_one": "{{count}} 台主機",
+        "workingHosts_other": "{{count}} 台主機",
         "start": "子母畫面",
         "onLeave": "離開時自動開啟",
         "commands": "顯示每條命令",
@@ -479,7 +515,7 @@
       "settings": {
         "title": "Orca iOS",
         "pipHeading": "子母畫面",
-        "pipFooter": "只在代理工作時自動開啟；工作階段的 ⋯ 選單隨時可以手動開啟。",
+        "pipFooter": "雙行模式輪換顯示各台已配對主機上正在工作的代理。可從工作階段的 ⋯ 選單手動開啟子母畫面。",
         "activityHeading": "即時動態",
         "activityFooter": "代理工作時顯示在鎖定畫面和動態島上，停下後消失。",
         "activityToggle": "顯示工作中的代理",

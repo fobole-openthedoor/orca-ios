@@ -30,6 +30,9 @@ enum ChatLine: Hashable {
   case prompt(id: String)
   /// A status or other note, in the muted style.
   case workItem(id: String)
+  case subagent(itemId: String, agentId: String)
+  case agentStarted(id: String)
+  case agentMail(id: String)
   /// The running turn's last line.
   case working
 }
@@ -82,7 +85,9 @@ struct ChatProjection {
         switch item.body {
         case .message(let message) where message.role == "user":
           let botCreated = message.origin == "bot-created"
-          turns.append(Turn(key: item.id, head: botCreated ? .notice(id: item.id) : .user(id: item.id), quiet: botCreated))
+          let head: ChatLine = message.agentSenders != nil ? .agentMail(id: item.id)
+            : botCreated ? .notice(id: item.id) : .user(id: item.id)
+          turns.append(Turn(key: item.id, head: head, quiet: botCreated))
         case .turn(let turn):
           if let duration = turn.durationMs, !turns.isEmpty {
             turns[turns.count - 1].seconds = max(1, Int((duration / 1000).rounded(.down)))
@@ -101,6 +106,18 @@ struct ChatProjection {
         if case .toolCall(let call) = item.body { return !ToolCategory.isAsk(call) }
         return true
       }
+      func agentLines(_ item: TranscriptItem) -> [ChatLine] {
+        switch item.body {
+        case .message(let message) where message.agentSenders != nil:
+          return [.agentMail(id: item.id)]
+        case .message(let message):
+          return message.subagents.map { .subagent(itemId: item.id, agentId: $0.id) }
+        case .agentStarted:
+          return [.agentStarted(id: item.id)]
+        default:
+          return []
+        }
+      }
       // A turn's answer is its last words that say something: a closing bare NO_REPLY (a bot with nothing
       // more to add) yields to what it said before, and only stands when it said nothing else.
       let answerIndex =
@@ -114,6 +131,7 @@ struct ChatProjection {
 
       // Orca's own setup turn shows only its answer.
       if turn.quiet, let answerIndex {
+        lines.append(contentsOf: items.flatMap(agentLines))
         lines.append(.answer(id: items[answerIndex].id))
         finalAnswers.insert(items[answerIndex].id)
         continue
@@ -137,9 +155,12 @@ struct ChatProjection {
           lines.append(.viewedImages(key: key))
         }
         // Folded: what still waits on the person, then the answer.
-        for item in items where Self.isWaiting(item) {
-          lines.append(.prompt(id: item.id))
-          waiting.append(item.id)
+        for item in items {
+          lines.append(contentsOf: agentLines(item))
+          if Self.isWaiting(item) {
+            lines.append(.prompt(id: item.id))
+            waiting.append(item.id)
+          }
         }
         lines.append(.answer(id: items[answerIndex!].id))
         finalAnswers.insert(items[answerIndex!].id)
@@ -152,6 +173,23 @@ struct ChatProjection {
       var filesKey: String?
       let lastIndex = items.indices.last
       for (position, item) in items.enumerated() {
+        let agentRows = agentLines(item)
+        if !agentRows.isEmpty {
+          runKey = nil
+          thoughtKey = nil
+          filesKey = nil
+          lines.append(contentsOf: agentRows)
+          if case .message(let message) = item.body, !message.isSubagentNotice,
+            message.agentSenders == nil, !message.text.isEmpty {
+            if Self.prose(item) != nil {
+              lines.append(.answer(id: item.id))
+              if !live && position == answerIndex { finalAnswers.insert(item.id) }
+            } else {
+              lines.append(.workItem(id: item.id))
+            }
+          }
+          continue
+        }
         switch item.body {
         case .toolCall:
           thoughtKey = nil
@@ -242,7 +280,11 @@ struct ChatProjection {
     }
     // The list's identities must be unique, or the data source throws; a line seen twice keeps its first place.
     var seen = Set<ChatLine>()
-    lines = lines.filter { seen.insert($0).inserted }
+    var shownAgents = Set<String>()
+    lines = lines.filter { line in
+      if case .subagent(_, let id) = line { return shownAgents.insert(id).inserted }
+      return seen.insert(line).inserted
+    }
     // Thought seconds: from a group's first item to whatever follows it.
     for (key, group) in thoughts {
       guard let first = group.items.first, let last = group.items.last else { continue }
@@ -272,7 +314,8 @@ struct ChatProjection {
   }
 
   static func prose(_ item: TranscriptItem) -> String? {
-    guard case .message(let message) = item.body, message.role == "assistant", !message.text.isEmpty else { return nil }
+    guard case .message(let message) = item.body, message.role == "assistant",
+      message.agentSenders == nil, !message.text.isEmpty else { return nil }
     return message.text
   }
 
@@ -286,7 +329,8 @@ struct ChatProjection {
   /// Rows that draw nothing are dropped before grouping, so they never split a run.
   private static func draws(_ item: TranscriptItem) -> Bool {
     switch item.body {
-    case .message(let message): message.role == "reasoning" ? !message.text.isEmpty : !message.text.isEmpty || !message.imagePaths.isEmpty
+    case .message(let message):
+      !message.subagents.isEmpty || message.agentSenders != nil || !message.text.isEmpty || !message.imagePaths.isEmpty
     case .other: false
     case .status(let text, _): !text.isEmpty
     default: true

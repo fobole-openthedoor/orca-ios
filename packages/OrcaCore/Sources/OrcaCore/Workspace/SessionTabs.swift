@@ -106,6 +106,19 @@ public struct SessionTabs: Sendable, Equatable {
     activeTabId = json["activeTabId"]?.stringValue
     removed = json["removed"]?.boolValue ?? false
   }
+
+  /// Structured chats have a stable session ID. A terminal pane identifies the tab before its leaf ID.
+  public func agentTab(sessionId: String?, paneKey: String?) -> SessionTab? {
+    if let sessionId, let chat = tabs.first(where: {
+      if case .agentSession(let id, _) = $0.kind { return id == sessionId }
+      return false
+    }) {
+      return chat
+    }
+    guard let paneKey, let separator = paneKey.lastIndex(of: ":") else { return nil }
+    let tabId = paneKey[..<separator]
+    return tabs.first { $0.id == tabId }
+  }
 }
 
 /// The parts of `status.get` this client reads. Every field is optional on the wire.

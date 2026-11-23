@@ -1,0 +1,145 @@
+import OrcaCore
+import UIKit
+
+/// A catalog snapshot for the compact overlay. It carries only names and confirmed work states.
+struct PiPWorkStatus {
+  struct Entry {
+    let id: WorkingAgent.ID
+    let line: PiPFrame.StatusLine
+    let session: PiPAgentTelemetry.Key?
+    let agentId: String?
+  }
+
+  let entries: [Entry]
+  let hostCount: Int
+  let allHostsObserved: Bool
+
+  @MainActor
+  init(model: AppModel) {
+    var entries: [Entry] = []
+    var hostCount = 0
+    var observed = 0
+    for host in model.orderedHosts {
+      guard let session = model.session(for: host.id), session.hasLiveWorktrees else { continue }
+      observed += 1
+      let agents = WorkingAgent.inCatalog(session.worktrees, host: host.id)
+      if !agents.isEmpty { hostCount += 1 }
+      for agent in agents {
+        let key = agent.structuredSessionId.flatMap { sessionId in
+          agent.isSubagent && agent.journalAgentId == nil ? nil : PiPAgentTelemetry.Key(host: host.id, sessionId: sessionId)
+        }
+        entries.append(Entry(id: agent.id, line: .init(agent: Self.title(agent), host: Self.oneLine(session.name)),
+          session: key, agentId: agent.journalAgentId))
+      }
+    }
+    let counts = Dictionary(grouping: entries, by: \.line).mapValues(\.count)
+    var ordinals: [PiPFrame.StatusLine: Int] = [:]
+    self.entries = entries.map { entry in
+      guard counts[entry.line, default: 0] > 1 else { return entry }
+      ordinals[entry.line, default: 0] += 1
+      let title = "\(ordinals[entry.line, default: 1]). \(entry.line.agent)"
+      return Entry(id: entry.id, line: .init(agent: title, host: entry.line.host), session: entry.session, agentId: entry.agentId)
+    }
+    self.hostCount = hostCount
+    allHostsObserved = observed > 0 && observed == model.hosts.count
+  }
+
+  func frame(showing page: Range<Int>, reading: (Entry) -> AgentActivityMetrics.Reading?) -> PiPFrame {
+    let title: String
+    let status: String
+    if entries.isEmpty {
+      title = allHostsObserved
+        ? String(localized: "orcaios.pip.noWorkingAgents", defaultValue: "No agents working")
+        : String(localized: "orcaios.pip.statusUnavailable", defaultValue: "Agent status unavailable")
+      status = ""
+    } else {
+      title = String.localizedStringWithFormat(
+        String(localized: "orcaios.pip.workingAgents", defaultValue: "%lld working"), entries.count)
+      status = String.localizedStringWithFormat(
+        String(localized: "orcaios.pip.workingHosts", defaultValue: "%lld hosts"), hostCount)
+    }
+    return PiPFrame(
+      title: title, status: status, working: !entries.isEmpty, lines: [], terminal: false,
+      statusRows: entries[page].map { entry in
+        var line = entry.line
+        if let value = reading(entry) {
+          line.rate = value.estimatedTokensPerSecond
+          line.toolCount = value.toolCalls.map { (value.toolCountIsPartial ? "≥" : "") + String($0) }
+          line.toolRunning = value.toolIsRunning
+        }
+        return line
+      }, fleetCounts: .init(agents: entries.count, hosts: hostCount))
+  }
+
+  private static func title(_ agent: WorkingAgent) -> String {
+    let provider: String? = agent.agentType.map { type in
+      type == "claude-agent-teams" ? "Claude" : type.prefix(1).uppercased() + String(type.dropFirst())
+    }
+    let role: WorkspaceAgentRole? = agent.isSubagent ? .subagent : agent.isWorker ? .worker : nil
+    let name = agent.name ?? agent.workspace
+    let parts: [String?] = [provider, role?.title, name]
+    let label = parts.compactMap { $0 }.map(oneLine).filter { !$0.isEmpty }.joined(separator: " · ")
+    return label.isEmpty ? String(localized: "session.backgroundTask.agent", defaultValue: "Agent") : label
+  }
+
+  private static func oneLine(_ value: String) -> String {
+    value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+  }
+}
+
+/// Shares one subscription among all visible producers of a session. The next page is warmed up while the current one is shown.
+@MainActor
+final class PiPAgentTelemetry {
+  struct Key: Hashable {
+    let host: UUID
+    let sessionId: String
+  }
+
+  private final class Stream {
+    let connection: OrcaConnection
+    var metrics = AgentActivityMetrics()
+    var task: Task<Void, Never>?
+
+    init(connection: OrcaConnection) { self.connection = connection }
+  }
+
+  private var streams: [Key: Stream] = [:]
+
+  func follow(_ targets: Set<Key>, model: AppModel) {
+    for key in Array(streams.keys) where !targets.contains(key) || model.session(for: key.host)?.api.connection !== streams[key]?.connection {
+      streams.removeValue(forKey: key)?.task?.cancel()
+    }
+    for key in targets where streams[key] == nil {
+      guard let api = model.session(for: key.host)?.api else { continue }
+      let stream = Stream(connection: api.connection)
+      streams[key] = stream
+      stream.task = Task { [weak stream] in
+        var delay = Duration.seconds(1)
+        while !Task.isCancelled {
+          let subscription = await api.chat(sessionId: key.sessionId, resumingFrom: nil)
+          var retry = true
+          do {
+            for try await frame in subscription.events {
+              guard !Task.isCancelled else { break }
+              stream?.metrics.apply(frame, at: ProcessInfo.processInfo.systemUptime)
+              if frame["type"]?.stringValue == "end" { break }
+              delay = .seconds(1)
+            }
+          } catch let error as RPCError {
+            retry = !["method_not_found", "forbidden", "invalid_argument"].contains(error.code)
+          } catch {
+            // Retry if a stream ended unexpectedly. The connection itself reopens after a dropped socket.
+          }
+          await api.connection.unsubscribe(subscription.requestId)
+          stream?.metrics = AgentActivityMetrics()
+          guard retry, !Task.isCancelled, (try? await Task.sleep(for: delay)) != nil else { return }
+          delay = min(delay * 2, .seconds(10))
+        }
+      }
+    }
+  }
+
+  func reading(_ entry: PiPWorkStatus.Entry, at time: TimeInterval) -> AgentActivityMetrics.Reading? {
+    entry.session.flatMap { streams[$0]?.metrics.reading(agentId: entry.agentId, at: time) }
+  }
+}

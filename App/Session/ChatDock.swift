@@ -9,6 +9,8 @@ final class ChatDockView: UIView {
   var onStop: ((String?) -> Void)?
   /// A task was picked to look at: open the call that started it.
   var onOpen: ((BackgroundTask) -> Void)?
+  var onSubagent: ((ChatSubagent) -> Void)?
+  var onWorker: ((ChatWorker) -> Void)?
   var onGoal: ((ChatSessionModel.GoalChange) -> Void)?
   enum QueuedAction { case send, edit, delete }
   var onQueued: ((QueuedMessage, QueuedAction) -> Void)?
@@ -18,6 +20,8 @@ final class ChatDockView: UIView {
   private let scroll = UIScrollView()
   private let row = UIStackView()
   private var tasks: [BackgroundTask] = []
+  private var subagents: [ChatSubagent] = []
+  private var workers: [ChatWorker] = []
   private var stopsAll = false
   private var goal: ChatOptions.Goal?
   private var queued: [QueuedMessage] = []
@@ -64,9 +68,15 @@ final class ChatDockView: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  func show(tasks: [BackgroundTask], stopsAll: Bool, goal: ChatOptions.Goal?, queued: [QueuedMessage] = []) {
-    guard tasks != self.tasks || stopsAll != self.stopsAll || goal != self.goal || queued != self.queued else { return }
+  func show(
+    tasks: [BackgroundTask], subagents: [ChatSubagent], workers: [ChatWorker], stopsAll: Bool,
+    goal: ChatOptions.Goal?, queued: [QueuedMessage]
+  ) {
+    guard tasks != self.tasks || subagents != self.subagents || workers != self.workers || stopsAll != self.stopsAll
+      || goal != self.goal || queued != self.queued else { return }
     self.tasks = tasks
+    self.subagents = subagents
+    self.workers = workers
     self.stopsAll = stopsAll
     self.goal = goal
     self.queued = queued
@@ -84,12 +94,22 @@ final class ChatDockView: UIView {
       (nil, "session.backgroundTask.countTasks", .listTodo),
     ]
     for group in groups {
-      let count = members(of: group.kinds).count
+      let hasSubagents = group.kinds == ["agent"]
+      let count = members(of: group.kinds).count + (hasSubagents ? subagents.count : 0)
       guard count > 0 else { continue }
       let title = String(format: Bundle.main.localizedString(forKey: group.key, value: "%lld", table: nil), count)
       // Built as it opens, from the tasks as they are then.
       segments.append((group.key + title, { [unowned self] in
-        self.segment(icon: group.icon, title: title) { [weak self] in self?.taskMenu(self?.members(of: group.kinds) ?? []) }
+        self.segment(icon: group.icon, title: title) { [weak self] in
+          guard let self else { return nil }
+          return self.taskMenu(self.members(of: group.kinds), showSubagents: hasSubagents)
+        }
+      }))
+    }
+    if !workers.isEmpty {
+      let title = String(localized: "orcaios.chat.workers", defaultValue: "Orca workers")
+      segments.append((title, { [unowned self] in
+        self.segment(icon: .workflow, title: title) { [weak self] in self?.workerMenu() }
       }))
     }
     if !queued.isEmpty {
@@ -125,7 +145,10 @@ final class ChatDockView: UIView {
 
   private func members(of kinds: Set<String>?) -> [BackgroundTask] {
     let known: Set<String> = ["agent", "command", "monitor", "workflow"]
-    return tasks.filter { kinds?.contains($0.kind) ?? !known.contains($0.kind) }
+    let agentIds = Set(subagents.map(\.id))
+    return tasks.filter { task in
+      (kinds?.contains(task.kind) ?? !known.contains(task.kind)) && (task.kind != "agent" || !agentIds.contains(task.id))
+    }
   }
 
   private func segment(icon: Lucide, title: String, color: UIColor = Palette.textPrimary, menu: @escaping () -> UIMenu?) -> UIButton {
@@ -148,28 +171,19 @@ final class ChatDockView: UIView {
   }
 
   /// Each task as a submenu: look at it, or stop it. Stopping them all comes last.
-  private func taskMenu(_ members: [BackgroundTask]) -> UIMenu {
-    var children: [UIMenuElement] = members.map { task in
-      var actions: [UIMenuElement] = [
-        UIAction(
-          title: String(localized: "common.open", defaultValue: "Open"), image: Lucide.externalLink.image(size: 18)
-        ) { [weak self] _ in self?.onOpen?(task) }
-      ]
-      if task.stoppable {
-        let id = task.id
-        actions.append(
-          UIAction(
-            title: String(localized: "session.backgroundTask.stop", defaultValue: "Stop"),
-            image: Lucide.circleX.image(size: 18), attributes: .destructive
-          ) { [weak self] _ in
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            self?.onStop?(id)
-          })
+  private func taskMenu(_ members: [BackgroundTask], showSubagents: Bool) -> UIMenu {
+    let agentTasks = Dictionary(tasks.filter { $0.kind == "agent" }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    let agents = showSubagents ? subagents.reversed().map { agent -> UIMenuElement in
+      let title = Self.name(agent)
+      if let task = agentTasks[agent.id], task.stoppable {
+        return taskSubmenu(task, title: title, subtitle: Self.agentState(agent.state)) { [weak self] in self?.onSubagent?(agent) }
       }
-      let submenu = UIMenu(
-        title: task.label.isEmpty ? task.kind : task.label, image: Self.icon(task).image(size: 18), children: actions)
-      submenu.subtitle = Self.facts(task)
-      return submenu
+      return UIAction(title: title, subtitle: Self.agentState(agent.state), image: Lucide.bot.image(size: 18)) {
+        [weak self] _ in self?.onSubagent?(agent)
+      }
+    } : []
+    var children: [UIMenuElement] = agents + members.map { task in
+      taskSubmenu(task, title: task.label.isEmpty ? task.kind : task.label, subtitle: Self.facts(task)) { [weak self] in self?.onOpen?(task) }
     }
     if stopsAll && tasks.count > 1 {
       let stopAll = String(localized: "session.backgroundTask.stopAll", defaultValue: "Stop background tasks")
@@ -188,6 +202,58 @@ final class ChatDockView: UIView {
           ]))
     }
     return UIMenu(children: children)
+  }
+
+  private func taskSubmenu(_ task: BackgroundTask, title: String, subtitle: String?, open: @escaping () -> Void) -> UIMenu {
+    var actions: [UIMenuElement] = [
+      UIAction(
+        title: String(localized: "common.open", defaultValue: "Open"), image: Lucide.externalLink.image(size: 18)
+      ) { _ in open() }
+    ]
+    if task.stoppable {
+      let id = task.id
+      actions.append(
+        UIAction(
+          title: String(localized: "session.backgroundTask.stop", defaultValue: "Stop"),
+          image: Lucide.circleX.image(size: 18), attributes: .destructive
+        ) { [weak self] _ in
+          UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+          self?.onStop?(id)
+        })
+    }
+    let submenu = UIMenu(title: title, image: Self.icon(task).image(size: 18), children: actions)
+    submenu.subtitle = subtitle
+    return submenu
+  }
+
+  private func workerMenu() -> UIMenu {
+    UIMenu(children: workers.map { worker in
+      UIAction(
+        title: worker.title.isEmpty ? worker.agent ?? Self.unnamedAgent : worker.title,
+        subtitle: Self.agentState(worker.displayState), image: Lucide.workflow.image(size: 18)
+      ) { [weak self] _ in self?.onWorker?(worker) }
+    })
+  }
+
+  static var unnamedAgent: String {
+    String(localized: "session.backgroundTask.agent", defaultValue: "Agent")
+  }
+
+  static func name(_ agent: ChatSubagent) -> String {
+    agent.label.isEmpty ? agent.agentType ?? unnamedAgent : agent.label
+  }
+
+  static func agentState(_ state: String) -> String {
+    switch state {
+    case "working": String(localized: "chat.subagentGroup.stateWorking", defaultValue: "Working")
+    case "idle": String(localized: "chat.subagentGroup.stateIdle", defaultValue: "Idle")
+    case "completed": String(localized: "chat.subagentGroup.stateCompleted", defaultValue: "Completed")
+    case "failed": String(localized: "chat.subagentGroup.stateFailed", defaultValue: "Failed")
+    case "stopped": String(localized: "chat.subagentGroup.stateStopped", defaultValue: "Stopped")
+    case "blocked": String(localized: "session.backgroundTask.stateBlocked", defaultValue: "Blocked")
+    case "waiting": String(localized: "session.backgroundTask.stateWaiting", defaultValue: "Waiting")
+    default: String(localized: "chat.subagentGroup.stateUnverifiable", defaultValue: "Unverified")
+    }
   }
 
   /// Each queued message as a submenu: send it now, take it back to edit, or delete it (confirmed).

@@ -186,23 +186,32 @@ final class ToolOutputViewController: UIViewController {
   private let load: (() async -> TranscriptItem.ToolCall?)?
   /// Load even when the call isn't cut short: the call shown is a stand-in until the real one is found.
   private let alwaysLoad: Bool
+  private let live: (() -> TranscriptItem.ToolCall)?
   private let text = UITextView()
   private let spinner = UIActivityIndicatorView(style: .medium)
+  private var displayed: TranscriptItem.ToolCall?
+  private var loaded: TranscriptItem.ToolCall?
+  private var startedLoading = false
 
-  init(call: TranscriptItem.ToolCall, load: (() async -> TranscriptItem.ToolCall?)?, alwaysLoad: Bool = false) {
+  init(
+    call: TranscriptItem.ToolCall, load: (() async -> TranscriptItem.ToolCall?)?, alwaysLoad: Bool = false,
+    live: (() -> TranscriptItem.ToolCall)? = nil
+  ) {
     self.call = call
     self.load = load
     self.alwaysLoad = alwaysLoad
+    self.live = live
     super.init(nibName: nil, bundle: nil)
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
   static func sheet(
-    call: TranscriptItem.ToolCall, load: (() async -> TranscriptItem.ToolCall?)?, alwaysLoad: Bool = false
+    call: TranscriptItem.ToolCall, load: (() async -> TranscriptItem.ToolCall?)?, alwaysLoad: Bool = false,
+    live: (() -> TranscriptItem.ToolCall)? = nil
   ) -> UIViewController {
     let navigation = UINavigationController(
-      rootViewController: ToolOutputViewController(call: call, load: load, alwaysLoad: alwaysLoad))
+      rootViewController: ToolOutputViewController(call: call, load: load, alwaysLoad: alwaysLoad, live: live))
     if let sheet = navigation.sheetPresentationController {
       sheet.detents = [.large()]
       sheet.prefersGrabberVisible = true
@@ -212,8 +221,6 @@ final class ToolOutputViewController: UIViewController {
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    title = call.name
-    navigationItem.subtitle = call.summary.replacingOccurrences(of: "\n", with: " ")
     // A terminal's page: its colours, whatever the app's appearance.
     view.backgroundColor = TerminalText.background
     overrideUserInterfaceStyle = .dark
@@ -242,16 +249,25 @@ final class ToolOutputViewController: UIViewController {
       spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
       spinner.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: Spacing.xl),
     ])
-    show(call)
-    guard call.outputTruncated || alwaysLoad, let load else { return }
+    refresh(call)
+  }
+
+  override func updateProperties() {
+    super.updateProperties()
+    if let live { refresh(live()) }
+  }
+
+  private func refresh(_ call: TranscriptItem.ToolCall) {
+    show(loaded ?? call)
+    guard !startedLoading, call.outputTruncated || (alwaysLoad && live == nil), let load else { return }
+    startedLoading = true
     spinner.startAnimating()
     Task { [weak self] in
       let full = await load()
       guard let self else { return }
       self.spinner.stopAnimating()
       if let full {
-        self.title = full.name
-        self.navigationItem.subtitle = full.summary.replacingOccurrences(of: "\n", with: " ")
+        self.loaded = full
         self.show(full)
       } else if !self.alwaysLoad {
         let alert = UIAlertController(
@@ -264,7 +280,17 @@ final class ToolOutputViewController: UIViewController {
   }
 
   private func show(_ call: TranscriptItem.ToolCall) {
+    guard call != displayed else { return }
+    displayed = call
+    title = call.name
+    navigationItem.subtitle = call.summary.replacingOccurrences(of: "\n", with: " ")
+    let offset = text.contentOffset
+    let wasAtBottom = offset.y > 0 && offset.y + text.bounds.height >= text.contentSize.height - 24
     let input = ToolCallView.inputText(call)
     text.attributedText = TerminalText.render(command: input, output: call.output ?? "")
+    if live != nil {
+      if wasAtBottom { text.scrollRangeToVisible(NSRange(location: text.attributedText.length, length: 0)) }
+      else { text.setContentOffset(offset, animated: false) }
+    }
   }
 }

@@ -1,13 +1,24 @@
 import OrcaCore
 import UIKit
 
-/// The Agents tab (home/tabs/MobileHomeAgentsTab.tsx): every agent on every paired desktop, grouped
-/// Needs you · Working · Done, newest first, each opening its workspace.
+/// The Agents tab groups related panes before placing them in Needs you, Working or Done.
 final class AgentsViewController: UIViewController {
   struct Row: Hashable {
     let hostId: UUID
     let worktreeId: String
     let paneKey: String
+  }
+
+  private struct Entry {
+    let agent: Worktree.Agent
+    let worktree: Worktree
+    let session: HostSession
+    let depth: Int
+
+    var title: String { agent.listTitle.flatMap { $0.isEmpty ? nil : $0 } ?? agent.title }
+    var state: String { agent.listState ?? agent.mainState ?? agent.state }
+    var section: Section { Section.of(state) }
+    var stamp: Double { agent.listSortAt ?? agent.updatedAt ?? 0 }
   }
 
   enum Section: Int, CaseIterable {
@@ -39,7 +50,7 @@ final class AgentsViewController: UIViewController {
   private let search = UISearchController(searchResultsController: nil)
   private var query = ""
   /// Rebuilt with each snapshot, so cells read the agent they were given.
-  private var entries: [Row: (Worktree.Agent, Worktree, HostSession)] = [:]
+  private var entries: [Row: Entry] = [:]
   var onNeedsYouChange: ((Int) -> Void)?
 
   override func viewDidLoad() {
@@ -69,28 +80,46 @@ final class AgentsViewController: UIViewController {
 
   override func updateProperties() {
     super.updateProperties()
-    var grouped: [Section: [(Row, Double)]] = [:]
+    var grouped: [Section: [(rows: [Row], stamp: Double)]] = [:]
     entries = [:]
     var needsYou = 0
+    let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
     for host in model.hosts {
       guard let session = model.session(for: host.id) else { continue }
+      var panes: [Worktree.Agent] = []
+      var worktreesByPane: [String: Worktree] = [:]
       for worktree in session.worktrees where !worktree.isArchived {
-        for agent in worktree.agents {
-          let text = [agent.title, agent.lastAssistantMessage ?? "", worktree.displayName].joined(separator: " ").lowercased()
-          if !query.isEmpty, !text.contains(query.lowercased()) { continue }
-          let row = Row(hostId: host.id, worktreeId: worktree.id, paneKey: agent.paneKey)
-          entries[row] = (agent, worktree, session)
-          let section = Section.of(agent.state)
-          if section == .needsYou { needsYou += 1 }
-          grouped[section, default: []].append((row, agent.updatedAt ?? 0))
+        for agent in worktree.agents where agent.listed != false && worktreesByPane[agent.paneKey] == nil {
+          panes.append(agent)
+          worktreesByPane[agent.paneKey] = worktree
         }
+      }
+      func visibleRows(_ branch: AgentBranch<Worktree.Agent>, depth: Int) -> [(Row, Entry)] {
+        let agent = branch.entry
+        guard let worktree = worktreesByPane[agent.paneKey] else { return [] }
+        let entry = Entry(agent: agent, worktree: worktree, session: session, depth: depth)
+        let children = branch.children.flatMap { visibleRows($0, depth: depth + 1) }
+        let text = [entry.title, agent.lastAssistantMessage ?? "", worktree.title].joined(separator: " ")
+        guard query.isEmpty || text.localizedStandardContains(query) || !children.isEmpty else { return [] }
+        return [(Row(hostId: host.id, worktreeId: worktree.id, paneKey: agent.paneKey), entry)] + children
+      }
+      for branch in Worktree.Agent.lineage(panes, forAgentsTab: true) {
+        let family = visibleRows(branch, depth: 0)
+        guard let section = family.map({ $0.1.section }).min(by: { $0.rawValue < $1.rawValue }) else { continue }
+        for (row, entry) in family {
+          entries[row] = entry
+          if entry.section == .needsYou { needsYou += 1 }
+        }
+        // Keep the family together even if the worker needs attention after its coordinator finishes.
+        let stamp = family.lazy.map(\.1).filter { $0.section == section }.map(\.stamp).max() ?? 0
+        grouped[section, default: []].append((family.map(\.0), stamp))
       }
     }
     var snapshot = NSDiffableDataSourceSnapshot<Section, Row>()
     for section in Section.allCases {
       guard let rows = grouped[section], !rows.isEmpty else { continue }
       snapshot.appendSections([section])
-      snapshot.appendItems(rows.sorted { $0.1 > $1.1 }.map(\.0), toSection: section)
+      snapshot.appendItems(rows.sorted { $0.stamp > $1.stamp }.flatMap(\.rows), toSection: section)
     }
     snapshot.reconfigureItems(snapshot.itemIdentifiers)
     dataSource.apply(snapshot, animatingDifferences: view.window != nil)
@@ -113,8 +142,10 @@ final class AgentsViewController: UIViewController {
 
   private func configureDataSource() {
     let cell = UICollectionView.CellRegistration<UICollectionViewListCell, Row> { [weak self] cell, _, row in
-      guard let self, let (agent, worktree, _) = self.entries[row] else { return }
-      cell.contentConfiguration = AgentCardConfiguration(agent: agent, workspace: worktree.displayName)
+      guard let self, let entry = self.entries[row] else { return }
+      cell.contentConfiguration = AgentCardConfiguration(
+        agent: entry.agent, title: entry.title, state: entry.state, stamp: entry.stamp,
+        workspace: entry.worktree.title, depth: entry.depth)
       var background = UIBackgroundConfiguration.listCell()
       background.backgroundColor = Palette.bgPanel
       cell.backgroundConfiguration = background
@@ -123,7 +154,7 @@ final class AgentsViewController: UIViewController {
       elementKind: UICollectionView.elementKindSectionHeader
     ) { [weak self] header, _, indexPath in
       guard let self, let section = self.dataSource.sectionIdentifier(for: indexPath.section) else { return }
-      let count = self.dataSource.snapshot().numberOfItems(inSection: section)
+      let count = self.dataSource.snapshot().itemIdentifiers(inSection: section).count { self.entries[$0]?.section == section }
       header.label.runs = [(section.title, Palette.textPrimary), ("  \(count)", Palette.textMuted)]
     }
     dataSource = UICollectionViewDiffableDataSource(collectionView: collection) { collection, indexPath, row in
@@ -139,7 +170,7 @@ final class AgentsViewController: UIViewController {
       UIDeferredMenuElement.uncached { [weak self] completion in
         guard let self else { return completion([]) }
         let unread = self.agentKeys { worktree, _ in worktree.unread }
-        let finished = self.agentKeys { _, agent in Section.of(agent.state) == .done }
+        let finished = self.agentKeys { _, agent in Section.of(agent.listState ?? agent.mainState ?? agent.state) == .done }
         let markRead = UIAction(
           title: String(localized: "agents.options.markAllRead", defaultValue: "Mark all read"),
           image: Lucide.checkCheck.image(size: 18), attributes: unread.isEmpty ? .disabled : []
@@ -162,7 +193,7 @@ final class AgentsViewController: UIViewController {
     model.hosts.compactMap { host in
       guard let session = model.session(for: host.id) else { return nil }
       let keys = session.worktrees.filter { !$0.isArchived }.flatMap { worktree in
-        worktree.agents.filter { passes(worktree, $0) }.map(\.paneKey)
+        worktree.agents.filter { $0.listed != false && passes(worktree, $0) }.map(\.paneKey)
       }
       return keys.isEmpty ? nil : (session, keys)
     }
@@ -178,15 +209,21 @@ extension AgentsViewController: UICollectionViewDelegate, UISearchResultsUpdatin
   func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
     Haptics.select()
     collectionView.deselectItem(at: indexPath, animated: true)
-    guard let row = dataSource.itemIdentifier(for: indexPath), let (_, _, session) = entries[row] else { return }
-    navigationController?.pushViewController(SessionViewController(session: session, worktreeId: row.worktreeId), animated: true)
+    guard let row = dataSource.itemIdentifier(for: indexPath), let entry = entries[row] else { return }
+    let controller = SessionViewController(
+      session: entry.session, worktreeId: row.worktreeId, sessionId: entry.agent.orcaSessionId, paneKey: row.paneKey)
+    navigationController?.pushViewController(controller, animated: true)
   }
 }
 
 /// An agent card (agents/MobileAgentListRows.tsx): dot, title and time; the latest words; mark and workspace.
 struct AgentCardConfiguration: UIContentConfiguration {
   let agent: Worktree.Agent
+  let title: String
+  let state: String
+  let stamp: Double
   let workspace: String
+  let depth: Int
 
   func makeContentView() -> UIView & UIContentView { AgentCardView(configuration: self) }
   func updated(for state: UIConfigurationState) -> AgentCardConfiguration { self }
@@ -194,12 +231,15 @@ struct AgentCardConfiguration: UIContentConfiguration {
 
 private final class AgentCardView: UIView, UIContentView {
   private let dot = AgentStatusDot()
+  private let branch = LucideView(.cornerDownRight, size: 12, strokeWidth: 2, color: Palette.textMuted)
   // agents/MobileAgentListRows.tsx: title 15/20, time 12, preview 14/19, place 12 under a 13 pt mark.
   private let title = TextLabel(size: 15, lineHeight: 20)
   private let time = TextLabel(size: 12, color: Palette.textMuted, tabular: true)
   private let detail = TextLabel(size: 14, color: Palette.textSecondary, lineHeight: 19, lines: 2)
   private let mark = FilledIconView(size: 13)
   private let workspace = TextLabel(size: 12, color: Palette.textMuted)
+  private lazy var dotInset = dot.centerXAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg + 6)
+  private lazy var titleInset = title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg + 24)
 
   var configuration: UIContentConfiguration { didSet { apply() } }
 
@@ -211,13 +251,15 @@ private final class AgentCardView: UIView, UIContentView {
     footer.spacing = 6
     footer.alignment = .center
     footer.translatesAutoresizingMaskIntoConstraints = false
-    for view in [dot, title, time, detail, footer] as [UIView] { addSubview(view) }
+    for view in [branch, dot, title, time, detail, footer] as [UIView] { addSubview(view) }
     time.setContentCompressionResistancePriority(.required, for: .horizontal)
     title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     NSLayoutConstraint.activate([
-      dot.centerXAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg + 6),
+      branch.trailingAnchor.constraint(equalTo: dot.leadingAnchor, constant: -4),
+      branch.centerYAnchor.constraint(equalTo: dot.centerYAnchor),
+      dotInset,
       dot.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-      title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg + 24),
+      titleInset,
       title.topAnchor.constraint(equalTo: topAnchor, constant: 9),
       time.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: Spacing.sm),
       time.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
@@ -238,15 +280,20 @@ private final class AgentCardView: UIView, UIContentView {
   private func apply() {
     guard let configuration = configuration as? AgentCardConfiguration else { return }
     let agent = configuration.agent
-    dot.set(status: agent.state == "idle" ? "done" : agent.state)
-    title.text = agent.title
-    time.text = RelativeTime.short(agent.updatedAt)
+    dot.set(status: configuration.state)
+    let indent = CGFloat(min(configuration.depth, 3)) * 16
+    dotInset.constant = Spacing.lg + 6 + indent
+    titleInset.constant = Spacing.lg + 24 + indent
+    branch.isHidden = configuration.depth == 0
+    title.text = configuration.title
+    time.text = RelativeTime.short(configuration.stamp)
     detail.text = agent.lastAssistantMessage.map(MarkdownPreview.plain)
     detail.isHidden = (agent.lastAssistantMessage ?? "").isEmpty
     mark.icon = AgentMark.icon(for: agent.agentType)
     mark.isHidden = mark.icon == nil
-    workspace.text = configuration.workspace
+    let worker = configuration.depth > 0 || agent.listParentPaneKey != nil
+    workspace.text = worker ? "\(WorkspaceAgentRole.worker.title) · \(configuration.workspace)" : configuration.workspace
     isAccessibilityElement = true
-    accessibilityLabel = [agent.title, detail.text, configuration.workspace].compactMap { $0 }.joined(separator: ", ")
+    accessibilityLabel = [configuration.title, detail.text, workspace.text].compactMap { $0 }.joined(separator: ", ")
   }
 }

@@ -21,15 +21,17 @@ final class SessionViewController: UIViewController {
 
   /// The chat to bring to the front once the tabs arrive, as an item or a past session asked.
   private var focusSessionId: String?
+  private var focusPaneKey: String?
   /// The profile a new browser tab opens in; nil lets the host apply desktop's rule (repo, workspace, host default).
   private var browserProfileId: String?
   /// The title for a workspace the list doesn't carry, such as the Floating Workspace.
   var fallbackTitle: String?
 
-  init(session: HostSession, worktreeId: String, sessionId: String? = nil) {
+  init(session: HostSession, worktreeId: String, sessionId: String? = nil, paneKey: String? = nil) {
     self.session = session
     self.worktreeId = worktreeId
     focusSessionId = sessionId
+    focusPaneKey = paneKey
     super.init(nibName: nil, bundle: nil)
     hidesBottomBarWhenPushed = true
   }
@@ -158,15 +160,16 @@ final class SessionViewController: UIViewController {
       navigationController?.popViewController(animated: true)
       return
     }
-    if let focus = focusSessionId,
-      let tab = next.tabs.first(where: { if case .agentSession(let id, _) = $0.kind { id == focus } else { false } })
-    {
-      focusSessionId = nil
+    if let tab = next.agentTab(sessionId: focusSessionId, paneKey: focusPaneKey) {
       show(tab)
       updateStrip()
-      let api = session.api
-      let selector = selector
-      Task { await api.activateTab(tab.id, worktree: selector) }
+      if !cached {
+        focusSessionId = nil
+        focusPaneKey = nil
+        let api = session.api
+        let selector = selector
+        Task { await api.activateTab(tab.id, worktree: selector) }
+      }
       return
     }
     let active = next.tabs.first { $0.id == next.activeTabId } ?? next.tabs.first
@@ -613,18 +616,14 @@ final class SessionViewController: UIViewController {
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     PushCenter.viewing = (hostKey: session.host.id.uuidString, worktreeId: worktreeId, executionHost: nil)
-    // Picture in picture shows this session when the app is left.
-    let pip = PiPCenter.shared
-    pip.attach(to: view)
-    pip.source = { [weak self] in self?.pipFrame() }
+    PiPCenter.shared.attachTranscript(to: view) { [weak self] in self?.pipFrame() }
   }
 
   /// The tab on screen as a picture-in-picture frame.
   private func pipFrame() -> PiPFrame? {
     let worktree = session.worktree(id: worktreeId)
     let name = bot?.name ?? worktree?.displayName ?? ""
-    // Working means the main agent is running a turn now; background tasks left running ("monitoring") are not
-    // work to watch, so they neither say "Working" nor open picture in picture on leaving.
+    // The chat reports active agent work; terminal tabs use the workspace status.
     let word = { (working: Bool) in
       working
         ? String(localized: "sidebar.cardSlot.working", defaultValue: "Working")
@@ -645,7 +644,7 @@ final class SessionViewController: UIViewController {
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
     if PushCenter.viewing?.worktreeId == worktreeId { PushCenter.viewing = nil }
-    PiPCenter.shared.detach(from: view)
+    PiPCenter.shared.detachTranscript(from: view)
   }
 
   /// Text size for what is on screen: the terminal's font in a terminal tab, the chat's text otherwise.
@@ -667,7 +666,6 @@ final class SessionViewController: UIViewController {
 
   private func moreMenu() -> UIMenu {
     UIMenu(children: [
-      // Picture in picture's three choices fold into one submenu, as the model chip's do.
       PiPCenter.shared.isSupported
         ? UIMenu(
           title: String(localized: "orcaios.pip.start", defaultValue: "Picture in Picture"),
@@ -681,8 +679,13 @@ final class SessionViewController: UIViewController {
               image: UIImage(systemName: "rectangle.on.rectangle"), state: PiPCenter.startsOnLeave ? .on : .off
             ) { _ in PiPCenter.startsOnLeave.toggle() },
             UIAction(
+              title: String(localized: "orcaios.pip.compact", defaultValue: "Two-line mode"),
+              image: UIImage(systemName: "rectangle.compress.vertical"), state: PiPCenter.usesCompactLayout ? .on : .off
+            ) { _ in PiPCenter.usesCompactLayout.toggle() },
+            UIAction(
               title: String(localized: "orcaios.pip.commands", defaultValue: "Show each command in Picture in Picture"),
-              image: UIImage(systemName: "list.bullet.rectangle"), state: PiPCenter.showsCommands ? .on : .off
+              image: UIImage(systemName: "list.bullet.rectangle"), attributes: PiPCenter.usesCompactLayout ? .hidden : [],
+              state: PiPCenter.showsCommands ? .on : .off
             ) { _ in PiPCenter.showsCommands.toggle() },
           ]) : UIMenu(options: .displayInline, children: []),
       UIAction(
