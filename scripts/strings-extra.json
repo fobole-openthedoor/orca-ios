@@ -40,7 +40,12 @@
       },
       "about": {
         "licenses": "Open-source licenses",
-        "thisApp": "This app’s source code"
+        "thisApp": "This app’s source code",
+        "communityHeading": "COMMUNITY PROJECT",
+        "communityFooter": "Orca iOS is maintained by the community, with huami1314 as its core maintainer. It is not made or endorsed by Orca's authors. Its license (MIT) and its privacy policy and terms follow Orca's.",
+        "welcome": "Welcome and notifications",
+        "upstreamHeading": "UPSTREAM: ORCA",
+        "tagline": "A community iPhone client for Orca · maintained by huami1314"
       },
       "troubleshoot": {
         "pushReady": "Allowed, push token received",
@@ -142,6 +147,23 @@
         "repositoryCount_one": "{{count}} repository",
         "repositoryCount_other": "{{count}} repositories",
         "partialFailure": "{{failed}} of {{count}} repositories failed to load."
+      },
+      "welcome": {
+        "title": "Orca iOS",
+        "badge": "Community project",
+        "about": "A native iPhone client for Orca, maintained by the community. It is not made or endorsed by Orca's authors; please report problems to this project, not to Orca.",
+        "maintainerHeading": "Maintainer",
+        "maintainerRole": "Creator and core maintainer",
+        "repository": "Source code, issues and contributions",
+        "pushHeading": "Push notifications",
+        "push": "Orca's own push service only reaches the official app. To get notifications here, your desktop has to send them through the community push gateway. Copy the prompt below and send it to an AI on that computer (an agent in Orca works); it will set this up.",
+        "copyPrompt": "Copy prompt",
+        "copied": "Copied",
+        "pushPrompt": "Please set up push notifications from my Orca desktop to the community iPhone app (orca-ios, bundle id com.thm.orcaios):\n1. Orca desktop picks its push gateway from the environment variable ORCA_PUSH_GATEWAY_URL. Set it to {{origin}}.\n2. macOS: run `launchctl setenv ORCA_PUSH_GATEWAY_URL {{origin}}`, and add a LaunchAgent in ~/Library/LaunchAgents that runs the same command at login so it survives a restart. Windows: set a user environment variable with that name and value. Linux: add it to the environment Orca starts with (for example ~/.config/environment.d/orca.conf).\n3. Quit Orca completely and open it again.\n4. Tell me when it's done. Note: after this, this computer no longer sends notifications to the official Orca app; removing the variable and restarting Orca undoes it.",
+        "legalHeading": "License and policies",
+        "legal": "This app follows its upstream project, Orca: it is released under the MIT License like Orca, and follows Orca's privacy policy and terms.",
+        "license": "License (MIT)",
+        "continue": "Continue"
       }
     }
   },
@@ -186,7 +208,12 @@
       },
       "about": {
         "licenses": "开源许可",
-        "thisApp": "本 App 的源代码"
+        "thisApp": "本 App 的源代码",
+        "communityHeading": "社区项目",
+        "communityFooter": "Orca iOS 由社区维护，核心维护者是 huami1314。它不是 Orca 官方出品，也未经官方认可。许可证（MIT）以及隐私政策和服务条款都继承自 Orca。",
+        "welcome": "欢迎页与推送通知",
+        "upstreamHeading": "上游项目：Orca",
+        "tagline": "Orca 的社区版 iPhone 客户端 · huami1314 维护"
       },
       "troubleshoot": {
         "pushReady": "已允许，已取得推送令牌",
@@ -287,6 +314,23 @@
         "makeDefault": "设为默认",
         "repositoryCount_other": "{{count}} 个仓库",
         "partialFailure": "{{count}} 个仓库中有 {{failed}} 个加载失败。"
+      },
+      "welcome": {
+        "title": "Orca iOS",
+        "badge": "社区项目",
+        "about": "Orca 的原生 iPhone 客户端，由社区维护。它不是 Orca 官方出品，也未经官方认可；遇到问题请反馈给本项目，不要找 Orca 官方。",
+        "maintainerHeading": "维护者",
+        "maintainerRole": "发起人、核心维护者",
+        "repository": "源代码、问题反馈和参与贡献",
+        "pushHeading": "推送通知",
+        "push": "Orca 官方的推送服务只发给官方 App。要在这个 App 里收到通知，需要让你的电脑改用社区推送网关。复制下面的提示词，发给那台电脑上的 AI（Orca 里的智能体就行），它会帮你配置好。",
+        "copyPrompt": "复制提示词",
+        "copied": "已复制",
+        "pushPrompt": "请帮我把这台电脑上 Orca 桌面端的手机推送改到社区推送网关，让社区版 iPhone App（orca-ios，包名 com.thm.orcaios）能收到通知：\n1. Orca 桌面端通过环境变量 ORCA_PUSH_GATEWAY_URL 选择推送网关，把它设为 {{origin}}。\n2. macOS：运行 `launchctl setenv ORCA_PUSH_GATEWAY_URL {{origin}}`，并在 ~/Library/LaunchAgents 里加一个登录时执行同一条命令的 LaunchAgent，保证重启后仍然生效。Windows：设置同名的用户环境变量。Linux：写进 Orca 启动时的环境（例如 ~/.config/environment.d/orca.conf）。\n3. 完全退出 Orca，再重新打开。\n4. 完成后告诉我。注意：设置之后，这台电脑不再给官方 Orca App 发推送；删掉这个变量并重启 Orca 即可恢复。",
+        "legalHeading": "许可证与政策",
+        "legal": "本软件继承上游项目 Orca：和 Orca 一样以 MIT 许可证发布，并沿用 Orca 的隐私政策和服务条款。",
+        "license": "许可证（MIT）",
+        "continue": "开始使用"
       }
     },
     "overrides": {
@@ -353,7 +397,12 @@
       },
       "about": {
         "licenses": "開源授權",
-        "thisApp": "本 App 的原始碼"
+        "thisApp": "本 App 的原始碼",
+        "communityHeading": "社群專案",
+        "communityFooter": "Orca iOS 由社群維護，核心維護者是 huami1314。它不是 Orca 官方出品，也未經官方認可。授權（MIT）以及隱私權政策和服務條款都沿用 Orca。",
+        "welcome": "歡迎頁與推播通知",
+        "upstreamHeading": "上游專案：Orca",
+        "tagline": "Orca 的社群版 iPhone 用戶端 · huami1314 維護"
       },
       "troubleshoot": {
         "pushReady": "已允許，已取得推播權杖",
@@ -454,6 +503,23 @@
         "makeDefault": "設為預設",
         "repositoryCount_other": "{{count}} 個儲存庫",
         "partialFailure": "{{count}} 個儲存庫中有 {{failed}} 個載入失敗。"
+      },
+      "welcome": {
+        "title": "Orca iOS",
+        "badge": "社群專案",
+        "about": "Orca 的原生 iPhone 用戶端，由社群維護。它不是 Orca 官方出品，也未經官方認可；遇到問題請回報給本專案，不要找 Orca 官方。",
+        "maintainerHeading": "維護者",
+        "maintainerRole": "發起人、核心維護者",
+        "repository": "原始碼、問題回報與參與貢獻",
+        "pushHeading": "推播通知",
+        "push": "Orca 官方的推播服務只發給官方 App。要在這個 App 收到通知，需要讓你的電腦改用社群推播閘道。複製下面的提示詞，傳給那台電腦上的 AI（Orca 裡的代理就行），它會幫你設定好。",
+        "copyPrompt": "複製提示詞",
+        "copied": "已複製",
+        "pushPrompt": "請幫我把這台電腦上 Orca 桌面端的手機推播改到社群推播閘道，讓社群版 iPhone App（orca-ios，套件識別碼 com.thm.orcaios）能收到通知：\n1. Orca 桌面端透過環境變數 ORCA_PUSH_GATEWAY_URL 選擇推播閘道，把它設為 {{origin}}。\n2. macOS：執行 `launchctl setenv ORCA_PUSH_GATEWAY_URL {{origin}}`，並在 ~/Library/LaunchAgents 加一個登入時執行同一條命令的 LaunchAgent，確保重新開機後仍然生效。Windows：設定同名的使用者環境變數。Linux：寫進 Orca 啟動時的環境（例如 ~/.config/environment.d/orca.conf）。\n3. 完全結束 Orca，再重新開啟。\n4. 完成後告訴我。注意：設定之後，這台電腦不再給官方 Orca App 推播；刪掉這個變數並重新啟動 Orca 即可復原。",
+        "legalHeading": "授權與政策",
+        "legal": "本軟體沿用上游專案 Orca：和 Orca 一樣以 MIT 授權發布，並沿用 Orca 的隱私權政策和服務條款。",
+        "license": "授權條款（MIT）",
+        "continue": "開始使用"
       }
     }
   }

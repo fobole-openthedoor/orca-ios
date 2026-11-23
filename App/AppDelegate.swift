@@ -40,6 +40,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     window.tintColor = Palette.accentBlue
     window.makeKeyAndVisible()
     self.window = window
+    // First launch: who makes this app, notifications, and its license, before anything else.
+    if !WelcomeViewController.seen {
+      let welcome = WelcomeViewController()
+      welcome.modalPresentationStyle = .fullScreen
+      welcome.onFinish = { [weak welcome] in welcome?.dismiss(animated: true) }
+      DispatchQueue.main.async { window.rootViewController?.present(welcome, animated: false) }
+    }
     AppearanceViewController.Theme.apply()
     let urls = connectionOptions.urlContexts.map(\.url)
     NotificationCenter.default.addObserver(forName: .orcaOpenURL, object: nil, queue: .main) { [weak self] note in

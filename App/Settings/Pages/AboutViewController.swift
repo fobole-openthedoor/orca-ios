@@ -18,7 +18,31 @@ final class AboutViewController: SettingsPageViewController {
     versionLabel.text = build.map { "v\(version) (\($0))" } ?? "v\(version)"
     let globe = Lucide.globe.image(size: 18).withRenderingMode(.alwaysTemplate)
     sections = [
-      Section(rows: [
+      // This app first: a community project and who keeps it, ahead of the upstream's links.
+      Section(
+        header: String(localized: "orcaios.about.communityHeading", defaultValue: "COMMUNITY PROJECT"),
+        footer: String(
+          localized: "orcaios.about.communityFooter",
+          defaultValue:
+            "Orca iOS is maintained by the community, with huami1314 as its core maintainer. It is not made or endorsed by Orca's authors. Its license (MIT) and its privacy policy and terms follow Orca's."),
+        rows: [
+          link(
+            BrandGlyph.github, "huami1314",
+            String(localized: "orcaios.welcome.maintainerRole", defaultValue: "Creator and core maintainer"),
+            "https://github.com/huami1314"),
+          link(
+            BrandGlyph.github, "huami1314/orca-ios", String(localized: "orcaios.about.thisApp", defaultValue: "This app’s source code"),
+            "https://github.com/huami1314/orca-ios"),
+          .value(
+            icon: .info, title: String(localized: "orcaios.about.welcome", defaultValue: "Welcome and notifications"),
+            navigates: true
+          ) { [weak self] in
+            let welcome = WelcomeViewController()
+            welcome.onFinish = { [weak welcome] in welcome?.dismiss(animated: true) }
+            self?.present(welcome, animated: true)
+          },
+        ]),
+      Section(header: String(localized: "orcaios.about.upstreamHeading", defaultValue: "UPSTREAM: ORCA"), rows: [
         link(globe, "orca.dev", String(localized: "settings.aboutScreen.website", defaultValue: "Orca website"), "https://orca.dev"),
         link(
           BrandGlyph.github, "stablyai/orca", String(localized: "settings.aboutScreen.sourceCode", defaultValue: "Orca source code"),
@@ -28,9 +52,6 @@ final class AboutViewController: SettingsPageViewController {
       Section(
         footerView: footer,
         rows: [
-          link(
-            BrandGlyph.github, "huami1314/orca-ios", String(localized: "orcaios.about.thisApp", defaultValue: "This app’s source code"),
-            "https://github.com/huami1314/orca-ios"),
           .value(
             icon: .scrollText, title: String(localized: "orcaios.about.licenses", defaultValue: "Open-source licenses"),
             navigates: true
@@ -84,11 +105,12 @@ final class AboutViewController: SettingsPageViewController {
     let header = UIView(frame: CGRect(x: 0, y: 0, width: 0, height: 132))
     let logo = OrcaLogoView(size: 28)
     let name = UILabel()
-    name.text = "Orca"
+    name.text = "Orca iOS"
     name.font = .systemFont(ofSize: 22, weight: .heavy)
     name.textColor = Palette.textPrimary
     let tagline = UILabel()
-    tagline.text = String(localized: "settings.aboutScreen.tagline", defaultValue: "Open-source agent IDE for 100x builders")
+    tagline.text = String(
+      localized: "orcaios.about.tagline", defaultValue: "A community iPhone client for Orca · maintained by huami1314")
     tagline.font = .systemFont(ofSize: 13)
     tagline.textColor = Palette.textMuted
     tagline.textAlignment = .center
@@ -115,6 +137,12 @@ private final class LicensesViewController: SettingsPageViewController {
     ("Orca", "MIT", "https://github.com/stablyai/orca/blob/main/LICENSE"),
     ("Ghostty", "MIT", "https://github.com/ghostty-org/ghostty/blob/main/LICENSE"),
     ("libghostty-spm", "MIT", "https://github.com/Lakr233/libghostty-spm"),
+    ("MarkdownView", "MIT", "https://github.com/Lakr233/MarkdownView"),
+    ("Litext", "MIT", "https://github.com/Lakr233/Litext"),
+    ("SwiftMath", "MIT", "https://github.com/mgriebling/SwiftMath"),
+    ("LRUCache", "MIT", "https://github.com/nicklockwood/LRUCache"),
+    ("DisplayLink", "MIT", "https://github.com/Lakr233/DisplayLink"),
+    ("swift-collections", "Apache 2.0", "https://github.com/apple/swift-collections"),
     ("Lucide", "ISC", "https://github.com/lucide-icons/lucide/blob/main/LICENSE"),
   ]
 
