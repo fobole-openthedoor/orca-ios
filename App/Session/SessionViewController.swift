@@ -342,17 +342,34 @@ final class SessionViewController: UIViewController {
     }
   }
 
+  /// Text size for what is on screen: the terminal's font in a terminal tab, the chat's text otherwise.
+  private func openTextSize() {
+    guard current is TerminalTabController else {
+      present(ChatTextSettingsController.sheet(), animated: true)
+      return
+    }
+    let navigation = UINavigationController(rootViewController: TerminalSettingsViewController())
+    navigation.topViewController?.title = String(localized: "session.textSizeSheet.terminalTitle", defaultValue: "Terminal text")
+    navigation.topViewController?.navigationItem.rightBarButtonItem = UIBarButtonItem(
+      systemItem: .done, primaryAction: UIAction { [weak navigation] _ in navigation?.dismiss(animated: true) })
+    if let sheet = navigation.sheetPresentationController {
+      sheet.detents = [.medium(), .large()]
+      sheet.prefersGrabberVisible = true
+    }
+    present(navigation, animated: true)
+  }
+
   private func moreMenu() -> UIMenu {
     UIMenu(children: [
       UIAction(
-        title: String(localized: "session.headerMore.fileExplorer", defaultValue: "File explorer"),
+        title: String(localized: "session.header.fileExplorer", defaultValue: "File explorer"),
         image: Lucide.folderTree.image(size: 18)) { [weak self] _ in self?.openFiles() },
       UIAction(
-        title: String(localized: "session.headerMore.agentHistory", defaultValue: "Agent History"),
+        title: String(localized: "session.headerMoreActionsSheet.agentHistory", defaultValue: "Agent History"),
         image: Lucide.history.image(size: 18)) { [weak self] _ in self?.openHistory() },
       UIAction(
-        title: String(localized: "session.headerMore.textSize", defaultValue: "Text size"),
-        image: Lucide.aLargeSmall.image(size: 18)) { [weak self] _ in self?.present(ChatTextSettingsController.sheet(), animated: true) },
+        title: String(localized: "session.header.textSize", defaultValue: "Text size"),
+        image: Lucide.aLargeSmall.image(size: 18)) { [weak self] _ in self?.openTextSize() },
     ])
   }
 }

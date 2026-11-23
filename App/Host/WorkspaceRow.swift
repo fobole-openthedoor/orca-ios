@@ -194,11 +194,15 @@ enum RelativeTime {
     guard let milliseconds, milliseconds > 0 else { return nil }
     let seconds = max(0, Date().timeIntervalSince1970 - milliseconds / 1000)
     if seconds < 60 { return String(localized: "worktree.agentRowDisplay.justNow", defaultValue: "just now") }
-    let formatter = DateComponentsFormatter()
-    formatter.unitsStyle = .short
-    formatter.maximumUnitCount = 1
-    formatter.allowedUnits = [.minute, .hour, .day, .weekOfMonth]
-    return formatter.string(from: seconds)
+    // Whole units, rounded down, as the official rows count them: "2 小时" until the third hour is up.
+    let minutes = Int(seconds / 60)
+    let (key, value): (String.LocalizationValue, Int) =
+      minutes < 60
+      ? ("orcaios.time.minutes", minutes)
+      : minutes < 60 * 24
+        ? ("orcaios.time.hours", minutes / 60)
+        : minutes < 60 * 24 * 7 ? ("orcaios.time.days", minutes / (60 * 24)) : ("orcaios.time.weeks", minutes / (60 * 24 * 7))
+    return String.localizedStringWithFormat(String(localized: key), value)
   }
 }
 

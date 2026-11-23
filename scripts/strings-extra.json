@@ -65,6 +65,12 @@
       },
       "imageViewer": {
         "unavailable": "Couldn't load this image"
+      },
+      "time": {
+        "minutes": "{{count}}m",
+        "hours": "{{count}}h",
+        "days": "{{count}}d",
+        "weeks": "{{count}}w"
       }
     }
   },
@@ -134,6 +140,12 @@
       },
       "imageViewer": {
         "unavailable": "无法加载这张图片"
+      },
+      "time": {
+        "minutes": "{{count}} 分钟",
+        "hours": "{{count}} 小时",
+        "days": "{{count}} 天",
+        "weeks": "{{count}} 周"
       }
     },
     "overrides": {
@@ -225,6 +237,12 @@
       },
       "imageViewer": {
         "unavailable": "無法載入這張圖片"
+      },
+      "time": {
+        "minutes": "{{count}} 分鐘",
+        "hours": "{{count}} 小時",
+        "days": "{{count}} 天",
+        "weeks": "{{count}} 週"
       }
     }
   }

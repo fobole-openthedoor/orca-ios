@@ -34,6 +34,14 @@ final class FilePreviewViewController: UIViewController, UIScrollViewDelegate, Q
   private var content: UIView?
   private var imageView: UIImageView?
   private weak var shareItem: UIBarButtonItem?
+  /// A Markdown file shows its source instead of the rendered page.
+  private var showsSource = false
+  private lazy var modeItem = UIBarButtonItem(
+    image: Lucide.code.image(size: 20), primaryAction: UIAction { [weak self] _ in
+      guard let self, let text = self.loadedText else { return }
+      self.showsSource.toggle()
+      self.showText(text, truncated: false, byteLength: nil)
+    })
 
   /// Set for a file outside the workspace that the host granted (a `~/…` or absolute path from a chat).
   private let artifact: ResolvedPath.Grant?
@@ -62,7 +70,7 @@ final class FilePreviewViewController: UIViewController, UIScrollViewDelegate, Q
     let folder = (path as NSString).deletingLastPathComponent
     navigationItem.subtitle = folder.isEmpty ? nil : folder
     navigationItem.largeTitleDisplayMode = .never
-    view.backgroundColor = Palette.editorSurface
+    view.backgroundColor = Palette.bgBase
     let share = UIBarButtonItem(image: Lucide.share.image(size: 20), style: .plain, target: nil, action: nil)
     share.primaryAction = UIAction(
       title: String(localized: "files.fileShare.share", defaultValue: "Share"), image: Lucide.share.image(size: 20)
@@ -196,9 +204,26 @@ final class FilePreviewViewController: UIViewController, UIScrollViewDelegate, Q
       contentUnavailableConfiguration = config
       return
     }
+    // Markdown renders (with a Preview/Source switch); code is highlighted; anything else is plain text.
+    let lines = text.reduce(into: 0) { count, character in if character == "\n" { count += 1 } }
+    if FileMarkdownView.isMarkdown(path), !showsSource {
+      let rendered = FileMarkdownView()
+      rendered.showMarkdown(text)
+      replaceContent(with: rendered)
+      updateModeItem()
+      return
+    }
+    if let language = FileMarkdownView.language(for: path), lines < FileMarkdownView.highlightLineLimit, !truncated {
+      let code = FileMarkdownView()
+      code.showCode(text, language: language)
+      replaceContent(with: code)
+      updateModeItem()
+      return
+    }
+    updateModeItem()
     let textView = UITextView()
     textView.isEditable = false
-    textView.backgroundColor = Palette.editorSurface
+    textView.backgroundColor = Palette.bgBase
     textView.textColor = Palette.textPrimary
     textView.font = Typography.mono(12)
     textView.textContainerInset = UIEdgeInsets(
@@ -219,6 +244,19 @@ final class FilePreviewViewController: UIViewController, UIScrollViewDelegate, Q
     }
     textView.text = shown
     replaceContent(with: textView)
+  }
+
+  /// The Preview/Source switch, for Markdown files only.
+  private func updateModeItem() {
+    guard FileMarkdownView.isMarkdown(path) else { return }
+    modeItem.image = (showsSource ? Lucide.eye : Lucide.code).image(size: 20)
+    modeItem.accessibilityLabel =
+      showsSource
+      ? String(localized: "files.fileMarkdownPreview.previewMode", defaultValue: "Preview")
+      : String(localized: "files.fileMarkdownPreview.sourceMode", defaultValue: "Source")
+    if navigationItem.rightBarButtonItems?.contains(modeItem) != true {
+      navigationItem.rightBarButtonItems = (navigationItem.rightBarButtonItems ?? []) + [modeItem]
+    }
   }
 
   private func showImage(_ image: UIImage) {
