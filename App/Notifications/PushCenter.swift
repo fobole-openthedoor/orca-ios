@@ -96,8 +96,8 @@ final class PushCenter: NSObject {
         defaultValue: "Push token ready; no desktop has taken it yet. Keep the app open while connected.")
     }
     return String(
-      format: String(localized: "orcaios.push.statusRegistered", defaultValue: "Registered with %1$@ desktop(s)."),
-      "\(registeredCount)")
+      format: String(localized: "orcaios.push.statusRegistered", defaultValue: "Registered with %1$lld desktop(s)."),
+      registeredCount)
   }
 
   func didFailToRegister(_ error: Error) {
