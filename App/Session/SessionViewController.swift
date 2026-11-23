@@ -42,7 +42,12 @@ final class SessionViewController: UIViewController {
     super.viewDidLoad()
     view.backgroundColor = Palette.bgBase
     navigationItem.largeTitleDisplayMode = .never
-    let more = UIBarButtonItem(image: Lucide.ellipsis.image(size: 20, strokeWidth: 2), menu: moreMenu())
+    // Built as it opens: its toggles read their current state.
+    let more = UIBarButtonItem(
+      image: Lucide.ellipsis.image(size: 20, strokeWidth: 2),
+      menu: UIMenu(children: [
+        UIDeferredMenuElement.uncached { [weak self] completion in completion(self?.moreMenu().children ?? []) }
+      ]))
     if bot != nil {
       // A bot's home: its items instead of source control, and its face beside its name.
       let items = UIBarButtonItem(
@@ -404,11 +409,37 @@ final class SessionViewController: UIViewController {
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     PushCenter.viewing = (hostKey: session.host.id.uuidString, worktreeId: worktreeId, executionHost: nil)
+    // Picture in picture shows this session when the app is left.
+    let pip = PiPCenter.shared
+    pip.attach(to: view)
+    pip.source = { [weak self] in self?.pipFrame() }
+  }
+
+  /// The tab on screen as a picture-in-picture frame.
+  private func pipFrame() -> PiPFrame? {
+    let worktree = session.worktree(id: worktreeId)
+    let name = bot?.name ?? worktree?.displayName ?? ""
+    let state = worktree?.displayStatus ?? "idle"
+    let working = state == "working" || state == "monitoring"
+    let word =
+      working
+      ? String(localized: "sidebar.cardSlot.working", defaultValue: "Working")
+      : String(localized: "bots.row.idle", defaultValue: "Idle")
+    if let chat = current as? ChatViewController {
+      let tail = chat.pipLines()
+      return PiPFrame(title: name, status: word, working: working || tail.working, lines: tail.lines, terminal: false)
+    }
+    if let terminal = current as? TerminalTabController {
+      return PiPFrame(
+        title: name, status: word, working: working, lines: terminal.pipLines().map { ($0, .terminal) }, terminal: true)
+    }
+    return nil
   }
 
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
     if PushCenter.viewing?.worktreeId == worktreeId { PushCenter.viewing = nil }
+    PiPCenter.shared.detach(from: view)
   }
 
   /// Text size for what is on screen: the terminal's font in a terminal tab, the chat's text otherwise.
@@ -430,6 +461,19 @@ final class SessionViewController: UIViewController {
 
   private func moreMenu() -> UIMenu {
     UIMenu(children: [
+      UIMenu(
+        options: .displayInline,
+        children: PiPCenter.shared.isSupported
+          ? [
+            UIAction(
+              title: String(localized: "orcaios.pip.start", defaultValue: "Picture in Picture"),
+              image: UIImage(systemName: "pip.enter")
+            ) { _ in PiPCenter.shared.start() },
+            UIAction(
+              title: String(localized: "orcaios.pip.onLeave", defaultValue: "Picture in Picture on leaving"),
+              image: UIImage(systemName: "rectangle.on.rectangle"), state: PiPCenter.startsOnLeave ? .on : .off
+            ) { _ in PiPCenter.startsOnLeave.toggle() },
+          ] : []),
       UIAction(
         title: String(localized: "session.header.fileExplorer", defaultValue: "File explorer"),
         image: Lucide.folderTree.image(size: 18)) { [weak self] _ in self?.openFiles() },

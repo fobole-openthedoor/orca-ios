@@ -78,6 +78,10 @@
       "language": {
         "restartTitle": "Reopen Orca to change the language",
         "restartMessage": "Close Orca from the app switcher and open it again. Until then, Orca keeps its current language."
+      },
+      "pip": {
+        "start": "Picture in Picture",
+        "onLeave": "Picture in Picture on leaving"
       }
     }
   },
@@ -160,6 +164,10 @@
       "language": {
         "restartTitle": "重新打开 Orca 以切换语言",
         "restartMessage": "在多任务界面关闭 Orca 后再打开。在此之前，Orca 仍使用当前语言。"
+      },
+      "pip": {
+        "start": "画中画",
+        "onLeave": "离开时打开画中画"
       }
     },
     "overrides": {
@@ -264,6 +272,10 @@
       "language": {
         "restartTitle": "重新開啟 Orca 以切換語言",
         "restartMessage": "在 App 切換器中關閉 Orca 後再開啟。在此之前，Orca 仍使用目前的語言。"
+      },
+      "pip": {
+        "start": "子母畫面",
+        "onLeave": "離開時開啟子母畫面"
       }
     }
   }

@@ -73,6 +73,15 @@ final class TerminalTabController: UIViewController, WorkspaceContent, TerminalS
     terminal.onPaste = { [weak self] in self?.pasteFromPasteboard() ?? false }
   }
 
+  /// The terminal's visible rows for picture in picture, trailing blank rows dropped.
+  func pipLines() -> [String] {
+    var rows = (session?.readViewportText() ?? "").components(separatedBy: "\n").map {
+      $0.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+    }
+    while rows.last?.isEmpty == true { rows.removeLast() }
+    return rows
+  }
+
   required init?(coder: NSCoder) {
     fatalError("init(coder:) is not supported")
   }

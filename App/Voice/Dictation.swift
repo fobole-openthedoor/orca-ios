@@ -81,6 +81,7 @@ final class Dictation {
     request = nil
     task = nil
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    PiPCenter.shared.reclaimAudio()
     let end = onEnd
     onText = nil
     onEnd = nil

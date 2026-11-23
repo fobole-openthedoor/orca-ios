@@ -19,6 +19,8 @@ enum ChatLine: Hashable {
   case run(key: String)
   /// One call of an opened run.
   case call(id: String)
+  /// The images a run's reads showed the agent, under its line (native-chat-tool-viewed-images.ts).
+  case viewedImages(key: String)
   /// Consecutive thoughts, keyed by the first; opens in place.
   case thoughts(key: String)
   case thoughtText(id: String)
@@ -48,6 +50,8 @@ struct ChatProjection {
   var work: [String: (items: [TranscriptItem], seconds: Int?, running: Bool)] = [:]
   var folded: Set<String> = []
   var runs: [String: Run] = [:]
+  /// Each run's viewed images, by run key.
+  var viewedImages: [String: [String]] = [:]
   var thoughts: [String: (items: [TranscriptItem], seconds: Int?, live: Bool)] = [:]
   var files: [String: [ChangedFilesView.File]] = [:]
   /// Answers that end their turn: only these show the time and actions.
@@ -121,6 +125,17 @@ struct ChatProjection {
       }
       if folds && !expanded.contains(turn.key) {
         folded.insert(turn.key)
+        // Folded, the images the turn's reads showed the agent still show, as the official folded turn keeps them.
+        let calls = items.compactMap { item -> TranscriptItem.ToolCall? in
+          if case .toolCall(let call) = item.body { return call }
+          return nil
+        }
+        let shown = Self.viewedImagePaths(calls)
+        if !shown.isEmpty {
+          let key = turn.key + "#images"
+          viewedImages[key] = shown
+          lines.append(.viewedImages(key: key))
+        }
         // Folded: what still waits on the person, then the answer.
         for item in items where Self.isWaiting(item) {
           lines.append(.prompt(id: item.id))
@@ -212,6 +227,13 @@ struct ChatProjection {
         lines.insert(contentsOf: group.items.dropFirst().map { ChatLine.thoughtText(id: $0.id) }, at: at + 1)
       }
     }
+    // What a run's reads showed the agent sits right under its line, without opening it.
+    for (key, run) in runs {
+      let paths = Self.viewedImagePaths(run.calls)
+      guard !paths.isEmpty, let at = lines.firstIndex(of: .run(key: key)) else { continue }
+      viewedImages[key] = paths
+      lines.insert(.viewedImages(key: key), at: at + 1)
+    }
     // An opened run lists its calls under it.
     for (key, run) in runs where openRuns.contains(key) {
       if let at = lines.firstIndex(of: .run(key: key)) {
@@ -231,6 +253,24 @@ struct ChatProjection {
   }
 
   /// The agent's words, when the item is prose.
+  /// The raster file a successful read names (absolute path), else the images a call returned.
+  static func viewedImagePaths(_ calls: [TranscriptItem.ToolCall]) -> [String] {
+    let raster: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "tiff"]
+    var seen = Set<String>()
+    var paths: [String] = []
+    for call in calls {
+      let path = ["file_path", "path"].lazy.compactMap { call.input[$0]?.stringValue }.first
+      if ToolCategory.of(call) == .read, call.input["command"] == nil, let path, path.hasPrefix("/"),
+        raster.contains((path as NSString).pathExtension.lowercased())
+      {
+        if call.state != "failed", call.state != "running", seen.insert(path).inserted { paths.append(path) }
+      } else {
+        for stored in call.outputImagePaths where seen.insert(stored).inserted { paths.append(stored) }
+      }
+    }
+    return paths
+  }
+
   static func prose(_ item: TranscriptItem) -> String? {
     guard case .message(let message) = item.body, message.role == "assistant", !message.text.isEmpty else { return nil }
     return message.text

@@ -122,3 +122,27 @@ final class ChatImageStack: UIStackView {
     arrangedSubviews.forEach { $0.layer.borderColor = Palette.borderSubtle.resolvedColor(with: traitCollection).cgColor }
   }
 }
+
+/// What a run's reads showed the agent: its images under the run's line, on the turn's thread.
+final class ViewedImagesView: UIView {
+  let stack = ChatImageStack()
+  private var rails: TimelineRails?
+
+  init() {
+    super.init(frame: .zero)
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(stack)
+    NSLayoutConstraint.activate([
+      stack.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+      stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+      stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg + 23),
+      stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Spacing.lg),
+    ])
+    rails = TimelineRails(in: self, iconSize: 0, centeredOn: centerYAnchor)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  /// The thread runs straight through: images sit between activity rows.
+  func connect(up: Bool, down: Bool) { rails?.show(up: up, down: down) }
+}

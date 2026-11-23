@@ -402,31 +402,36 @@ final class ChatViewController: UIViewController {
   /// or by the label the strip shows; older pages are read in until it turns up. Without a match the task's
   /// own facts show.
   private func openBackgroundTask(_ task: BackgroundTask) {
-    Task {
-      var match = backgroundTaskCall(task)
-      var pages = 0
-      while match == nil, model.transcript.hasOlder, pages < 8 {
-        await model.loadOlder()
-        pages += 1
-        match = backgroundTaskCall(task)
-      }
-      let sheet: UIViewController
-      // A subagent's own words and calls, when the journal carries them under its id.
-      let own = task.kind == "agent" ? model.subagentItems(task.id) : []
-      if !own.isEmpty, var call = match?.1 ?? Optional(Self.placeholderCall(for: task)) {
-        call.output = Self.transcriptText(own)
-        sheet = ToolOutputViewController.sheet(call: call, load: nil)
-      } else if let (id, call) = match {
-        let model = self.model
-        sheet = ToolOutputViewController.sheet(call: call) {
+    // A subagent's own words and calls, when the journal carries them under its id.
+    let own = task.kind == "agent" ? model.subagentItems(task.id) : []
+    if !own.isEmpty {
+      var call = backgroundTaskCall(task)?.1 ?? Self.placeholderCall(for: task)
+      call.output = Self.transcriptText(own)
+      present(ToolOutputViewController.sheet(call: call, load: nil), animated: true)
+      return
+    }
+    let model = self.model
+    if let (id, call) = backgroundTaskCall(task) {
+      present(
+        ToolOutputViewController.sheet(call: call) {
           guard let full = await model.fullItem(id), case .toolCall(let whole) = full.body else { return nil }
           return whole
-        }
-      } else {
-        sheet = ToolOutputViewController.sheet(call: Self.placeholderCall(for: task), load: nil)
-      }
-      present(sheet, animated: true)
+        }, animated: true)
+      return
     }
+    // Its call is on an older page: the page opens at once with what the strip knows, and older history is
+    // read in behind it until the call turns up.
+    present(
+      ToolOutputViewController.sheet(call: Self.placeholderCall(for: task), load: { [weak self] in
+        var pages = 0
+        while let self, self.backgroundTaskCall(task) == nil, model.transcript.hasOlder, pages < 8 {
+          await model.loadOlder()
+          pages += 1
+        }
+        guard let (id, call) = self?.backgroundTaskCall(task) else { return nil }
+        if let full = await model.fullItem(id), case .toolCall(let whole) = full.body { return whole }
+        return call
+      }, alwaysLoad: true), animated: true)
   }
 
   private func backgroundTaskCall(_ task: BackgroundTask) -> (String, TranscriptItem.ToolCall)? {
@@ -527,6 +532,38 @@ final class ChatViewController: UIViewController {
     ChatDraftStore.save(model.sessionId, text: composer.draftText, attachments: composer.attachments)
   }
 
+  /// The chat for picture in picture: what the agent is doing now, then its newest words, calls and thoughts.
+  func pipLines() -> (working: Bool, lines: [(text: String, style: PiPFrame.Style)]) {
+    var lines: [(text: String, style: PiPFrame.Style)] = []
+    for item in model.transcript.items.suffix(14) where item.agentId == nil {
+      switch item.body {
+      case .message(let message) where message.role == "reasoning":
+        let thought = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !thought.isEmpty { lines.append((String(thought.suffix(240)), .muted)) }
+      case .message(let message) where message.role == "user":
+        let words = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !words.isEmpty { lines.append(("› " + String(words.prefix(160)), .muted)) }
+      case .message(let message):
+        let words = Self.plain(message.text)
+        if !words.isEmpty { lines.append((String(words.suffix(600)), .body)) }
+      case .toolCall(let call):
+        lines.append(("$ \(call.name) \(call.summary.replacingOccurrences(of: "\n", with: " ").prefix(120))", .call))
+      default: break
+      }
+    }
+    if let activity = model.transcript.activity, model.isWorking, !activity.isEmpty {
+      lines.append(("… " + activity, .muted))
+    }
+    return (model.isWorking, lines)
+  }
+
+  /// Markdown read as plain words: markers and fences dropped.
+  private static func plain(_ markdown: String) -> String {
+    markdown.replacingOccurrences(of: "```[a-zA-Z0-9]*", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "[*_`#>]", with: "", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
   /// Where a relative path the agent wrote may live on the desktop, most likely first: absolute paths it
   /// read or wrote that end with it, then the directories its commands changed into, joined with it.
   func candidatePaths(for relative: String) -> [String] {
@@ -556,7 +593,7 @@ final class ChatViewController: UIViewController {
   /// line do; the person's words, the agent's words and cards break it.
   private static func onThread(_ line: ChatLine?) -> Bool {
     switch line {
-    case .run, .thoughts, .thoughtText, .call, .prompt, .workItem, .working: true
+    case .run, .thoughts, .thoughtText, .call, .viewedImages, .prompt, .workItem, .working: true
     default: false
     }
   }
@@ -800,6 +837,16 @@ final class ChatViewController: UIViewController {
           }, animated: true)
       }
     }
+    let viewed = registration(ViewedImagesView.init) { [weak self] view, line in
+      guard let self, case .viewedImages(let key) = line, let paths = self.projection.viewedImages[key] else { return }
+      let sources = self.imageSources(paths)
+      view.stack.show(sources)
+      view.stack.onOpen = { [weak self] index in
+        self?.present(ImageViewerController(sources: sources, index: index), animated: true)
+      }
+      let joins = self.threadJoins(line)
+      view.connect(up: joins.up, down: joins.down)
+    }
     let notice = registration(NoticeDividerView.init) { view, _ in
       view.show(String(localized: "chat.notice.botCreated", defaultValue: "Bot created"))
     }
@@ -813,6 +860,7 @@ final class ChatViewController: UIViewController {
       case .run, .thoughts, .prompt, .working: collection.dequeueConfiguredReusableCell(using: activity, for: indexPath, item: line)
       case .thoughtText: collection.dequeueConfiguredReusableCell(using: thoughtText, for: indexPath, item: line)
       case .call: collection.dequeueConfiguredReusableCell(using: call, for: indexPath, item: line)
+      case .viewedImages: collection.dequeueConfiguredReusableCell(using: viewed, for: indexPath, item: line)
       case .files: collection.dequeueConfiguredReusableCell(using: files, for: indexPath, item: line)
       }
     }

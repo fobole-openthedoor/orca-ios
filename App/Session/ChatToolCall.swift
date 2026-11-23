@@ -176,19 +176,25 @@ extension DetailBlock: UIContextMenuInteractionDelegate {
 final class ToolOutputViewController: UIViewController {
   private let call: TranscriptItem.ToolCall
   private let load: (() async -> TranscriptItem.ToolCall?)?
+  /// Load even when the call isn't cut short: the call shown is a stand-in until the real one is found.
+  private let alwaysLoad: Bool
   private let text = UITextView()
   private let spinner = UIActivityIndicatorView(style: .medium)
 
-  init(call: TranscriptItem.ToolCall, load: (() async -> TranscriptItem.ToolCall?)?) {
+  init(call: TranscriptItem.ToolCall, load: (() async -> TranscriptItem.ToolCall?)?, alwaysLoad: Bool = false) {
     self.call = call
     self.load = load
+    self.alwaysLoad = alwaysLoad
     super.init(nibName: nil, bundle: nil)
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  static func sheet(call: TranscriptItem.ToolCall, load: (() async -> TranscriptItem.ToolCall?)?) -> UIViewController {
-    let navigation = UINavigationController(rootViewController: ToolOutputViewController(call: call, load: load))
+  static func sheet(
+    call: TranscriptItem.ToolCall, load: (() async -> TranscriptItem.ToolCall?)?, alwaysLoad: Bool = false
+  ) -> UIViewController {
+    let navigation = UINavigationController(
+      rootViewController: ToolOutputViewController(call: call, load: load, alwaysLoad: alwaysLoad))
     if let sheet = navigation.sheetPresentationController {
       sheet.detents = [.large()]
       sheet.prefersGrabberVisible = true
@@ -229,15 +235,17 @@ final class ToolOutputViewController: UIViewController {
       spinner.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: Spacing.xl),
     ])
     show(call)
-    guard call.outputTruncated, let load else { return }
+    guard call.outputTruncated || alwaysLoad, let load else { return }
     spinner.startAnimating()
     Task { [weak self] in
       let full = await load()
       guard let self else { return }
       self.spinner.stopAnimating()
       if let full {
+        self.title = full.name
+        self.navigationItem.subtitle = full.summary.replacingOccurrences(of: "\n", with: " ")
         self.show(full)
-      } else {
+      } else if !self.alwaysLoad {
         let alert = UIAlertController(
           title: String(localized: "session.nativeChatFullContent.loadOutputFailed", defaultValue: "Retry full output"),
           message: nil, preferredStyle: .alert)

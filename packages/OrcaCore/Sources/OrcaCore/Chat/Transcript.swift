@@ -31,6 +31,8 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     public var outputTruncated: Bool
     public var exitCode: Int?
     public var durationMs: Double?
+    /// Images the call returned to the agent (stored on the host).
+    public var outputImagePaths: [String] = []
 
     /// A call drawn from what the client knows, for a task whose own row isn't loaded.
     public init(name: String, input: JSONValue, output: String?) {
@@ -51,6 +53,7 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
       outputTruncated = json["output"]?["truncated"]?.boolValue ?? false
       exitCode = json["exitCode"]?.intValue
       durationMs = json["durationMs"]?.doubleValue
+      outputImagePaths = (json["outputImagePaths"]?.arrayValue ?? []).compactMap(\.stringValue)
     }
 
     /// The one line a collapsed tool row shows: the command, path, pattern or URL it was called with.

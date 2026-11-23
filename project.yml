@@ -69,7 +69,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        UIBackgroundModes: [remote-notification]
+        # audio: a session playing in picture in picture keeps the app (and its desktop connection) running.
+        UIBackgroundModes: [remote-notification, audio]
         NSSupportsLiveActivities: true
         # The gateway starts an activity by push when an agent needs you and the app isn't running.
         NSSupportsLiveActivitiesFrequentUpdates: true
