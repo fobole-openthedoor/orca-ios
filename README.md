@@ -60,7 +60,7 @@ To run your own gateway, see [`gateway/`](gateway/README.md) (Node.js or Docker)
 
 ## Building
 
-Requires Xcode 26 and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+Requires Xcode 27 and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
 ```sh
 git clone https://github.com/huami1314/orca-ios.git

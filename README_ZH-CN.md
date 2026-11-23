@@ -60,7 +60,7 @@ launchctl setenv ORCA_PUSH_GATEWAY_URL https://orca-push.huami.dev
 
 ## 构建
 
-需要 Xcode 26 和 [XcodeGen](https://github.com/yonaskolb/XcodeGen)。
+需要 Xcode 27 和 [XcodeGen](https://github.com/yonaskolb/XcodeGen)。
 
 ```sh
 git clone https://github.com/huami1314/orca-ios.git
