@@ -91,7 +91,7 @@ final class ToolCallView: UIView {
     input.isHidden = inputText.isEmpty
     let text = call.output ?? ""
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-    output.show(lines.prefix(Self.outputLines).joined(separator: "\n"))
+    output.showTerminal(lines.prefix(Self.outputLines).joined(separator: "\n"))
     output.isHidden = text.isEmpty
     var parts: [String] = []
     if let exit = call.exitCode { parts.append("exit \(exit)") }
@@ -142,7 +142,16 @@ private final class DetailBlock: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  func show(_ text: String) { label.text = text }
+  func show(_ text: String) {
+    backgroundColor = Palette.bgRaised
+    label.text = text
+  }
+
+  /// Output as a terminal shows it: its colours on the terminal's ground.
+  func showTerminal(_ text: String) {
+    backgroundColor = TerminalText.background
+    label.attributedText = TerminalText.render(command: nil, output: text)
+  }
 
   fileprivate var text: String { label.text ?? "" }
 }
@@ -191,7 +200,10 @@ final class ToolOutputViewController: UIViewController {
     super.viewDidLoad()
     title = call.name
     navigationItem.subtitle = call.summary.replacingOccurrences(of: "\n", with: " ")
-    view.backgroundColor = Palette.bgBase
+    // A terminal's page: its colours, whatever the app's appearance.
+    view.backgroundColor = TerminalText.background
+    overrideUserInterfaceStyle = .dark
+    navigationController?.overrideUserInterfaceStyle = .dark
     navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
       self?.dismiss(animated: true)
     })
@@ -237,6 +249,6 @@ final class ToolOutputViewController: UIViewController {
 
   private func show(_ call: TranscriptItem.ToolCall) {
     let input = ToolCallView.inputText(call)
-    text.text = [input, call.output ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n────────\n\n")
+    text.attributedText = TerminalText.render(command: input, output: call.output ?? "")
   }
 }
