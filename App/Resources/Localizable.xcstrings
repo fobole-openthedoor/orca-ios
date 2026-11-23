@@ -91181,6 +91181,29 @@
         }
       }
     },
+    "orcaios.sourceControl.create": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "创建"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "建立"
+          }
+        }
+      }
+    },
     "orcaios.sourceControl.stage": {
       "extractionState": "manual",
       "localizations": {

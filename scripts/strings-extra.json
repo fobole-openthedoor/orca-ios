@@ -51,7 +51,8 @@
         "resetPairingConfirm": "Remove all"
       },
       "sourceControl": {
-        "stage": "Stage"
+        "stage": "Stage",
+        "create": "Create"
       },
       "agentHistory": {
         "recentMessages": "Recent messages"
@@ -188,7 +189,8 @@
         "resetPairingConfirm": "全部移除"
       },
       "sourceControl": {
-        "stage": "暂存"
+        "stage": "暂存",
+        "create": "创建"
       },
       "agentHistory": {
         "recentMessages": "最近的消息"
@@ -347,7 +349,8 @@
         "resetPairingConfirm": "全部移除"
       },
       "sourceControl": {
-        "stage": "暫存"
+        "stage": "暫存",
+        "create": "建立"
       },
       "agentHistory": {
         "recentMessages": "最近的訊息"

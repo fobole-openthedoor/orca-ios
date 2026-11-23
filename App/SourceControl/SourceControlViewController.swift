@@ -3,9 +3,10 @@ import UIKit
 
 /// Source Control for one workspace (source-control/MobileSourceControlPanel.tsx): Changes and Pull request
 /// under the title. Changes holds the branch line (tap to switch branch) with how it stands against its
-/// upstream, a paused merge or rebase, the changed files under Conflicts, Uncommitted and Staged, and at the
-/// foot the one next step (the commit box, or push, pull, sync, publish). The ⋯ menu holds the rarer git
-/// actions, then Refresh, then Force Push.
+/// upstream, a paused merge or rebase, the branch's commits, the changed files under Conflicts, Uncommitted
+/// and Staged. Pull request holds the branch's PR, its gates toward merge and its description. At the foot sits
+/// the one next step: the commit box, push or pull, Create PR, Fix or Resolve with an agent, or Merge. The ⋯
+/// menu holds the rarer git actions, then Refresh, then Force Push; on the PR segment, the PR's own actions.
 final class SourceControlViewController: UIViewController, UITableViewDataSource, UITableViewDelegate, UITextViewDelegate {
   private enum Tab: Int { case changes, pr }
 
@@ -33,6 +34,15 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
   private var hubTab = Tab.changes
   private var loadTask: Task<Void, Never>?
   private var foregroundObserver: NSObjectProtocol?
+  private lazy var prController = PullRequestController(session: session, worktreeId: worktreeId)
+  private var prObservation: PRObservation?
+  private var expandedDescription = false
+  /// The base PRs and rebases target, and the branch's commits over it: the commits row and the PR tab's empty state.
+  private var baseRef: String?
+  private var commitsAhead: Int?
+  private var compareTask: Task<Void, Never>?
+  private var generatingMessage = false
+  private weak var commitsPage: CommitsViewController?
 
   private let segments = UISegmentedControl()
   private let table = UITableView(frame: .zero, style: .plain)
@@ -111,8 +121,11 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
     table.register(GitFileCell.self, forCellReuseIdentifier: GitFileCell.reuseIdentifier)
     table.register(FileSectionHeader.self, forHeaderFooterViewReuseIdentifier: FileSectionHeader.reuseIdentifier)
     let refresh = UIRefreshControl()
-    refresh.addAction(UIAction { [weak self] _ in self?.reload() }, for: .valueChanged)
+    refresh.addAction(UIAction { [weak self] _ in self?.reload(refresh: true) }, for: .valueChanged)
     table.refreshControl = refresh
+    let prRefresh = UIRefreshControl()
+    prRefresh.addAction(UIAction { [weak self] _ in self?.reload(refresh: true) }, for: .valueChanged)
+    prView.refreshControl = prRefresh
     header.branchButton.showsMenuAsPrimaryAction = true
     header.branchButton.menu = UIMenu(children: [
       UIDeferredMenuElement { [weak self] completion in
@@ -121,6 +134,8 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
       }
     ])
     header.onAbort = { [weak self] operation in self?.abort(operation) }
+    header.onOpenCommits = { [weak self] in self?.openCommits() }
+    prObservation = prController.observe { [weak self] in self?.prChanged() }
 
     // Clean: the branch line stays on top, and the clean state sits in the middle of what's left.
     let cleanTitle = TextLabel(
@@ -223,20 +238,47 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
 
   // MARK: Loading
 
-  private func reload() {
+  /// Reads status, then the branch's PR and how far it is past its base. `refresh` asks the host past its caches.
+  private func reload(refresh: Bool = false) {
     loadTask?.cancel()
     loadTask = Task { [weak self] in
       guard let self else { return }
       do {
         let status = try await api.gitStatus(worktreeId: worktreeId)
         guard !Task.isCancelled else { return }
+        let pushed = (self.status?.upstream?.ahead ?? 0) > 0 && status.upstream?.ahead == 0
+        let moved = self.status?.head != status.head || self.status?.branch != status.branch
         self.status = status
         loadError = nil
+        // A push moves the PR's checks to the pushed head, so the PR is read again then too.
+        if refresh || moved || pushed || prController.state == .idle {
+          prController.load(branch: status.branch, headSha: status.head, gitStatus: status, refresh: refresh)
+        }
+        if refresh || moved || pushed || baseRef == nil { readBranchCompare() }
+        commitsPage?.reload()
       } catch {
         guard !Task.isCancelled else { return }
         loadError = Self.message(error)
       }
       table.refreshControl?.endRefreshing()
+      prView.refreshControl?.endRefreshing()
+      rebuild()
+    }
+  }
+
+  /// The effective base and the branch's commits over it (`git.branchCompare`).
+  private func readBranchCompare() {
+    compareTask?.cancel()
+    let api = api
+    let worktreeId = worktreeId
+    let repoId = worktree?.repoId ?? ""
+    compareTask = Task { [weak self] in
+      let base = await api.effectiveBaseRef(worktreeId: worktreeId, repoId: repoId)
+      var summary: GitBranchCompareSummary?
+      if let base { summary = try? await api.gitBranchCompare(worktreeId: worktreeId, baseRef: base) }
+      guard !Task.isCancelled, let self else { return }
+      baseRef = base
+      commitsAhead = summary?.status == "ready" ? summary?.commitsAhead : nil
       rebuild()
     }
   }
@@ -280,6 +322,7 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
       branch: status?.branch ?? String(localized: "sourceControl.remoteDropdown.statusNoBranch", defaultValue: "No branch"),
       meta: syncMeta, operation: operation, unresolved: entries.filter { $0.conflictStatus == "unresolved" }.count,
       busy: busy, aborting: busyAction == "abort", readError: status?.readError)
+    header.show(commits: commitsAhead ?? 0)
     header.isHidden = !ready
     table.reloadData()
     sizeHeader()
@@ -289,6 +332,8 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
     if hubTab == .pr { buildPullRequest() }
     showGate()
     updateBar()
+    // The Commits page's Push and Update branch follow what runs here.
+    commitsPage?.tableView.reloadData()
     navigationItem.rightBarButtonItem?.isEnabled = ready
   }
 
@@ -339,7 +384,7 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
     return operation == "unknown" ? nil : operation
   }
 
-  /// Desktop's commit-area decision, without the hosted-review steps this client doesn't read yet.
+  /// Desktop's commit-area decision, the local half; `nextStep` layers the review's steps on it.
   private var primary: Primary {
     guard let status else { return .none }
     if hasUnresolvedConflicts { return .commit(enabled: false) }
@@ -382,65 +427,249 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
 
   // MARK: Next step
 
-  /// The one next action at the foot (mobile-source-control-next-step.ts): the commit box while anything can be
-  /// committed, Complete merge for a merge whose conflicts are settled, else the remote step; nothing when
-  /// the branch is up to date.
+  /// The commit area's decision as the next step reads it.
+  private var localStep: SourceControlNextStep.Local {
+    switch primary {
+    case .commit: return .commit
+    case .stageAll: return .stage
+    case .push, .publish: return .remote(pushOrPublish: true, ready: !busy)
+    case .pull, .sync, .forcePush: return .remote(pushOrPublish: false, ready: !busy)
+    case .none: return .idle
+    }
+  }
+
+  /// What Create offers for the branch, from the host's eligibility.
+  private var reviewCreation: SourceControlNextStep.Creation {
+    guard let eligibility = prController.eligibility, eligibility.isSupported else { return .unavailable }
+    if eligibility.needsPush { return .pushAndCreate }
+    return eligibility.canCreate ? .create : .unavailable
+  }
+
+  private var reviewInput: SourceControlNextStep.Review {
+    switch prController.state {
+    case .idle, .loading: return hasBranch ? .loading : .none
+    case .none, .error: return .none
+    case .ready(let pr):
+      let checks = prController.checks
+      return .github(pr, failedChecks: checks.filter(\.isBroken).count, pendingChecks: PullRequestCheck.summarize(checks).pending)
+    }
+  }
+
+  /// The one next action (source-control-next-step-decision.ts): local conflicts, the commit box, push or pull,
+  /// create a review, then the review's own steps toward merge.
+  private var nextStep: SourceControlNextStep {
+    SourceControlNextStep.resolve(
+      local: localStep, conflictOperation: operation, hasUnresolvedConflicts: hasUnresolvedConflicts,
+      hasChangesToCommit: stagedCount > 0 || !stageablePaths.isEmpty, creation: reviewCreation, review: reviewInput)
+  }
+
+  private var agentLabel: String {
+    prController.agentLabel ?? String(localized: "sourceControl.nextStep.genericAgent", defaultValue: "AI")
+  }
+
+  /// The one next action at the foot (MobileSourceControlNextStepBar.tsx, mobile-source-control-next-step.ts).
   private func updateBar() {
     guard status != nil else {
       bar.isHidden = true
       return
     }
-    bar.notice = notice
-    let primary = primary
-    if hasUnresolvedConflicts {
-      // Resolving with an agent lives on the desktop; the commit box waits for the conflicts.
-      bar.showComposer(message: commitMessage, editable: false, label: commitLabel, enabled: false, loading: false)
-    } else if operation == "merge" {
+    let agentNotice = prController.agentNotice
+    let prError = hubTab == .pr ? nil : prController.error
+    bar.notice = notice.map { ($0, true) } ?? prError.map { ($0, true) } ?? agentNotice
+    let step = nextStep
+    if case .resolveConflicts = step { prController.loadAgentLabel() }
+    if case .fixChecks = step { prController.loadAgentLabel() }
+    switch step {
+    case .commit:
+      showComposer()
+    case .remote:
+      showRemoteStep()
+    case .completeMerge:
       bar.showButton(
         label: busyAction == "complete-merge"
           ? String(localized: "sourceControl.branchCard.completingMerge", defaultValue: "Completing…")
           : String(localized: "sourceControl.branchCard.completeMerge", defaultValue: "Complete merge"),
         icon: .check, enabled: !busy, loading: busyAction == "complete-merge", reason: nil
       ) { [weak self] in self?.completeMerge() }
-    } else if primary == .stageAll || { if case .commit = primary { true } else { false } }() {
-      let enabled: Bool = { if case .commit(let enabled) = primary { enabled } else { true } }() && !busy
-      bar.showComposer(
-        message: stagedCount == 0 ? "" : commitMessage, editable: stagedCount > 0 && !busy, label: commitLabel,
-        enabled: enabled, loading: busyAction == "commit" || busyAction == "stage-all"
+    case .resolveConflicts(let review):
+      bar.showButton(
+        label: String(format: String(localized: "sourceControl.nextStep.resolveWithAgent", defaultValue: "Resolve with %1$@"), agentLabel),
+        icon: .sparkles, enabled: true, loading: prController.isBusy(.agent), reason: nil
+      ) { [weak self] in self?.resolveConflicts(review: review) }
+    case .createReview(let pushFirst):
+      showCreateReview(pushFirst: pushFirst, enabled: true)
+    case .fixChecks(let failed):
+      bar.showButton(
+        label: String(format: String(localized: "sourceControl.nextStep.fixWithAgent", defaultValue: "Fix with %1$@"), agentLabel),
+        icon: .sparkles, enabled: true, loading: prController.isBusy(.agent),
+        reason: (
+          String(localized: "sourceControl.nextStep.cantMergeYet", defaultValue: "Can’t merge yet:"),
+          String.localizedStringWithFormat(
+            String(localized: "sourceControl.nextStep.checksFailing", defaultValue: "%lld checks failing"), failed)
+        )
       ) { [weak self] in
-        if self?.primary == .stageAll { self?.stageAll() } else { self?.commit() }
+        guard let self else { return }
+        prController.launchAgent(prompt: prController.fixChecksPrompt())
       }
-    } else {
-      switch primary {
-      case .push(let count):
-        bar.showButton(
-          label: String.localizedStringWithFormat(
-            String(localized: "sourceControl.primaryAction.pushCommits", defaultValue: "Push %lld commits"), count),
-          icon: .arrowUp, enabled: !busy, loading: busyAction == "push", reason: nil
-        ) { [weak self] in self?.run("push") { try await $0.gitPush(worktreeId: $1) } }
-      case .pull(let count):
-        bar.showButton(
-          label: String.localizedStringWithFormat(
-            String(localized: "sourceControl.primaryAction.pullCommits", defaultValue: "Pull %lld commits"), count),
-          icon: .arrowDown, enabled: !busy, loading: busyAction == "pull", reason: nil
-        ) { [weak self] in self?.run("pull") { try await $0.gitPull(worktreeId: $1) } }
-      case .sync:
-        bar.showButton(
-          label: String(localized: "sourceControl.primaryAction.sync", defaultValue: "Sync"), icon: .arrowDownUp,
-          enabled: !busy, loading: busyAction == "sync", reason: nil
-        ) { [weak self] in self?.sync() }
-      case .publish:
-        bar.showButton(
-          label: String(localized: "sourceControl.primaryAction.publishBranch", defaultValue: "Publish Branch"),
-          icon: .arrowUp, enabled: !busy, loading: busyAction == "publish", reason: nil
-        ) { [weak self] in self?.run("publish") { try await $0.gitPush(worktreeId: $1, publish: true) } }
-      default:
+    case .mergeWhenReady(let mergeState, let pending):
+      bar.showButton(
+        label: String(localized: "sourceControl.nextStep.mergeWhenReady", defaultValue: "Merge when ready"), icon: .gitMerge,
+        tone: .secondary, enabled: true, loading: prController.isBusy(.autoMerge),
+        reason: (nil, waitingReason(mergeState: mergeState, pending: pending))
+      ) { [weak self] in self?.prController.setAutoMerge(true) }
+    case .autoMergeOn:
+      bar.showAutoMergeOn(loading: prController.isBusy(.autoMerge), enabled: true) { [weak self] in
+        self?.prController.setAutoMerge(false)
+      }
+    case .merge:
+      bar.showButton(
+        label: Self.mergeLabel(prController.pr?.mergeMethods.defaultMethod ?? "squash"), icon: .gitMerge, tone: .merge,
+        enabled: true, loading: prController.isBusy(.merge), reason: nil
+      ) { [weak self] in self?.openMergeSheet() }
+    case .mergeBlocked(let mergeState):
+      bar.showButton(
+        label: String(localized: "sourceControl.nextStep.merge", defaultValue: "Merge"), icon: .gitMerge, tone: .merge,
+        enabled: false, loading: false, reason: Self.mergeStateHint(mergeState).map { (nil, $0) }
+      ) {}
+    case .merged:
+      bar.showMerged(base: prController.pr?.baseRefName)
+    case .none:
+      // No review and Create is blocked: say why instead of hiding the bar.
+      if reviewInput == .none, let eligibility = prController.eligibility, eligibility.isSupported, !eligibility.canCreate {
+        showCreateReview(pushFirst: false, enabled: false)
+      } else {
         bar.showNothing()
       }
     }
-    bar.isHidden = bar.isEmpty && notice == nil
+    bar.isHidden = bar.isEmpty && bar.notice == nil
     view.setNeedsLayout()
   }
+
+  private func showComposer() {
+    let primary = primary
+    let enabled: Bool = { if case .commit(let enabled) = primary { enabled } else { true } }() && !busy
+    // As desktop, the AI button needs something staged; a running generation stays cancelable.
+    let generate: (running: Bool, enabled: Bool, action: () -> Void)? =
+      stagedCount > 0 || generatingMessage
+      ? (generatingMessage, generatingMessage || (!busy && !hasMessage), { [weak self] in self?.generateCommitMessage() })
+      : nil
+    bar.showComposer(
+      message: stagedCount == 0 ? "" : commitMessage, editable: stagedCount > 0 && !busy && !generatingMessage,
+      label: commitLabel, enabled: enabled && !generatingMessage, loading: busyAction == "commit" || busyAction == "stage-all",
+      generate: generate
+    ) { [weak self] in
+      if self?.primary == .stageAll { self?.stageAll() } else { self?.commit() }
+    }
+  }
+
+  /// The branch's push, pull, sync or publish; nil when it has none.
+  private var remoteStep: (label: String, icon: Lucide, id: String, run: () -> Void)? {
+    switch primary {
+    case .push(let count):
+      return (
+        String.localizedStringWithFormat(
+          String(localized: "sourceControl.primaryAction.pushCommits", defaultValue: "Push %lld commits"), count), .arrowUp, "push",
+        { [weak self] in self?.run("push") { try await $0.gitPush(worktreeId: $1) } }
+      )
+    case .pull(let count):
+      return (
+        String.localizedStringWithFormat(
+          String(localized: "sourceControl.primaryAction.pullCommits", defaultValue: "Pull %lld commits"), count), .arrowDown, "pull",
+        { [weak self] in self?.run("pull") { try await $0.gitPull(worktreeId: $1) } }
+      )
+    case .sync:
+      return (
+        String(localized: "sourceControl.primaryAction.sync", defaultValue: "Sync"), .arrowDownUp, "sync",
+        { [weak self] in self?.sync() }
+      )
+    case .publish:
+      return (
+        String(localized: "sourceControl.primaryAction.publishBranch", defaultValue: "Publish Branch"), .arrowUp, "publish",
+        { [weak self] in self?.run("publish") { try await $0.gitPush(worktreeId: $1, publish: true) } }
+      )
+    default:
+      return nil
+    }
+  }
+
+  private func showRemoteStep() {
+    guard let step = remoteStep else { return bar.showNothing() }
+    bar.showButton(label: step.label, icon: step.icon, enabled: !busy, loading: busyAction == step.id, reason: nil, action: step.run)
+  }
+
+  /// Create pull request, or Push & create when the branch needs a push first; disabled with why when it can't.
+  private func showCreateReview(pushFirst: Bool, enabled: Bool) {
+    let review =
+      prController.eligibility?.provider == "gitlab"
+      ? String(localized: "sourceControl.hostedReview.mrCopy.reviewLabel", defaultValue: "merge request")
+      : String(localized: "sourceControl.hostedReview.prCopy.reviewLabel", defaultValue: "pull request")
+    let label =
+      pushFirst
+      ? String(format: String(localized: "sourceControl.nextStep.pushAndCreateReview", defaultValue: "Push & create %1$@"), review)
+      : String(format: String(localized: "sourceControl.nextStep.createReview", defaultValue: "Create %1$@"), review)
+    let hint: String? =
+      enabled
+      ? nil
+      : String(
+        format: String(localized: "sourceControl.prCreate.notReady", defaultValue: "This branch is not ready for a %1$@ yet."), review)
+    bar.showButton(
+      label: label, icon: .gitPullRequest, enabled: enabled && !busy, loading: busyAction == "create-pr",
+      reason: hint.map { (nil, $0) }
+    ) { [weak self] in self?.createPullRequest(pushFirst: pushFirst) }
+  }
+
+  private func waitingReason(mergeState: String, pending: Int) -> String {
+    if pending > 0 {
+      return String.localizedStringWithFormat(
+        String(localized: "sourceControl.nextStep.checksRunning", defaultValue: "%lld checks still running"), pending)
+    }
+    if mergeState == "review_required" {
+      if let reviewer = prController.details?.reviewRequests.first?.login {
+        return String(
+          format: String(localized: "sourceControl.nextStep.waitingOnReviewer", defaultValue: "Waiting on review from %1$@"), reviewer)
+      }
+      return String(localized: "sourceControl.nextStep.waitingOnReview", defaultValue: "Waiting on review")
+    }
+    return Self.mergeStateHint(mergeState) ?? ""
+  }
+
+  /// Why a PR can't merge yet, in desktop's words (pr-actions-state.ts prMergeStateCopy).
+  static func mergeStateHint(_ kind: String) -> String? {
+    switch kind {
+    case "merged": String(localized: "pullRequest.prActionsState.mergedHint", defaultValue: "This pull request is already merged")
+    case "closed": String(localized: "pullRequest.prActionsState.closedHint", defaultValue: "This pull request is closed")
+    case "draft": String(localized: "pullRequest.prActionsState.draftHint", defaultValue: "This pull request is still a draft")
+    case "review_required":
+      String(
+        localized: "pullRequest.prActionsState.reviewRequiredHint",
+        defaultValue: "GitHub requires review approval before this pull request can merge")
+    case "changes_requested":
+      String(
+        localized: "pullRequest.prActionsState.changesRequestedHint", defaultValue: "GitHub reports requested changes on this pull request")
+    case "conflicts": String(localized: "pullRequest.prActionsState.conflictsHint", defaultValue: "GitHub reports merge conflicts")
+    case "merge_queue", "merge_queue_auto_merge_on":
+      String(localized: "pullRequest.prActionsState.mergeQueueHint", defaultValue: "This base branch uses GitHub merge queue")
+    case "behind": String(localized: "pullRequest.prActionsState.behindHint", defaultValue: "Update the branch before merging")
+    case "blocked":
+      String(localized: "pullRequest.prActionsState.blockedHint", defaultValue: "GitHub reports this pull request is blocked")
+    case "checking":
+      String(
+        localized: "pullRequest.prActionsState.checkingHint", defaultValue: "GitHub is still computing this pull request merge status")
+    case "merge_status_unavailable":
+      String(
+        localized: "pullRequest.prActionsState.mergeStatusUnavailableHint", defaultValue: "Merge status is unavailable for this PR")
+    default: nil
+    }
+  }
+
+  static func mergeLabel(_ method: String) -> String {
+    switch method {
+    case "merge": String(localized: "pullRequest.prActionsState.methodMerge", defaultValue: "Create merge commit")
+    case "rebase": String(localized: "pullRequest.prActionsState.methodRebase", defaultValue: "Rebase and merge")
+    default: String(localized: "pullRequest.prActionsState.methodSquash", defaultValue: "Squash and merge")
+    }
+  }
+
 
   private var commitLabel: String {
     if primary == .stageAll { return String(localized: "sourceControl.primaryAction.stageAll", defaultValue: "Stage all") }
@@ -531,16 +760,33 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
         hint: publishFirst("sync"), status: ahead > 0 || behind > 0 ? "↓\(behind) ↑\(ahead)" : upToDate
       ) { [weak self] in self?.sync() },
     ]
+    // Rebase onto the base the branch's PR targets; only a remote base can be fetched and rebased onto.
+    let rebaseLabel = baseRef.map(Self.rebaseLabel)
+    let remoteBase = rebaseLabel?.contains("/") == true
+    let dirty = !entries.isEmpty
+    remote.append(
+      action(
+        rebaseLabel.map {
+          String(format: String(localized: "sourceControl.remoteDropdown.rebaseFromNamedBase", defaultValue: "Rebase from %1$@"), $0)
+        } ?? String(localized: "sourceControl.remoteDropdown.rebaseFromBase", defaultValue: "Rebase from Base"),
+        .gitBranch, enabled: remoteBase,
+        hint: String(
+          localized: "sourceControl.remoteDropdown.rebaseChooseRemoteBase", defaultValue: "Choose a remote base branch to rebase from"),
+        status: dirty ? String(localized: "sourceControl.remoteDropdown.statusStashFirst", defaultValue: "Stash first") : nil
+      ) { [weak self] in self?.rebase() })
     // Switch branch opens the same branch list the branch line does.
     let branch: [UIMenuElement] = [
       UIMenu(
         title: String(localized: "sourceControl.actions.switchBranch", defaultValue: "Switch branch"),
         image: Lucide.gitBranch.image(size: 18),
-        children: [UIDeferredMenuElement { [weak self] completion in self?.branchMenu(completion) ?? completion([]) }])
+        children: [UIDeferredMenuElement { [weak self] completion in self?.branchMenu(completion) ?? completion([]) }]),
+      action(String(localized: "sourceControl.actions.openCommits", defaultValue: "Open commits"), .history, enabled: true) {
+        [weak self] in self?.openCommits()
+      },
     ]
     let refresh = action(
       String(localized: "sourceControl.header.refresh", defaultValue: "Refresh source control"), .refreshCw, enabled: true
-    ) { [weak self] in self?.reload() }
+    ) { [weak self] in self?.reload(refresh: true) }
     let force = action(
       String(localized: "sourceControl.remoteDropdown.forcePush", defaultValue: "Force Push"), .arrowUp, enabled: hasBranch,
       hint: String(
@@ -550,23 +796,87 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
         : ahead > 0 ? "↑\(ahead)" : upToDate,
       attributes: .destructive
     ) { [weak self] in self?.run("force-push") { try await $0.gitPush(worktreeId: $1, forceWithLease: true) } }
+    if hubTab == .pr { return pullRequestMenu() }
     var groups: [[UIMenuElement]] = [remote, branch, [refresh], [force]]
     if stagedCount > 0 { groups.insert(commits, at: 0) }
-    if hubTab == .pr, let url = worktree?.linkedPR?.url.flatMap(URL.init(string:)) {
-      let number = worktree?.linkedPR?.number ?? 0
-      groups = [
-        [
-          UIAction(
-            title: String(
-              format: String(localized: "sourceControl.header.openNumberedPrWeb", defaultValue: "Open pull request #%1$@ on the web"),
-              "\(number)"),
-            image: Lucide.externalLink.image(size: 18)
-          ) { _ in UIApplication.shared.open(url) }
-        ],
-        [refresh],
-      ]
-    }
     return groups.map { UIMenu(options: .displayInline, children: $0) }
+  }
+
+  /// `refs/remotes/origin/main` as the menu names it.
+  private static func rebaseLabel(_ ref: String) -> String {
+    ref.replacingOccurrences(of: "^refs/remotes/", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "^remotes/", with: "", options: .regularExpression)
+  }
+
+  /// The PR segment's ⋯ menu (use-pr-tab-menu.ts): the web, then edits that don't compete with Merge, then
+  /// Refresh, Unlink and Close in red. Without a PR, only Refresh.
+  private func pullRequestMenu() -> [UIMenuElement] {
+    let refresh = UIAction(
+      title: String(localized: "pullRequest.menu.refresh", defaultValue: "Refresh"), image: Lucide.refreshCw.image(size: 18)
+    ) { [weak self] _ in self?.reload(refresh: true) }
+    guard let pr = prController.pr else { return [refresh] }
+    var web: [UIMenuElement] = []
+    if let url = URL(string: pr.url), !pr.url.isEmpty {
+      web.append(
+        UIAction(
+          title: String(localized: "pullRequest.menu.openOnGitHub", defaultValue: "Open on GitHub"),
+          image: Lucide.externalLink.image(size: 18)
+        ) { _ in UIApplication.shared.open(url) })
+      web.append(
+        UIAction(title: String(localized: "pullRequest.menu.copyLink", defaultValue: "Copy link"), image: Lucide.link.image(size: 18)) { _ in
+          UIPasteboard.general.url = url
+          UINotificationFeedbackGenerator().notificationOccurred(.success)
+        })
+    }
+    var edit: [UIMenuElement] = []
+    if pr.isOpen {
+      edit.append(
+        UIAction(title: String(localized: "pullRequest.menu.editTitle", defaultValue: "Edit title"), image: Lucide.pencil.image(size: 18)) {
+          [weak self] _ in self?.editTitle()
+        })
+    }
+    if PullRequestMergeState(pr).autoMergeAction != nil {
+      let on = pr.autoMergeEnabled == true
+      edit.append(
+        UIAction(
+          title: String(localized: "pullRequest.menu.autoMerge", defaultValue: "Auto-merge"), image: Lucide.gitMerge.image(size: 18),
+          attributes: prController.isBusy(.autoMerge) ? .disabled : [], state: on ? .on : .off
+        ) { [weak self] _ in self?.prController.setAutoMerge(!on) })
+    }
+    if pr.state == "draft" {
+      edit.append(
+        UIAction(
+          title: String(localized: "pullRequest.prActionsSection.markReadyButton", defaultValue: "Ready for review"),
+          image: Lucide.eye.image(size: 18)
+        ) { [weak self] _ in self?.prController.setDraft(false) })
+    } else if pr.state == "open" {
+      edit.append(
+        UIAction(
+          title: String(localized: "pullRequest.menu.markDraft", defaultValue: "Mark as draft"),
+          image: Lucide.gitPullRequestDraft.image(size: 18)
+        ) { [weak self] _ in self?.prController.setDraft(true) })
+    }
+    var manage: [UIMenuElement] = [
+      refresh,
+      UIAction(
+        title: String(localized: "pullRequest.menu.unlink", defaultValue: "Unlink from workspace"), image: Lucide.unlink.image(size: 18),
+        attributes: prController.isBusy(.unlink) ? .disabled : []
+      ) { [weak self] _ in self?.confirmPullRequest(.unlink) },
+    ]
+    if pr.isOpen {
+      manage.append(
+        UIAction(
+          title: String(localized: "pullRequest.menu.close", defaultValue: "Close pull request"),
+          image: Lucide.gitPullRequestClosed.image(size: 18), attributes: .destructive
+        ) { [weak self] _ in self?.confirmPullRequest(.close) })
+    } else if pr.state == "closed" {
+      manage.append(
+        UIAction(
+          title: String(localized: "pullRequest.prActionsSection.reopenAccessibilityLabel", defaultValue: "Reopen pull request"),
+          image: Lucide.gitPullRequest.image(size: 18)
+        ) { [weak self] _ in self?.confirmPullRequest(.reopen) })
+    }
+    return [web, edit, manage].filter { !$0.isEmpty }.map { UIMenu(options: .displayInline, children: $0) }
   }
 
   /// The branch picker (Switch Branch): the local branches, the current one checked.
@@ -702,51 +1012,261 @@ final class SourceControlViewController: UIViewController, UITableViewDataSource
 
   // MARK: Pull request
 
-  /// The PR tab: the branch's linked pull request, or that there is none yet (PrTabEmptyState.tsx).
+  /// The PR segment (MobilePrTabBody): the branch's PR with its gates, changes and description, or the empty state.
   private func buildPullRequest() {
-    prStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-    guard let pr = worktree?.linkedPR else {
-      let icon = LucideView(.gitPullRequest, size: 28, strokeWidth: 1.6, color: Palette.textMuted)
-      let title = TextLabel(
-        String(localized: "pullRequest.emptyState.title", defaultValue: "No pull request yet"), size: 16, weight: .semibold,
-        alignment: .center)
-      let body = TextLabel(
-        status?.branch.map {
+    let ahead: (count: Int, base: String)? =
+      commitsAhead.flatMap { count in baseRef.map { (count, Self.rebaseLabel($0)) } }
+    PullRequestTabContent(
+      controller: prController, branch: status?.branch, commitsAhead: ahead,
+      openChecks: { [weak self] in self?.push { PullRequestChecksViewController(controller: $0) } },
+      openComments: { [weak self] in self?.push { PullRequestCommentsViewController(controller: $0) } },
+      openReviewers: { [weak self] in self?.push { PullRequestReviewersViewController(controller: $0) } },
+      openChanges: { [weak self] in self?.selectTab(.changes) },
+      editDescription: { [weak self] in self?.editDescription() },
+      linkPullRequest: { [weak self] in self?.linkPullRequest() },
+      retry: { [weak self] in self?.reload(refresh: true) }
+    ).build(into: prStack, expandedDescription: expandedDescription) { [weak self] in
+      guard let self else { return }
+      expandedDescription.toggle()
+      buildPullRequest()
+    }
+  }
+
+  private func push(_ make: (PullRequestController) -> UIViewController) {
+    Haptics.select()
+    navigationController?.pushViewController(make(prController), animated: true)
+  }
+
+  private func selectTab(_ tab: Tab) {
+    hubTab = tab
+    segments.selectedSegmentIndex = tab.rawValue
+    rebuild()
+  }
+
+  /// The PR read moved on: its tab, the bar, and the menu.
+  private func prChanged() {
+    if hubTab == .pr { buildPullRequest() }
+    updateBar()
+  }
+
+  /// Links a PR by number or GitHub URL (MobileLinkPrForm.tsx); an issue URL is not a PR link.
+  private func linkPullRequest() {
+    let alert = UIAlertController(
+      title: String(localized: "pullRequest.linkPrForm.title", defaultValue: "Link existing pull request"),
+      message: String(localized: "pullRequest.linkPrForm.referenceLabel", defaultValue: "PR number or GitHub URL"),
+      preferredStyle: .alert)
+    let link = UIAlertAction(
+      title: String(localized: "pullRequest.linkPrForm.linkButton", defaultValue: "Link pull request"), style: .default
+    ) { [weak self, weak alert] _ in
+      guard let self, let number = Self.pullRequestNumber(alert?.textFields?.first?.text ?? "") else { return }
+      Task {
+        if !(await self.prController.link(number)) { self.updateBar() }
+        self.reload(refresh: true)
+      }
+    }
+    link.isEnabled = false
+    alert.addTextField { field in
+      field.placeholder = String(
+        localized: "pullRequest.linkPrForm.referencePlaceholder", defaultValue: "#123 or https://github.com/owner/repo/pull/123")
+      field.autocapitalizationType = .none
+      field.autocorrectionType = .no
+      field.keyboardType = .URL
+      field.addAction(
+        UIAction { [weak field] _ in link.isEnabled = Self.pullRequestNumber(field?.text ?? "") != nil }, for: .editingChanged)
+    }
+    alert.addAction(UIAlertAction(title: String(localized: "common.cancel", defaultValue: "Cancel"), style: .cancel))
+    alert.addAction(link)
+    present(alert, animated: true)
+  }
+
+  /// `#123`, `123`, or a GitHub (or Enterprise) `/pull/123` URL; nil for anything else.
+  static func pullRequestNumber(_ input: String) -> Int? {
+    let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let match = text.range(of: "^#?(\\d+)$", options: .regularExpression) {
+      return Int(text[match].trimmingCharacters(in: CharacterSet(charactersIn: "#"))).flatMap { $0 > 0 ? $0 : nil }
+    }
+    guard let url = URL(string: text), url.scheme?.hasPrefix("http") == true else { return nil }
+    let parts = url.path.split(separator: "/")
+    guard parts.count >= 4, parts[2] == "pull" else { return nil }
+    return Int(parts[3]).flatMap { $0 > 0 ? $0 : nil }
+  }
+
+  private func editTitle() {
+    guard let pr = prController.pr else { return }
+    let sheet = PullRequestTextSheet(
+      title: String(localized: "pullRequest.editSheet.title", defaultValue: "Edit title"), initial: pr.title,
+      submitTitle: String(localized: "common.save", defaultValue: "Save"), singleLine: true
+    ) { [weak self] title in
+      guard let self else { return nil }
+      return await prController.updateTitle(title) ? nil : prController.error
+    }
+    present(sheet.presented(), animated: true)
+  }
+
+  private func editDescription() {
+    guard prController.pr != nil else { return }
+    let sheet = PullRequestTextSheet(
+      title: String(localized: "pullRequest.editSheet.description", defaultValue: "Edit description"),
+      initial: prController.details?.body ?? "", submitTitle: String(localized: "common.save", defaultValue: "Save"),
+      allowsEmpty: true
+    ) { [weak self] body in
+      guard let self else { return nil }
+      return await prController.updateBody(body) ? nil : prController.error
+    }
+    present(sheet.presented(), animated: true)
+  }
+
+  private enum PullRequestConfirm { case close, reopen, unlink }
+
+  /// Close, Reopen and Unlink ask first (MobilePrTabSheets.tsx PrTabConfirm).
+  private func confirmPullRequest(_ kind: PullRequestConfirm) {
+    guard let pr = prController.pr else { return }
+    let number = "\(pr.number)"
+    let (title, message, button, style): (String, String, String, UIAlertAction.Style) =
+      switch kind {
+      case .close:
+        (
+          String(localized: "pullRequest.prActionsSection.closeConfirmTitle", defaultValue: "Close pull request?"),
           String(
             format: String(
-              localized: "pullRequest.prSidebarCreateEmptyState.branchNotLinked", defaultValue: "%1$@ is not linked to an open PR."), $0)
+              localized: "pullRequest.prActionsSection.closeConfirmMessage", defaultValue: "#%1$@ will be closed without merging."),
+            number),
+          String(localized: "common.close", defaultValue: "Close"), .destructive
+        )
+      case .reopen:
+        (
+          String(localized: "pullRequest.prActionsSection.reopenConfirmTitle", defaultValue: "Reopen pull request?"),
+          String(format: String(localized: "pullRequest.prActionsSection.reopenConfirmMessage", defaultValue: "#%1$@ will be reopened."), number),
+          String(localized: "pullRequest.prActionsSection.reopenButton", defaultValue: "Reopen"), .default
+        )
+      case .unlink:
+        (
+          String(localized: "pullRequest.tab.unlinkConfirmTitle", defaultValue: "Unlink pull request?"),
+          String(
+            format: String(
+              localized: "pullRequest.tab.unlinkConfirmMessage", defaultValue: "#%1$@ stays open on GitHub; this workspace stops tracking it."),
+            number),
+          String(localized: "pullRequest.prActionsSection.unlinkButton", defaultValue: "Unlink"), .destructive
+        )
+      }
+    let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+    alert.addAction(UIAlertAction(title: String(localized: "common.cancel", defaultValue: "Cancel"), style: .cancel))
+    alert.addAction(
+      UIAlertAction(title: button, style: style) { [weak self] _ in
+        guard let self else { return }
+        switch kind {
+        case .close: prController.setOpen(false)
+        case .reopen: prController.setOpen(true)
+        case .unlink: prController.unlink()
         }
-          ?? String(
-            localized: "pullRequest.prSidebarCreateEmptyState.currentBranchNotLinked",
-            defaultValue: "The current branch is not linked to an open PR."),
-        size: Typography.bodySize, color: Palette.textSecondary, lineHeight: 20, alignment: .center, lines: 0)
-      let empty = UIStackView(arrangedSubviews: [icon, title, body])
-      empty.axis = .vertical
-      empty.alignment = .center
-      empty.spacing = Spacing.sm
-      empty.isLayoutMarginsRelativeArrangement = true
-      empty.directionalLayoutMargins = NSDirectionalEdgeInsets(top: Spacing.xl * 2, leading: 0, bottom: Spacing.xl, trailing: 0)
-      prStack.addArrangedSubview(empty)
+      })
+    present(alert, animated: true)
+  }
+
+  /// The repo's merge methods, its default first (MobilePrTabSheets.tsx PrMergeSheet); a pick merges the head
+  /// the sheet opened on.
+  private func openMergeSheet() {
+    guard let pr = prController.pr else { return }
+    let sheet = PullRequestMergeSheet(controller: prController, pr: pr, label: Self.mergeLabel)
+    let navigation = UINavigationController(rootViewController: sheet)
+    navigation.sheetPresentationController?.detents = [.medium()]
+    navigation.sheetPresentationController?.prefersGrabberVisible = true
+    present(navigation, animated: true)
+  }
+
+  /// Opens Create PR; `pushFirst` pushes the branch (publishing it when it has no upstream) before creating.
+  private func createPullRequest(pushFirst: Bool) {
+    guard let branch = status?.branch else { return }
+    view.endEditing(true)
+    let create = CreatePullRequestViewController(
+      session: session, worktreeId: worktreeId, branch: branch, eligibility: prController.eligibility, pushFirst: pushFirst,
+      publish: !published
+    ) { [weak self] _, _ in
+      guard let self else { return }
+      selectTab(.pr)
+      reload(refresh: true)
+    }
+    let navigation = UINavigationController(rootViewController: create)
+    navigation.sheetPresentationController?.detents = [.large()]
+    present(navigation, animated: true)
+  }
+
+  /// Hands the conflicts to an agent: the worktree's own, or the ones GitHub reports for the PR.
+  private func resolveConflicts(review: Bool) {
+    let path = worktree?.path
+    if review, let pr = prController.pr {
+      let prompt = SourceControlPrompts.resolvePullRequestConflicts(
+        baseRef: pr.conflictBaseRef ?? pr.baseRefName, files: pr.conflictFiles, worktreePath: path)
+      prController.launchAgent { prompt }
+    } else {
+      let prompt = SourceControlPrompts.resolveConflicts(
+        operation: status?.conflictOperation ?? "unknown",
+        entries: entries.filter { $0.conflictStatus == "unresolved" }.map { ($0.path, $0.conflictKind) }, worktreePath: path)
+      prController.launchAgent { prompt }
+    }
+  }
+
+  // MARK: Commits
+
+  /// The branch's commits, pushed over the hub; its Not pushed header carries the branch's remote step.
+  private func openCommits() {
+    Haptics.select()
+    let page = CommitsViewController(
+      session: session, worktreeId: worktreeId, branchName: status?.branch,
+      actions: CommitsPageActions(
+        remoteStep: { [weak self] in
+          guard let self, let step = remoteStep else { return nil }
+          return (step.label, !busy, busyAction == step.id)
+        },
+        runRemoteStep: { [weak self] in self?.remoteStep?.run() },
+        rebase: { [weak self] base in self?.rebase(onto: base) },
+        isRebasing: { [weak self] in self?.busyAction == "rebase" },
+        actionError: { [weak self] in self?.notice }))
+    commitsPage = page
+    navigationController?.pushViewController(page, animated: true)
+  }
+
+  /// `git.rebaseFromBase` onto the effective base (Update branch, Rebase from Base).
+  private func rebase(onto base: String? = nil) {
+    guard let base = base ?? baseRef else {
+      notice = String(localized: "sourceControl.actionSheetRunners.noBaseBranch", defaultValue: "No base branch to rebase onto")
+      return updateBar()
+    }
+    run("rebase") { try await $0.gitRebaseFromBase(worktreeId: $1, baseRef: base) }
+  }
+
+  // MARK: Commit message AI
+
+  /// `git.generateCommitMessage` from what is staged; tapping again while it runs cancels. Text typed meanwhile wins.
+  private func generateCommitMessage() {
+    let api = api
+    let worktreeId = worktreeId
+    if generatingMessage {
+      generatingMessage = false
+      updateBar()
+      Task { await api.cancelGenerateCommitMessage(worktreeId: worktreeId) }
       return
     }
-    let number = TextLabel("#\(pr.number)", size: Typography.bodySize, weight: .bold)
-    let state = StatePill(state: pr.state)
-    let identity = UIStackView(arrangedSubviews: [number, state, UIView()])
-    identity.spacing = Spacing.sm
-    identity.alignment = .center
-    let title = TextLabel(pr.title, size: 17, weight: .semibold, lines: 0)
-    prStack.addArrangedSubview(identity)
-    prStack.addArrangedSubview(title)
-    if let url = pr.url.flatMap(URL.init(string:)) {
-      var configuration = UIButton.Configuration.gray()
-      configuration.title = String(
-        format: String(localized: "sourceControl.header.openNumberedPrWeb", defaultValue: "Open pull request #%1$@ on the web"),
-        "\(pr.number)")
-      configuration.image = Lucide.externalLink.image(size: 16)
-      configuration.imagePadding = Spacing.sm
-      configuration.baseForegroundColor = Palette.textPrimary
-      prStack.setCustomSpacing(Spacing.lg, after: title)
-      prStack.addArrangedSubview(UIButton(configuration: configuration, primaryAction: UIAction { _ in UIApplication.shared.open(url) }))
+    guard !busy, !hasMessage else { return }
+    generatingMessage = true
+    notice = nil
+    updateBar()
+    Task { [weak self] in
+      do {
+        let message = try await api.generateCommitMessage(worktreeId: worktreeId)
+        guard let self, generatingMessage else { return }
+        if let message, !hasMessage {
+          commitMessage = message
+          UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
+      } catch {
+        guard let self, generatingMessage else { return }
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        notice = Self.message(error)
+      }
+      self?.generatingMessage = false
+      self?.updateBar()
+      self?.bar.updatePlaceholder()
     }
   }
 
@@ -880,6 +1400,9 @@ private final class ChangesHeaderView: UIView {
   private let bannerText = TextLabel(size: Typography.metaSize, color: Palette.textSecondary, lines: 0)
   private let abortButton = UIButton(type: .system)
   private let readError = TextLabel(size: Typography.metaSize, color: Palette.statusRed, lines: 0)
+  private let commitsRow = PressableControl()
+  private let commitsText = TextLabel(size: Typography.bodySize)
+  var onOpenCommits: (() -> Void)?
   private var operation: String?
 
   override init(frame: CGRect) {
@@ -930,7 +1453,34 @@ private final class ChangesHeaderView: UIView {
     banner.layer.borderWidth = 1 / UIScreen.main.scale
     banner.layer.borderColor = Palette.statusAmber.cgColor
 
-    let column = UIStackView(arrangedSubviews: [statusLine, banner, readError])
+    // The branch's commits over its base, a row that opens the Commits page.
+    let commitsIcon = LucideView(.gitCommitHorizontal, size: 16, strokeWidth: 2.1, color: Palette.textSecondary)
+    let commitsChevron = LucideView(.chevronRight, size: 16, strokeWidth: 2.2, color: Palette.textMuted)
+    commitsText.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    let commitsLine = UIStackView(arrangedSubviews: [commitsIcon, commitsText, commitsChevron])
+    commitsLine.spacing = Spacing.sm
+    commitsLine.alignment = .center
+    commitsLine.isUserInteractionEnabled = false
+    commitsRow.addSubview(commitsLine)
+    commitsLine.translatesAutoresizingMaskIntoConstraints = false
+    let commitsBorder = Hairline()
+    commitsRow.addSubview(commitsBorder)
+    NSLayoutConstraint.activate([
+      commitsLine.leadingAnchor.constraint(equalTo: commitsRow.leadingAnchor),
+      commitsLine.trailingAnchor.constraint(equalTo: commitsRow.trailingAnchor),
+      commitsLine.centerYAnchor.constraint(equalTo: commitsRow.centerYAnchor),
+      commitsRow.heightAnchor.constraint(equalToConstant: 48),
+      commitsBorder.leadingAnchor.constraint(equalTo: commitsRow.leadingAnchor),
+      commitsBorder.trailingAnchor.constraint(equalTo: commitsRow.trailingAnchor),
+      commitsBorder.bottomAnchor.constraint(equalTo: commitsRow.bottomAnchor),
+    ])
+    commitsRow.onPressedChange = { [weak self] pressed in self?.commitsRow.alpha = pressed ? Feedback.pressedOpacity : 1 }
+    commitsRow.onPress = { [weak self] in self?.onOpenCommits?() }
+    commitsRow.isAccessibilityElement = true
+    commitsRow.accessibilityTraits = .button
+    commitsRow.isHidden = true
+
+    let column = UIStackView(arrangedSubviews: [statusLine, banner, readError, commitsRow])
     column.axis = .vertical
     column.spacing = Spacing.sm
     column.setCustomSpacing(Spacing.xs, after: statusLine)
@@ -985,6 +1535,14 @@ private final class ChangesHeaderView: UIView {
     readError.text = error
     readError.isHidden = error == nil
   }
+
+  /// The "N commits" row, shown while the branch has commits over its base.
+  func show(commits: Int) {
+    commitsRow.isHidden = commits <= 0
+    commitsText.text = String.localizedStringWithFormat(
+      String(localized: "sourceControl.changesHeader.commits", defaultValue: "%lld commits"), commits)
+    commitsRow.accessibilityLabel = commitsText.text
+  }
 }
 
 /// A section's title with its count, then its action (Stage all, Unstage all) at the trailing edge.
@@ -1036,7 +1594,7 @@ private final class FileSectionHeader: UITableViewHeaderFooterView {
 
 /// A changed file (MobileSourceControlFileRows.tsx): status letter, name over its folder, +/- line counts,
 /// then Stage or Unstage.
-private final class GitFileCell: UITableViewCell {
+final class GitFileCell: UITableViewCell {
   static let reuseIdentifier = "gitFile"
 
   private let statusLabel = UILabel()
@@ -1184,51 +1742,30 @@ private final class GitFileCell: UITableViewCell {
   }
 }
 
-/// The PR's state as a coloured pill: Open, Draft, Merged, Closed.
-private final class StatePill: UIView {
-  init(state: String) {
-    super.init(frame: .zero)
-    let color: UIColor
-    let title: String
-    switch state.lowercased() {
-    case "merged":
-      color = Palette.statusPurple
-      title = String(localized: "pullRequest.prChecksPresentation.stateMerged", defaultValue: "Merged")
-    case "closed":
-      color = Palette.statusRed
-      title = String(localized: "pullRequest.prChecksPresentation.stateClosed", defaultValue: "Closed")
-    case "draft":
-      color = Palette.textSecondary
-      title = String(localized: "pullRequest.prChecksPresentation.stateDraft", defaultValue: "Draft")
-    default:
-      color = Palette.statusGreen
-      title = String(localized: "pullRequest.prChecksPresentation.stateOpen", defaultValue: "Open")
-    }
-    let label = TextLabel(title, size: Typography.metaSize, weight: .bold, color: color)
-    addSubview(label)
-    label.pin(to: self, insets: UIEdgeInsets(top: 1, left: Spacing.sm, bottom: 1, right: Spacing.sm))
-    layer.borderWidth = 1 / UIScreen.main.scale
-    layer.borderColor = color.cgColor
-    layer.cornerRadius = 10
-  }
-
-  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-}
-
 // MARK: - Next step bar
 
-/// The foot of the screen (MobileSourceControlNextStepBar.tsx): a full-width action with its icon, or the
-/// commit box with its capsule; a failed action's message above either.
+/// The foot of the screen (MobileSourceControlNextStepBar.tsx): a full-width action with its icon (merge in
+/// green, waiting steps in grey), or the commit box with its capsule and the AI button; auto-merge's Cancel and
+/// a merged PR's note; why a step can't run, and a failed action's message, above either.
 private final class NextStepBar: UIView {
+  enum Tone { case primary, secondary, merge }
+
   let messageView = UITextView()
   private let noticeLabel = TextLabel(size: Typography.metaSize, color: Palette.statusRed, alignment: .center, lines: 3)
+  private let reasonLabel = TextLabel(size: Typography.metaSize, color: Palette.textSecondary, alignment: .center, lines: 2)
   private let button = UIButton(type: .system)
+  private let secondaryButton = UIButton(type: .system)
+  private let statusLabel = TextLabel(size: Typography.bodySize, color: Palette.textSecondary, alignment: .center)
+  private let buttonRow = UIStackView()
   private let composer = UIView()
   private let placeholder = UILabel()
+  private let generateButton = UIButton(type: .system)
   private let commitButton = UIButton(type: .system)
   private let column = UIStackView()
   private var buttonAction: (() -> Void)?
+  private var secondaryAction: (() -> Void)?
   private var commitAction: (() -> Void)?
+  private var generateAction: (() -> Void)?
   private(set) var isEmpty = true
 
   override init(frame: CGRect) {
@@ -1244,9 +1781,20 @@ private final class NextStepBar: UIView {
     configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: Spacing.lg, bottom: 0, trailing: Spacing.lg)
     button.configuration = configuration
     button.addAction(UIAction { [weak self] _ in self?.buttonAction?() }, for: .touchUpInside)
-    button.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
+    secondaryButton.configuration = configuration
+    secondaryButton.addAction(UIAction { [weak self] _ in self?.secondaryAction?() }, for: .touchUpInside)
+    secondaryButton.setContentHuggingPriority(.required, for: .horizontal)
+    statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    buttonRow.addArrangedSubview(statusLabel)
+    buttonRow.addArrangedSubview(button)
+    buttonRow.addArrangedSubview(secondaryButton)
+    buttonRow.spacing = Spacing.sm
+    buttonRow.alignment = .center
+    buttonRow.heightAnchor.constraint(equalToConstant: 48).isActive = true
+    button.heightAnchor.constraint(equalToConstant: 48).isActive = true
+    secondaryButton.heightAnchor.constraint(equalToConstant: 48).isActive = true
 
-    // The commit box: the message over a row ending in the action's capsule.
+    // The commit box: the message over a row with the AI button and the action's capsule.
     composer.backgroundColor = Palette.composerSurface
     composer.layer.cornerRadius = Radius.floating
     composer.layer.borderWidth = 1
@@ -1265,7 +1813,15 @@ private final class NextStepBar: UIView {
     commit.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: Spacing.lg, bottom: 0, trailing: Spacing.lg)
     commitButton.configuration = commit
     commitButton.addAction(UIAction { [weak self] _ in self?.commitAction?() }, for: .touchUpInside)
-    for part in [messageView, placeholder, commitButton] as [UIView] {
+    var generate = UIButton.Configuration.filled()
+    generate.cornerStyle = .capsule
+    generate.baseBackgroundColor = Palette.composerControl
+    generate.baseForegroundColor = Palette.textSecondary
+    generate.image = Lucide.sparkles.image(size: 17, strokeWidth: 2)
+    generate.contentInsets = .zero
+    generateButton.configuration = generate
+    generateButton.addAction(UIAction { [weak self] _ in self?.generateAction?() }, for: .touchUpInside)
+    for part in [messageView, placeholder, generateButton, commitButton] as [UIView] {
       part.translatesAutoresizingMaskIntoConstraints = false
       composer.addSubview(part)
     }
@@ -1277,6 +1833,10 @@ private final class NextStepBar: UIView {
       messageView.heightAnchor.constraint(lessThanOrEqualToConstant: 7 * 22 + 4),
       placeholder.leadingAnchor.constraint(equalTo: messageView.leadingAnchor),
       placeholder.topAnchor.constraint(equalTo: messageView.topAnchor, constant: 2),
+      generateButton.leadingAnchor.constraint(equalTo: composer.leadingAnchor, constant: Spacing.md),
+      generateButton.centerYAnchor.constraint(equalTo: commitButton.centerYAnchor),
+      generateButton.widthAnchor.constraint(equalToConstant: 38),
+      generateButton.heightAnchor.constraint(equalToConstant: 38),
       commitButton.topAnchor.constraint(equalTo: messageView.bottomAnchor, constant: Spacing.sm),
       commitButton.trailingAnchor.constraint(equalTo: composer.trailingAnchor, constant: -Spacing.md),
       commitButton.bottomAnchor.constraint(equalTo: composer.bottomAnchor, constant: -Spacing.md),
@@ -1284,7 +1844,8 @@ private final class NextStepBar: UIView {
     ])
 
     column.addArrangedSubview(noticeLabel)
-    column.addArrangedSubview(button)
+    column.addArrangedSubview(reasonLabel)
+    column.addArrangedSubview(buttonRow)
     column.addArrangedSubview(composer)
     column.axis = .vertical
     column.spacing = Spacing.sm
@@ -1296,43 +1857,106 @@ private final class NextStepBar: UIView {
       column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.md),
       column.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -Spacing.md),
     ])
+    reasonLabel.isHidden = true
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  var notice: String? {
+  /// A failed action, or an agent launch's word, over the bar.
+  var notice: (text: String, failed: Bool)? {
     didSet {
-      noticeLabel.text = notice
+      noticeLabel.text = notice?.text
+      noticeLabel.textColor = notice?.failed == false ? Palette.textSecondary : Palette.statusRed
       noticeLabel.isHidden = notice == nil
     }
   }
 
+  private func reason(_ reason: (lead: String?, text: String)?) {
+    reasonLabel.isHidden = reason == nil
+    guard let reason else { return }
+    reasonLabel.runs = (reason.lead.map { [($0 + " ", Palette.textPrimary)] } ?? []) + [(reason.text, Palette.textSecondary)]
+  }
+
   func showNothing() {
     isEmpty = true
-    button.isHidden = true
+    buttonRow.isHidden = true
     composer.isHidden = true
+    reason(nil)
   }
 
-  func showButton(label: String, icon: Lucide, enabled: Bool, loading: Bool, reason: String?, action: @escaping () -> Void) {
+  private func style(_ target: UIButton, label: String, icon: Lucide?, tone: Tone, enabled: Bool, loading: Bool) {
+    let off = !enabled && !loading
+    let foreground: UIColor =
+      off ? Palette.textMuted : tone == .merge ? Palette.onMergeGreen : tone == .secondary ? Palette.textPrimary : Palette.bgBase
+    target.configuration?.baseBackgroundColor =
+      off || tone == .secondary ? Palette.bgRaised : tone == .merge ? Palette.mergeGreen : Palette.surfaceBright
+    target.configuration?.attributedTitle = AttributedString(
+      label, attributes: AttributeContainer([.font: Typography.font(Typography.bodySize, .semibold), .foregroundColor: foreground]))
+    target.configuration?.image = icon?.image(size: 17, strokeWidth: 2.2).withTintColor(foreground, renderingMode: .alwaysOriginal)
+    target.configuration?.showsActivityIndicator = loading
+    target.configuration?.activityIndicatorColorTransformer = UIConfigurationColorTransformer { _ in foreground }
+    target.isEnabled = enabled && !loading
+  }
+
+  func showButton(
+    label: String, icon: Lucide, tone: Tone = .primary, enabled: Bool, loading: Bool, reason why: (lead: String?, text: String)?,
+    action: @escaping () -> Void
+  ) {
     isEmpty = false
     composer.isHidden = true
+    buttonRow.isHidden = false
+    statusLabel.isHidden = true
+    secondaryButton.isHidden = true
     button.isHidden = false
     buttonAction = action
-    let off = !enabled && !loading
-    let foreground = off ? Palette.textMuted : Palette.bgBase
-    button.configuration?.baseBackgroundColor = off ? Palette.bgRaised : Palette.surfaceBright
-    button.configuration?.attributedTitle = AttributedString(
-      label, attributes: AttributeContainer([.font: Typography.font(Typography.bodySize, .semibold), .foregroundColor: foreground]))
-    button.configuration?.image = icon.image(size: 17, strokeWidth: 2.2).withTintColor(foreground, renderingMode: .alwaysOriginal)
-    button.configuration?.showsActivityIndicator = loading
-    button.configuration?.activityIndicatorColorTransformer = UIConfigurationColorTransformer { _ in foreground }
-    button.isEnabled = enabled && !loading
+    style(button, label: label, icon: icon, tone: tone, enabled: enabled, loading: loading)
+    reason(why)
   }
 
-  func showComposer(message: String, editable: Bool, label: String, enabled: Bool, loading: Bool, action: (() -> Void)? = nil) {
+  /// Auto-merge is on: the note, and Cancel to turn it off.
+  func showAutoMergeOn(loading: Bool, enabled: Bool, onCancel: @escaping () -> Void) {
     isEmpty = false
+    composer.isHidden = true
+    buttonRow.isHidden = false
     button.isHidden = true
+    statusLabel.isHidden = false
+    statusLabel.runs = nil
+    statusLabel.text = String(localized: "sourceControl.nextStep.willMergeWhenReady", defaultValue: "Will merge when ready")
+    statusLabel.textAlignment = .natural
+    secondaryButton.isHidden = false
+    secondaryAction = onCancel
+    style(
+      secondaryButton, label: String(localized: "sourceControl.nextStep.cancelAutoMerge", defaultValue: "Cancel"), icon: nil,
+      tone: .secondary, enabled: enabled, loading: loading)
+    secondaryButton.accessibilityLabel = String(
+      localized: "sourceControl.nextStep.cancelAutoMergeLabel", defaultValue: "Cancel auto-merge")
+    reason(nil)
+  }
+
+  /// The PR is merged: a quiet note, no action.
+  func showMerged(base: String?) {
+    isEmpty = false
+    composer.isHidden = true
+    buttonRow.isHidden = false
+    button.isHidden = true
+    secondaryButton.isHidden = true
+    statusLabel.isHidden = false
+    statusLabel.textAlignment = .center
+    statusLabel.text =
+      base.map { String(format: String(localized: "sourceControl.nextStep.mergedInto", defaultValue: "Merged into %1$@"), $0) }
+      ?? String(localized: "sourceControl.nextStep.merged", defaultValue: "Merged")
+    reason(nil)
+  }
+
+  /// The commit box. `generate` shows the AI button: nil hides it, `running` turns it into a spinner that cancels.
+  func showComposer(
+    message: String, editable: Bool, label: String, enabled: Bool, loading: Bool,
+    generate: (running: Bool, enabled: Bool, action: () -> Void)? = nil, action: (() -> Void)? = nil
+  ) {
+    isEmpty = false
+    buttonRow.isHidden = true
     composer.isHidden = false
+    reason(nil)
     commitAction = action
     if messageView.text != message { messageView.text = message }
     messageView.isEditable = editable
@@ -1349,6 +1973,20 @@ private final class NextStepBar: UIView {
     commitButton.configuration?.showsActivityIndicator = loading
     commitButton.isEnabled = enabled && !loading
     commitButton.accessibilityLabel = label
+    generateButton.isHidden = generate == nil
+    generateAction = generate?.action
+    if let generate {
+      generateButton.configuration?.showsActivityIndicator = generate.running
+      generateButton.configuration?.image = generate.running ? nil : Lucide.sparkles.image(size: 17, strokeWidth: 2)
+      generateButton.isEnabled = generate.enabled
+      generateButton.accessibilityLabel =
+        generate.running
+        ? String(localized: "sourceControl.content.cancelGeneration", defaultValue: "Cancel commit message generation")
+        : String(localized: "sourceControl.content.generateMessage", defaultValue: "Generate commit message with AI")
+      generateButton.accessibilityHint =
+        !generate.running && !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? String(localized: "sourceControl.content.regenerateHint", defaultValue: "Clear the message to regenerate.") : nil
+    }
   }
 
   func updatePlaceholder() {
