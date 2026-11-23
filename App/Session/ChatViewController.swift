@@ -640,9 +640,14 @@ final class ChatViewController: UIViewController {
     return (model.isWorking, lines)
   }
 
-  /// Markdown read as plain words: markers and fences dropped.
+  /// Markdown read as plain words: markers and fences dropped, list items as bullets, a table's rows as
+  /// their cells joined with a dot.
   private static func plain(_ markdown: String) -> String {
     markdown.replacingOccurrences(of: "```[a-zA-Z0-9]*", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "(?m)^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)*\\|?\\s*$\\n?", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "(?m)^\\s*\\|\\s*(.*?)\\s*\\|\\s*$", with: "$1", options: .regularExpression)
+      .replacingOccurrences(of: "\\s*\\|\\s*", with: " · ", options: .regularExpression)
+      .replacingOccurrences(of: "(?m)^\\s*[-*+]\\s+", with: "• ", options: .regularExpression)
       .replacingOccurrences(of: "[*_`#>]", with: "", options: .regularExpression)
       .trimmingCharacters(in: .whitespacesAndNewlines)
   }
