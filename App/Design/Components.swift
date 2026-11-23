@@ -9,6 +9,17 @@ final class TextLabel: UILabel {
   private var raw: String?
   private var cached: (width: CGFloat, lines: Int, text: NSAttributedString, layout: TextLayout)?
 
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    // Colours are resolved into the text, so a change of appearance redraws it. The app-switcher snapshot
+    // flips the appearance and back while backgrounded; the legacy callback can miss the way back.
+    registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitActiveAppearance.self]) { (label: TextLabel, _) in
+      label.restyle()
+    }
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
   convenience init(
     _ text: String? = nil, size: CGFloat, weight: UIFont.Weight = .regular, color: UIColor = Palette.textPrimary,
     lineHeight: CGFloat? = nil, letterSpacing: CGFloat = 0, alignment: NSTextAlignment = .natural, lines: Int = 1,

@@ -100,12 +100,20 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     attach.configuration?.cornerStyle = .capsule
     attach.configuration?.contentInsets = .init(top: 10, leading: 10, bottom: 10, trailing: 10)
     attach.accessibilityLabel = String(localized: "chat.composer.addToMessage", defaultValue: "Add to message")
-    // Opens its own card over the composer (ChatGPT's), which a system menu would cover.
-    attach.addAction(UIAction { [weak self] _ in
-      guard let self else { return }
-      Haptics.select()
-      self.onAttachMenu?(self.attachChoices())
-    }, for: .primaryActionTriggered)
+    // The system menu, grown out of the + itself; built as it opens so Paste and the panel follow the moment.
+    attach.showsMenuAsPrimaryAction = true
+    attach.preferredMenuElementOrder = .fixed
+    attach.menu = UIMenu(children: [
+      UIDeferredMenuElement.uncached { [weak self] completion in
+        guard let self else { return completion([]) }
+        completion(self.attachChoices().map { choice in
+          UIAction(title: choice.title, image: choice.image) { [weak self] _ in
+            if choice.morphs, let self { ChatAttachMenu.lastFrame = self.attach.convert(self.attach.bounds, to: nil) }
+            choice.run()
+          }
+        })
+      }
+    ])
     textView.onPasteAttachments = { [weak self] providers in self?.take(providers) }
     textView.onPasteText = { [weak self] text in self?.add([AttachmentIntake.textFile(text)]) }
     addInteraction(UIDropInteraction(delegate: self))
@@ -572,13 +580,11 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   struct AttachChoice {
     let title: String
     let image: UIImage?
-    /// Opens in place of the card (the photo panel grows out of it) rather than after it closes.
+    /// Opens in place (the photo panel grows out of the +).
     var morphs = false
     let run: () -> Void
   }
 
-  /// Shows the attach card with these rows; the chat places it over the composer.
-  var onAttachMenu: (([AttachChoice]) -> Void)?
 
   /// Camera, Photos, Files, as ChatGPT lists them; Paste when the clipboard holds something to attach.
   private func attachChoices() -> [AttachChoice] {

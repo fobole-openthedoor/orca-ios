@@ -19,7 +19,7 @@ LOG_LEVEL = "info"
 # has its own key; APNS_KEY / APNS_KEY_ID is the fallback for an environment
 # without one. Fill in the key ids once the .p8 files exist, then redeploy:
 APNS_SANDBOX_KEY_ID = "JJF9L3V89W"
-# APNS_PRODUCTION_KEY_ID = "YYYYYYYYYY"
+APNS_PRODUCTION_KEY_ID = "2TP4C3L46Q"
 # APNS_KEY_ID = "ZZZZZZZZZZ"
 # Optional:
 # ALLOWED_HOST_FINGERPRINTS = "fp1,fp2"

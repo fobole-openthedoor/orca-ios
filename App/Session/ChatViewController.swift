@@ -175,10 +175,6 @@ final class ChatViewController: UIViewController {
         self.present(ContextUsageViewController.sheet(usage), animated: true)
       }, for: .touchUpInside)  // A bare UIControl never sends primaryActionTriggered.
     composer.onPickPhotos = { [weak self] in self?.pickPhotos() }
-    composer.onAttachMenu = { [weak self] choices in
-      guard let self else { return }
-      ChatAttachMenu(choices: choices).show(in: self.view, from: self.composer.attachAnchor, above: self.composer)
-    }
     composer.onTakePhoto = { [weak self] in self?.takePhoto() }
     composer.onPickFiles = { [weak self] in self?.pickFiles() }
     composer.onOpenImages = { [weak self] images, index in
@@ -803,8 +799,9 @@ final class ChatViewController: UIViewController {
     panel.didMove(toParent: self)
     view.layoutIfNeeded()
     // Grows out of the + card when chosen there (ChatGPT's), else up out of the composer.
-    if let origin = ChatAttachMenu.lastFrame {
+    if let start = ChatAttachMenu.lastFrame {
       ChatAttachMenu.lastFrame = nil
+      let origin = view.convert(start, from: nil)
       let target = panel.view.frame
       panel.view.alpha = 0.4
       panel.view.transform = CGAffineTransform(translationX: origin.midX - target.midX, y: origin.midY - target.midY)
