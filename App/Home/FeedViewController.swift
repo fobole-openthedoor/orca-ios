@@ -4,8 +4,10 @@ import UIKit
 /// Feed (home/tabs/MobileHomeFeedTab.tsx): the Desktops group with Pair desktop, and Tasks.
 /// The pairing guide replaces the list until a desktop is paired.
 final class FeedViewController: UIViewController {
-  private enum Section: Hashable { case bots, desktops, tasks }
+  private enum Section: Hashable { case working, bots, desktops, tasks }
   private enum Item: Hashable {
+    /// A workspace whose agent is working or waiting on you, on any desktop: one tap back into it.
+    case working(hostId: PairedHost.ID, worktreeId: String)
     case bot(BotKey)
     case host(PairedHost.ID)
     case pair
@@ -48,6 +50,21 @@ final class FeedViewController: UIViewController {
     empty.isHidden = !model.loaded || !hosts.isEmpty
     collection.isHidden = hosts.isEmpty
     var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
+    // Work in progress leads, newest first; a bot's home is in its own row below.
+    var working: [(Item, Double)] = []
+    for host in hosts {
+      guard let session = model.session(for: host.id) else { continue }
+      let homes = Set(session.bots.bots.map(\.homeWorktreeId))
+      for worktree in session.worktrees where !worktree.isArchived && !homes.contains(worktree.id) {
+        guard worktree.isWorking || worktree.needsAttention else { continue }
+        let stamp = worktree.agents.compactMap(\.updatedAt).max() ?? worktree.lastActivityAt ?? 0
+        working.append((.working(hostId: host.id, worktreeId: worktree.id), stamp))
+      }
+    }
+    if !working.isEmpty {
+      snapshot.appendSections([.working])
+      snapshot.appendItems(working.sorted { $0.1 > $1.1 }.map(\.0), toSection: .working)
+    }
     let bots = BotDirectory.all(model)
     botRows = Dictionary(uniqueKeysWithValues: bots.map { ($0.key, ($0.bot, $0.session)) })
     if !bots.isEmpty {
@@ -63,7 +80,7 @@ final class FeedViewController: UIViewController {
         _ = (session.connectionState, session.status, session.worktrees, session.isLoading)
       }
     }
-    snapshot.reconfigureItems(hosts.map { .host($0.id) } + bots.map { .bot($0.key) } + [.tasks])
+    snapshot.reconfigureItems(working.map(\.0) + hosts.map { .host($0.id) } + bots.map { .bot($0.key) } + [.tasks])
     dataSource.apply(snapshot, animatingDifferences: view.window != nil)
   }
 
@@ -130,6 +147,9 @@ final class FeedViewController: UIViewController {
       case .desktops:
         header.label.text = String(localized: "home.listHeader.desktopsHeading", defaultValue: "Desktops")
         header.isHidden = false
+      case .working:
+        header.label.text = String(localized: "sidebar.cardSlot.working", defaultValue: "Working")
+        header.isHidden = false
       default:
         header.label.text = nil
         header.isHidden = true
@@ -140,8 +160,16 @@ final class FeedViewController: UIViewController {
       cell.contentConfiguration = BotRowConfiguration.make(bot: bot, session: session, showHost: true)
       cell.backgroundConfiguration = Self.rowBackground()
     }
+    let workingCell = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, item in
+      guard let self, case .working(let hostId, let worktreeId) = item,
+        let worktree = self.model.session(for: hostId)?.worktree(id: worktreeId)
+      else { return }
+      cell.contentConfiguration = WorkspaceRowConfiguration(worktree: worktree)
+      cell.backgroundConfiguration = Self.rowBackground()
+    }
     dataSource = UICollectionViewDiffableDataSource(collectionView: collection) { collection, indexPath, item in
       switch item {
+      case .working: collection.dequeueConfiguredReusableCell(using: workingCell, for: indexPath, item: item)
       case .bot(let key): collection.dequeueConfiguredReusableCell(using: botCell, for: indexPath, item: key)
       case .host(let id): collection.dequeueConfiguredReusableCell(using: hostCell, for: indexPath, item: id)
       case .pair: collection.dequeueConfiguredReusableCell(using: pairCell, for: indexPath, item: item)
@@ -176,6 +204,9 @@ extension FeedViewController: UICollectionViewDelegate {
     Haptics.select()
     collectionView.deselectItem(at: indexPath, animated: true)
     switch dataSource.itemIdentifier(for: indexPath) {
+    case .working(let hostId, let worktreeId):
+      guard let session = model.session(for: hostId) else { return }
+      navigationController?.pushViewController(SessionViewController(session: session, worktreeId: worktreeId), animated: true)
     case .bot(let key):
       if let (bot, session) = botRows[key] { BotDirectory.open(bot, in: session, from: navigationController) }
     case .host(let id): openHost(id)

@@ -120,7 +120,7 @@ final class UsageViewController: UIViewController {
     for (provider, label, mark) in [("claude", "Claude Code", AgentMark.claude), ("codex", "Codex", AgentMark.codex)] {
       // A provider shows once the desktop has limits for it (home-usage-cards.ts).
       guard let accounts, let entry = provider == "claude" ? accounts.claude : accounts.codex as ProviderAccounts?,
-        entry.usage?.session != nil || entry.usage?.weekly != nil
+        entry.usage?.session != nil || entry.usage?.weekly != nil || entry.usage?.fableWeekly != nil
       else { continue }
       let aside = entry.usage?.updatedAt.map { updated -> String in
         let seconds = Date().timeIntervalSince1970 - updated / 1000
@@ -253,9 +253,11 @@ private final class AccountCard: UIView {
     column.addArrangedSubview(header)
     column.setCustomSpacing(Spacing.md, after: header)
 
+    // Short names that fit the label column in every language: 5h, 7d, and Fable's own week.
     for (window, label) in [
-      (provider.usage?.session, String(localized: "accounts.screen.sessionWindow", defaultValue: "5h")),
-      (provider.usage?.weekly, String(localized: "accounts.screen.weeklyWindow", defaultValue: "7d")),
+      (provider.usage?.session, "5h"),
+      (provider.usage?.weekly, "7d"),
+      (provider.usage?.fableWeekly, "Fable"),
     ] {
       guard let window else { continue }
       column.addArrangedSubview(UsageBarRow(label: label, window: window))
@@ -270,7 +272,9 @@ private final class AccountCard: UIView {
 private final class UsageBarRow: UIView {
   init(label: String, window: UsageWindow) {
     super.init(frame: .zero)
-    let name = TextLabel(label, size: 15, color: Palette.textSecondary, lines: 2)
+    let name = TextLabel(label, size: 15, color: Palette.textSecondary, lines: 1)
+    name.adjustsFontSizeToFitWidth = true
+    name.minimumScaleFactor = 0.7
     let track = UIView()
     track.translatesAutoresizingMaskIntoConstraints = false
     track.backgroundColor = Palette.bgRaised
@@ -290,8 +294,8 @@ private final class UsageBarRow: UIView {
     NSLayoutConstraint.activate([
       name.leadingAnchor.constraint(equalTo: leadingAnchor),
       name.topAnchor.constraint(equalTo: topAnchor),
-      name.widthAnchor.constraint(equalToConstant: 36),
-      track.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 48),
+      name.widthAnchor.constraint(equalToConstant: 44),
+      track.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 54),
       track.centerYAnchor.constraint(equalTo: percent.centerYAnchor),
       track.heightAnchor.constraint(equalToConstant: 8),
       track.trailingAnchor.constraint(equalTo: percent.leadingAnchor, constant: -Spacing.lg),

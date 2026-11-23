@@ -73,7 +73,8 @@
         "weeks": "{{count}}w"
       },
       "session": {
-        "tabUnsupported": "This tab can't be opened on the phone yet"
+        "tabUnsupported": "This tab can't be opened on the phone yet",
+        "terminalStarting": "Starting terminal…"
       },
       "language": {
         "restartTitle": "Reopen Orca to change the language",
@@ -164,7 +165,8 @@
         "weeks": "{{count}} 周"
       },
       "session": {
-        "tabUnsupported": "这个标签页暂时不能在手机上打开"
+        "tabUnsupported": "这个标签页暂时不能在手机上打开",
+        "terminalStarting": "正在启动终端…"
       },
       "language": {
         "restartTitle": "重新打开 Orca 以切换语言",
@@ -277,7 +279,8 @@
         "weeks": "{{count}} 週"
       },
       "session": {
-        "tabUnsupported": "這個分頁暫時不能在手機上開啟"
+        "tabUnsupported": "這個分頁暫時不能在手機上開啟",
+        "terminalStarting": "正在啟動終端機…"
       },
       "language": {
         "restartTitle": "重新開啟 Orca 以切換語言",

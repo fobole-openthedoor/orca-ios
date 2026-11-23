@@ -90445,6 +90445,29 @@
         }
       }
     },
+    "orcaios.session.terminalStarting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting terminal…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在启动终端…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在啟動終端機…"
+          }
+        }
+      }
+    },
     "orcaios.sourceControl.stage": {
       "extractionState": "manual",
       "localizations": {

@@ -22,6 +22,8 @@ public struct ProviderUsage: Sendable, Equatable {
   public var provider: String
   public var session: UsageWindow?
   public var weekly: UsageWindow?
+  /// Claude's separate 7-day window for Fable.
+  public var fableWeekly: UsageWindow?
   /// Epoch milliseconds.
   public var updatedAt: Double?
   /// `idle`, `fetching`, `ok`, `error`, `unavailable`.
@@ -33,6 +35,7 @@ public struct ProviderUsage: Sendable, Equatable {
     self.provider = provider
     session = UsageWindow(json["session"])
     weekly = UsageWindow(json["weekly"])
+    fableWeekly = UsageWindow(json["fableWeekly"])
     updatedAt = json["updatedAt"]?.doubleValue
     status = json["status"]?.stringValue ?? "idle"
     error = json["error"]?.stringValue

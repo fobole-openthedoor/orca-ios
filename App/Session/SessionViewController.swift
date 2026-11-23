@@ -14,6 +14,7 @@ final class SessionViewController: UIViewController {
   private var chats: [String: ChatViewController] = [:]
   private var current: UIViewController?
   private var resolvingPath = false
+  private var shownTabKind: SessionTab.Kind?
   /// The host has answered with its tabs, so none means none rather than not yet.
   private var tabsLoaded = false
 
@@ -184,8 +185,14 @@ final class SessionViewController: UIViewController {
   }
 
   private func show(_ tab: SessionTab?) {
-    guard tab?.id != shownTabId || (tab == nil && tabsLoaded && !(current is NoTabsViewController)) else { return }
+    // The same tab is shown again when what it holds changed: a new terminal tab gets its terminal a moment
+    // after it appears.
+    guard
+      tab?.id != shownTabId || tab?.kind != shownTabKind
+        || (tab == nil && tabsLoaded && !(current is NoTabsViewController))
+    else { return }
     shownTabId = tab?.id
+    shownTabKind = tab?.kind
     let next: UIViewController
     switch tab?.kind {
     case .agentSession(let sessionId, _):
@@ -223,6 +230,9 @@ final class SessionViewController: UIViewController {
         chats[sessionId] = chat
         next = chat
       }
+    case .terminal(nil):
+      // The desktop is still starting this tab's terminal; the tab shows it once it has a handle.
+      next = PendingTerminalViewController()
     case .terminal(let handle?):
       next = TerminalTabController(
         api: session.api, handle: handle,
@@ -514,6 +524,30 @@ final class SessionViewController: UIViewController {
       UIAction(
         title: String(localized: "session.header.textSize", defaultValue: "Text size"),
         image: Lucide.aLargeSmall.image(size: 18)) { [weak self] _ in self?.openTextSize() },
+    ])
+  }
+}
+
+/// A terminal tab before its terminal exists: a spinner and a word, replaced as soon as the handle arrives.
+private final class PendingTerminalViewController: UIViewController {
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    view.backgroundColor = Palette.bgBase
+    let spinner = UIActivityIndicatorView(style: .medium)
+    spinner.startAnimating()
+    let label = TextLabel(
+      String(localized: "orcaios.session.terminalStarting", defaultValue: "Starting terminal…"), size: 15,
+      color: Palette.textMuted, alignment: .center, lines: 0)
+    let stack = UIStackView(arrangedSubviews: [spinner, label])
+    stack.axis = .vertical
+    stack.alignment = .center
+    stack.spacing = Spacing.sm
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(stack)
+    NSLayoutConstraint.activate([
+      stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+      stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+      stack.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -Spacing.xl * 2),
     ])
   }
 }
