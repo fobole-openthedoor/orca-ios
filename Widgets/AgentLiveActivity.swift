@@ -140,9 +140,12 @@ struct AgentLiveActivity: Widget {
       } compactLeading: {
         PhaseMark(phase: context.state.phase, size: 12)
       } compactTrailing: {
-        Text(context.state.phase.label)
-          .font(.system(size: 12, weight: .medium))
+        // The island's trailing slot fits a few digits, not a word: how long it has worked, in the phase's tint.
+        Elapsed(state: context.state)
+          .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(ActivityColor.tint(context.state.phase))
+          .multilineTextAlignment(.trailing)
+          .frame(maxWidth: 40, alignment: .trailing)
       } minimal: {
         PhaseMark(phase: context.state.phase, size: 12)
       }

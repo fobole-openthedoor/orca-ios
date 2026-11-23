@@ -221,7 +221,7 @@ enum ChatMarkdown {
     return out
   }
 
-  private static func looksLikePath(_ code: String) -> Bool {
+  static func looksLikePath(_ code: String) -> Bool {
     guard !code.contains(" "), code.contains("/") || code.contains(".") else { return false }
     let ext = (code as NSString).pathExtension
     return code.contains("/") && !ext.isEmpty && ext.count <= 5 && !code.contains("(")

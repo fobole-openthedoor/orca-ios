@@ -115,6 +115,11 @@ final class ChatViewController: UIViewController {
       }
     }
     composer.onToken = { [weak self] token in self?.suggest(token) }
+    composer.contextRing.addAction(
+      UIAction { [weak self] _ in
+        guard let self, let usage = self.composer.contextRing.usage else { return }
+        self.present(ContextUsageViewController.sheet(usage), animated: true)
+      }, for: .touchUpInside)  // A bare UIControl never sends primaryActionTriggered.
     composer.onPickPhotos = { [weak self] in self?.pickPhotos() }
     composer.onTakePhoto = { [weak self] in self?.takePhoto() }
     composer.onPickFiles = { [weak self] in self?.pickFiles() }
@@ -202,6 +207,7 @@ final class ChatViewController: UIViewController {
     view.setNeedsLayout()
     presentNewPrompt()
     updateModelChip()
+    composer.contextRing.show(model.options?.contextUsage)
     // The newest words of the current turn: its latest answer, else what was asked, never the last turn's reply.
     let latest = projection.lines.reversed().lazy.compactMap { line -> String? in
       switch line {
@@ -383,6 +389,13 @@ final class ChatViewController: UIViewController {
     }
   }
 
+  /// A streaming answer laid out a longer document after its row was sized: size the rows again, and stay
+  /// at the end if the reader was there.
+  private func answerGrew() {
+    collection.collectionViewLayout.invalidateLayout()
+    if followsBottom { scrollToBottom(animated: false) }
+  }
+
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
     saveDraft()
@@ -552,7 +565,8 @@ final class ChatViewController: UIViewController {
             : quiet.words
         }
       }
-      view.show(markdown: text, at: item.observedAt, streaming: streaming)
+      view.show(markdown: text, id: id, at: item.observedAt, streaming: streaming, width: self.collection.bounds.width)
+      view.onHeightChange = { [weak self] in self?.answerGrew() }
       view.onOpenURL = { [weak self] url in self?.open(url) }
       view.onFork = { [weak self] in self?.onFork?(id) }
       view.onScrollToTop = { [weak self] in self?.scrollToTop(line) }

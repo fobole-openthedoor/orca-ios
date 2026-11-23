@@ -11,6 +11,8 @@ final class SessionTabStrip: UIView {
   private let tabCell = UIView()
   private let underline = UIView()
   private let dot = UIView()
+  /// A working agent spins here instead of a coloured dot, which nobody read as "working".
+  private let spinner = UIActivityIndicatorView(style: .medium)
   private let agentMark = FilledIconView(size: 14)
   private let kindIcon = LucideView(.squareTerminal, size: 14, strokeWidth: 2.1, color: Palette.textSecondary)
   private let title = TextLabel(size: 14, weight: .semibold)
@@ -32,7 +34,10 @@ final class SessionTabStrip: UIView {
     underline.backgroundColor = Palette.textSecondary
     dot.translatesAutoresizingMaskIntoConstraints = false
     dot.layer.cornerRadius = 3
-    let content = UIStackView(arrangedSubviews: [dot, agentMark, kindIcon, title])
+    spinner.transform = CGAffineTransform(scaleX: 0.7, y: 0.7)
+    spinner.hidesWhenStopped = true
+    spinner.color = Palette.textSecondary
+    let content = UIStackView(arrangedSubviews: [dot, spinner, agentMark, kindIcon, title])
     content.axis = .horizontal
     content.spacing = 6
     content.alignment = .center
@@ -153,8 +158,15 @@ final class SessionTabStrip: UIView {
     case .file, .markdown: kindIcon.icon = .fileText
     default: kindIcon.icon = .squareTerminal
     }
-    dot.isHidden = agentState == nil
-    dot.backgroundColor = AgentStatusDot.color(for: agentState ?? "idle")
+    // Working spins; waiting on you is the attention dot; idle or done shows nothing.
+    let state = agentState ?? "idle"
+    let working = state == "working" || state == "monitoring"
+    if working { spinner.startAnimating() } else { spinner.stopAnimating() }
+    // The agent's mark gives way to the spinner, so the tab doesn't grow while it works.
+    if working { agentMark.isHidden = true; kindIcon.isHidden = true }
+    let attention = ["permission", "waiting", "blocked", "failed"].contains(state)
+    dot.isHidden = !attention
+    dot.backgroundColor = AgentStatusDot.color(for: state)
   }
 
   override func traitCollectionDidChange(_ previous: UITraitCollection?) {

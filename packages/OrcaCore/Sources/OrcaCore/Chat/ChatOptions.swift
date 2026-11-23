@@ -29,6 +29,52 @@ public struct ChatOptions: Sendable, Equatable {
   public var planModeSupported: Bool
   /// The thread's goal, when the agent keeps one (`/goal`).
   public var goal: Goal?
+  /// How full the context window is, as last learned (agent-session-context-usage.ts).
+  public var contextUsage: ContextUsage?
+
+  public struct ContextUsage: Sendable, Equatable {
+    public struct Category: Sendable, Equatable {
+      public var name: String
+      public var tokens: Int
+      /// Loaded on demand, so outside the used count.
+      public var deferred: Bool
+    }
+
+    public var usedTokens: Int
+    public var windowTokens: Int
+    /// Rounded and unclamped: an over-limit session reads above 100.
+    public var percentage: Double
+    /// From the last response's token counts rather than the provider's own report.
+    public var estimated: Bool
+    /// The provider's breakdown, largest first; empty for an estimate.
+    public var categories: [Category]
+
+    init?(_ json: JSONValue?) {
+      guard let used = json?["used"] else { return nil }
+      switch used["kind"]?.stringValue {
+      case "report":
+        usedTokens = used["usedTokens"]?.intValue ?? 0
+        windowTokens = used["windowTokens"]?.intValue ?? 0
+        percentage = used["percentage"]?.doubleValue ?? 0
+        estimated = false
+        categories = (used["categories"]?.arrayValue ?? []).compactMap { row in
+          guard let name = row["name"]?.stringValue, let tokens = row["tokens"]?.intValue, tokens > 0 else { return nil }
+          return Category(name: name, tokens: tokens, deferred: row["deferred"]?.boolValue ?? false)
+        }.sorted { $0.tokens > $1.tokens }
+      case "estimate":
+        let usage = used["usage"]
+        guard let window = json?["window"]?["tokens"]?.intValue, window > 0 else { return nil }
+        usedTokens = ["inputTokens", "cacheCreationInputTokens", "cacheReadInputTokens"]
+          .compactMap { usage?[$0]?.intValue }.reduce(0, +)
+        windowTokens = window
+        percentage = (Double(usedTokens) / Double(window) * 100).rounded()
+        estimated = true
+        categories = []
+      default:
+        return nil
+      }
+    }
+  }
 
   public struct Goal: Sendable, Equatable {
     public var objective: String
@@ -67,6 +113,7 @@ public struct ChatOptions: Sendable, Equatable {
     acceptsImages = json["acceptsImages"]?.boolValue ?? true
     fastModeSupported = json["fastModeSupport"]?["supported"]?.boolValue ?? false
     planModeSupported = current?["interactionMode"] != nil
+    contextUsage = ContextUsage(json["contextUsage"]?["current"])
     if let raw = json["threadGoal"]?["current"] ?? json["reportedThreadGoal"]?["current"], let objective = raw["objective"]?.stringValue {
       goal = Goal(
         objective: objective, status: raw["status"]?.stringValue ?? "active",

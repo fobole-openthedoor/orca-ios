@@ -88,10 +88,23 @@ final class SessionViewController: UIViewController {
     let worktree = session.worktree(id: worktreeId)
     title = worktree?.displayName
     let status = HostConnectionPresentation(session.connectionState)
-    let subtitle = NSMutableAttributedString(
-      string: "● ", attributes: [.foregroundColor: status.dot, .font: UIFont.systemFont(ofSize: 11)])
+    // "● 正在工作 · main": what the agent is doing in words, then the branch; offline, the connection's state.
+    let state = worktree?.displayStatus ?? "idle"
+    let word: String =
+      switch state {
+      case "working", "monitoring": String(localized: "sidebar.cardSlot.working", defaultValue: "Working")
+      case "permission", "waiting", "blocked": String(localized: "workspace.activity.permission", defaultValue: "Needs permission")
+      default: String(localized: "bots.row.idle", defaultValue: "Idle")
+      }
     let branch = (worktree?.branch ?? "").replacingOccurrences(of: "refs/heads/", with: "")
-    subtitle.append(NSAttributedString(string: status.connected ? branch : status.label, attributes: [.foregroundColor: Palette.textSecondary]))
+    let line = status.connected ? ([word] + (branch.isEmpty ? [] : [branch])).joined(separator: " · ") : status.label
+    let subtitle = NSMutableAttributedString(
+      string: "● ",
+      attributes: [
+        .foregroundColor: status.connected ? AgentStatusDot.color(for: state == "idle" ? "done" : state) : status.dot,
+        .font: UIFont.systemFont(ofSize: 11),
+      ])
+    subtitle.append(NSAttributedString(string: line, attributes: [.foregroundColor: Palette.textSecondary]))
     navigationItem.attributedSubtitle = AttributedString(subtitle)
     if let bot {
       // The title view carries the bot's own line; the branch is the bot's business.

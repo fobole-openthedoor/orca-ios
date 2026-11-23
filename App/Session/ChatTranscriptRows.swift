@@ -192,12 +192,6 @@ struct ChatProjection {
           }
         }
       }
-      // A thought row's open text follows the whole group, not only its first member.
-      for (key, group) in thoughts where openThoughts.contains(key) && group.items.count > 1 {
-        if let at = lines.firstIndex(of: .thoughtText(id: key)) {
-          lines.insert(contentsOf: group.items.dropFirst().map { ChatLine.thoughtText(id: $0.id) }, at: at + 1)
-        }
-      }
       // The running turn's last line spins; a thought or a call already spinning there says the same.
       if live {
         let tailSpins: Bool = {
@@ -211,12 +205,22 @@ struct ChatProjection {
         if !tailSpins { lines.append(.working) }
       }
     }
+    // A thought row's open text follows the whole group, not only its first member. Done once, after every
+    // turn: inside the turn loop it re-inserted earlier turns' groups on each later turn.
+    for (key, group) in thoughts where openThoughts.contains(key) && group.items.count > 1 {
+      if let at = lines.firstIndex(of: .thoughtText(id: key)) {
+        lines.insert(contentsOf: group.items.dropFirst().map { ChatLine.thoughtText(id: $0.id) }, at: at + 1)
+      }
+    }
     // An opened run lists its calls under it.
     for (key, run) in runs where openRuns.contains(key) {
       if let at = lines.firstIndex(of: .run(key: key)) {
         lines.insert(contentsOf: run.items.map { ChatLine.call(id: $0.id) }, at: at + 1)
       }
     }
+    // The list's identities must be unique, or the data source throws; a line seen twice keeps its first place.
+    var seen = Set<ChatLine>()
+    lines = lines.filter { seen.insert($0).inserted }
     // Thought seconds: from a group's first item to whatever follows it.
     for (key, group) in thoughts {
       guard let first = group.items.first, let last = group.items.last else { continue }
@@ -533,36 +537,41 @@ final class WorkItemView: UIView {
   }
 }
 
-/// The agent's answer as Markdown blocks, then its time, Copy, Fork and Scroll-to-top.
+/// The agent's answer, rendered by MarkdownView, then its time, Copy, Fork and Scroll-to-top.
 final class AnswerView: UIView {
-  private let blocks = UIStackView()
+  private let body = ChatAnswerMarkdownView()
   private let meta = MessageMetaView(trailing: false, actions: [.copy, .gitFork, .arrowUp])
   /// The time and actions row ends the view once the turn is over; mid-turn the words end it, so a hidden
   /// row leaves no gap before the next activity.
   private lazy var metaAtBottom = meta.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm)
-  private lazy var blocksAtBottom = blocks.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm)
+  private lazy var bodyAtBottom = body.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm)
   private var raw = ""
   /// A tapped link or file path in the answer.
-  var onOpenURL: ((URL) -> Void)?
-  var onOpenPath: ((String) -> Void)?
+  var onOpenURL: ((URL) -> Void)? {
+    didSet { body.onOpenURL = onOpenURL }
+  }
+  var onOpenPath: ((String) -> Void)? {
+    didSet { body.onOpenPath = onOpenPath }
+  }
   var onFork: (() -> Void)?
   var onScrollToTop: (() -> Void)?
+  /// The streamed text grew a line: the row should re-measure.
+  var onHeightChange: (() -> Void)? {
+    didSet { body.onHeightChange = onHeightChange }
+  }
 
   init() {
     super.init(frame: .zero)
-    addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
-    blocks.axis = .vertical
-    blocks.spacing = Spacing.sm
-    blocks.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(blocks)
+    body.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(body)
     addSubview(meta)
     meta.onCopy = { [weak self] in ChatClipboard.copy(self?.raw ?? "") }
     meta.onAction = { [weak self] index in index == 1 ? self?.onFork?() : self?.onScrollToTop?() }
     NSLayoutConstraint.activate([
-      blocks.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.sm),
-      blocks.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
-      blocks.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
-      meta.topAnchor.constraint(equalTo: blocks.bottomAnchor, constant: 2),
+      body.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.sm),
+      body.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
+      body.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
+      meta.topAnchor.constraint(equalTo: body.bottomAnchor, constant: 2),
       meta.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),
       meta.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
       metaAtBottom,
@@ -571,39 +580,16 @@ final class AnswerView: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  @objc private func tapped(_ tap: UITapGestureRecognizer) {
-    for case let label as TextLabel in blocks.arrangedSubviews {
-      let point = tap.location(in: label)
-      guard label.bounds.contains(point) else { continue }
-      if let url = label.attribute(.link, at: point) as? URL {
-        onOpenURL?(url)
-      } else if let path = label.attribute(.orcaPath, at: point) as? String {
-        onOpenPath?(path)
-      }
-      return
-    }
-  }
-
-  func show(markdown: String, at time: Double, streaming: Bool) {
+  /// `width` is the row's: the text wraps inside its margins, measured before the row is laid out.
+  func show(markdown: String, id: String, at time: Double, streaming: Bool, width: CGFloat) {
     raw = markdown
-    blocks.arrangedSubviews.forEach { $0.removeFromSuperview() }
-    for block in ChatMarkdown.render(markdown) {
-      switch block {
-      case .text(let text):
-        let label = TextLabel(size: ChatProse.bodySize, lines: 0)
-        label.styledText = text
-        blocks.addArrangedSubview(label)
-      case .code(_, let code):
-        blocks.addArrangedSubview(CodeBlockView(code: code))
-      case .rule:
-        blocks.addArrangedSubview(Hairline())
-      }
-    }
+    body.setWidth(width - Spacing.lg * 2)
+    body.show(markdown, streaming: streaming, identity: id)
     meta.set(time: time)
     meta.isHidden = streaming
     // Release one end before taking the other, so the two never hold at once.
-    (streaming ? metaAtBottom : blocksAtBottom).isActive = false
-    (streaming ? blocksAtBottom : metaAtBottom).isActive = true
+    (streaming ? metaAtBottom : bodyAtBottom).isActive = false
+    (streaming ? bodyAtBottom : metaAtBottom).isActive = true
   }
 }
 

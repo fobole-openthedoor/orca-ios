@@ -25,6 +25,10 @@ packages:
     # Ghostty's engine, as iGhostVT uses it. Pinned: the package moves to Ghostty's head every week.
     url: https://github.com/Lakr233/libghostty-spm
     exactVersion: 2.2.2026111701
+  MarkdownView:
+    # Chat answers and Markdown files: FlowDown's renderer, built for streaming text on a phone (MIT).
+    url: https://github.com/Lakr233/MarkdownView
+    from: 4.8.5
 targets:
   Orca:
     type: application
@@ -93,6 +97,10 @@ targets:
         product: GhosttyTerminal
       - package: libghostty
         product: GhosttyTheme
+      - package: MarkdownView
+        product: MarkdownView
+      - package: MarkdownView
+        product: MarkdownParser
       - target: OrcaWidgets
         embed: true
   OrcaWidgets:

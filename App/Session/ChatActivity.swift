@@ -177,7 +177,12 @@ final class ThoughtTextView: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  func show(_ text: String) { label.text = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+  /// Reasoning arrives in pieces that start and end with blank lines; drawn as is, the gaps between pieces
+  /// pile up. Each piece shows trimmed, with at most one blank line between its paragraphs.
+  func show(_ text: String) {
+    label.text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "\n[ \t]*(\n[ \t]*)+", with: "\n\n", options: .regularExpression)
+  }
 }
 
 /// The files a turn changed (MobileNativeChatTurnDiffRollup): a count with its +/−, then a row per file

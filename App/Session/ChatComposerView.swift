@@ -33,6 +33,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private let surface = UIVisualEffectView()
   private let attach = UIButton(configuration: .glass())
   let modelChip = UIButton(configuration: .glass())
+  /// How full the context window is; the chat opens the breakdown from it.
+  let contextRing = ContextRingButton()
   private let mic = UIButton(configuration: .plain())
   private let sendButton = SendButton()
   private var textHeight: NSLayoutConstraint!
@@ -104,7 +106,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     // Holding send while the agent works offers the other way to send (MobileNativeChatSendButton.tsx).
     sendButton.addInteraction(UIContextMenuInteraction(delegate: self))
 
-    let row = UIStackView(arrangedSubviews: [attach, modelChip, UIView(), mic, sendButton])
+    let row = UIStackView(arrangedSubviews: [attach, modelChip, UIView(), contextRing, mic, sendButton])
     row.axis = .horizontal
     row.alignment = .center
     row.spacing = Spacing.sm
