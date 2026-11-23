@@ -176,14 +176,46 @@ extension HostAPI {
   /// `files.readChatImage`. Nil when the host won't send it (too large, or a host older than either call).
   public func readChatImage(worktreeId: String, path: String) async throws -> Data? {
     let stored = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).contains("agent-session-attachments")
-    let result =
-      stored
-      ? try await connection.request("agentSessionAttachment.read", ["path": .string(path)])
-      : try await connection.request(
+    let result: JSONValue
+    if stored {
+      do {
+        result = try await connection.request("agentSessionAttachment.read", ["path": .string(path)])
+      } catch let error as RPCError where error.message == "file_too_large" {
+        // Bigger than one reply (a full-size screenshot): read it in ranges, as the official phone does.
+        return try await readStoredAttachmentInRanges(path)
+      }
+    } else {
+      result = try await connection.request(
         "files.readChatImage", ["worktree": .string("id:\(worktreeId)"), "path": .string(path)])
+    }
     guard result["isImage"]?.boolValue == true, let base64 = result["content"]?.stringValue,
       let data = Data(base64Encoded: base64), !data.isEmpty
     else { return nil }
+    return data
+  }
+
+  /// A stored attachment in `agentSessionAttachment.readTextChunk` ranges (any stored file, despite the
+  /// name), every range pinned to the first one's snapshot; nil past 10 MiB
+  /// (agent-session-attachment-paged-read.ts).
+  func readStoredAttachmentInRanges(_ path: String, maxBytes: Int = 10 * 1024 * 1024) async throws -> Data? {
+    // A multiple of 3 under the 256 KiB range cap, so the base64 pieces join without padding.
+    let chunk = (256 * 1024) / 3 * 3
+    let probe = try await connection.request(
+      "agentSessionAttachment.readTextChunk", ["path": .string(path), "offset": 0, "length": 1])
+    guard let size = probe["size"]?.intValue, let snapshot = probe["snapshot"]?.stringValue, size <= maxBytes else { return nil }
+    var data = Data(capacity: size)
+    while data.count < size {
+      let piece = try await connection.request(
+        "agentSessionAttachment.readTextChunk",
+        [
+          "path": .string(path), "offset": .number(Double(data.count)), "length": .number(Double(chunk)),
+          "expectedSnapshot": .string(snapshot),
+        ])
+      guard piece["snapshot"]?.stringValue == snapshot, let base64 = piece["contentBase64"]?.stringValue,
+        let bytes = Data(base64Encoded: base64), !bytes.isEmpty
+      else { return nil }
+      data.append(bytes)
+    }
     return data
   }
 
