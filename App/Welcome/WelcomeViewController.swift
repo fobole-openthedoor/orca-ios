@@ -23,7 +23,7 @@ final class WelcomeViewController: UIViewController {
           Please set up push notifications from my Orca desktop to the community iPhone app (orca-ios, bundle id com.thm.orcaios):
           1. Orca desktop picks its push gateway from the environment variable ORCA_PUSH_GATEWAY_URL. Set it to %1$@.
           2. macOS: run `launchctl setenv ORCA_PUSH_GATEWAY_URL %1$@`, and add a LaunchAgent in ~/Library/LaunchAgents that runs the same command at login so it survives a restart. Windows: set a user environment variable with that name and value. Linux: add it to the environment Orca starts with (for example ~/.config/environment.d/orca.conf).
-          3. Orca only reads it at launch, so it has to be quit completely (⌘Q) and opened again. If you are running inside Orca, don't quit it yourself; tell me to do it.
+          3. Orca reads it only at launch, so restart Orca for me: on macOS run `nohup perl -MPOSIX -e 'setsid(); exec @ARGV' sh -c 'sleep 3; osascript -e "quit app \\"Orca\\""; sleep 5; open -a Orca' >/dev/null 2>&1 &`. It runs detached from your own process, so it still works if you are running inside Orca; tell me before you run it that Orca will close and reopen. On Windows or Linux, quit Orca completely and start it again.
           4. Tell me when it's done. Note: after this, this computer no longer sends notifications to the official Orca app; removing the variable and restarting Orca undoes it.
           """), gatewayOrigin)
   }
@@ -134,7 +134,7 @@ final class WelcomeViewController: UIViewController {
       String(
         localized: "orcaios.welcome.push",
         defaultValue:
-          "Orca's push only reaches the official app. Send this prompt to an AI on your computer to switch it to the community gateway, then quit Orca with ⌘Q, open it again, and open this app once."),
+          "Orca's push only reaches the official app. Send this prompt to an AI on your computer; it switches Orca to the community gateway and restarts Orca. Then open this app once."),
       size: 15)
     column.addArrangedSubview(
       card(
