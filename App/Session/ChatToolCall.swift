@@ -121,11 +121,15 @@ final class ToolCallView: UIView {
 
 /// Monospaced text on the raised fill, wrapping, selectable by long press through its copy menu.
 private final class DetailBlock: UIView {
-  private let label = TextLabel(size: 12, color: Palette.textSecondary, lines: 0)
+  // A plain UILabel: monospaced text needs none of TextLabel's RN layout, and terminal output is styled
+  // text TextLabel doesn't measure.
+  private let label = UILabel()
 
   init() {
     super.init(frame: .zero)
     backgroundColor = Palette.bgRaised
+    label.numberOfLines = 0
+    label.textColor = Palette.textSecondary
     layer.cornerRadius = Radius.control
     layer.cornerCurve = .continuous
     label.font = Typography.mono(12)
@@ -145,6 +149,9 @@ private final class DetailBlock: UIView {
 
   func show(_ text: String) {
     backgroundColor = Palette.bgRaised
+    label.attributedText = nil
+    label.font = Typography.mono(12)
+    label.textColor = Palette.textSecondary
     label.text = text
   }
 

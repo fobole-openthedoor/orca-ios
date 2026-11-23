@@ -802,9 +802,17 @@ final class ChatViewController: UIViewController {
     ])
     panel.didMove(toParent: self)
     view.layoutIfNeeded()
-    // Grows up out of the composer.
-    panel.view.alpha = 0
-    panel.view.transform = CGAffineTransform(translationX: 0, y: 60).scaledBy(x: 0.96, y: 0.96)
+    // Grows out of the + card when chosen there (ChatGPT's), else up out of the composer.
+    if let origin = ChatAttachMenu.lastFrame {
+      ChatAttachMenu.lastFrame = nil
+      let target = panel.view.frame
+      panel.view.alpha = 0.4
+      panel.view.transform = CGAffineTransform(translationX: origin.midX - target.midX, y: origin.midY - target.midY)
+        .scaledBy(x: origin.width / target.width, y: origin.height / target.height)
+    } else {
+      panel.view.alpha = 0
+      panel.view.transform = CGAffineTransform(translationX: 0, y: 60).scaledBy(x: 0.96, y: 0.96)
+    }
     UIView.animate(withDuration: 0.42, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0.4) {
       panel.view.alpha = 1
       panel.view.transform = .identity

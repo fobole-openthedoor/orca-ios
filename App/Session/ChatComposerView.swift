@@ -572,6 +572,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   struct AttachChoice {
     let title: String
     let image: UIImage?
+    /// Opens in place of the card (the photo panel grows out of it) rather than after it closes.
+    var morphs = false
     let run: () -> Void
   }
 
@@ -590,7 +592,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     rows.append(
       AttachChoice(
         title: String(localized: "session.nativeChatAttachActions.photos", defaultValue: "Photos"),
-        image: UIImage(systemName: "photo.on.rectangle")
+        image: UIImage(systemName: "photo.on.rectangle"), morphs: isCollapsed
       ) { [weak self] in self?.onPickPhotos?() })
     rows.append(
       AttachChoice(

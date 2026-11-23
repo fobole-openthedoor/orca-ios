@@ -35,7 +35,7 @@ final class ChatAttachMenu: UIView {
         return attributes
       }
       let row = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in
-        self?.close { choice.run() }
+        if choice.morphs { self?.handOff(choice.run) } else { self?.close { choice.run() } }
       })
       row.contentHorizontalAlignment = .leading
       column.addArrangedSubview(row)
@@ -80,6 +80,18 @@ final class ChatAttachMenu: UIView {
       self.card.transform = .identity
       self.card.alpha = 1
     }
+  }
+
+  /// Where the card sat, in the host's coordinates, for what grows out of it.
+  static var lastFrame: CGRect?
+
+  /// Leaves at once so the next view can grow out of where the card was.
+  private func handOff(_ action: @escaping () -> Void) {
+    guard !closing else { return }
+    closing = true
+    Self.lastFrame = superview.map { card.convert(card.bounds, to: $0) }
+    action()
+    UIView.animate(withDuration: 0.15) { self.card.alpha = 0 } completion: { _ in self.removeFromSuperview() }
   }
 
   func close(then action: (() -> Void)? = nil) {
