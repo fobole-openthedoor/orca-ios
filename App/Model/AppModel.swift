@@ -66,6 +66,12 @@ final class AppModel {
     hosts = try await store.remove(id)
   }
 
+  /// Edit host: saves the phone's name and address for a desktop; its session redials a new address.
+  func update(_ host: PairedHost) async throws {
+    hosts = try await store.update(host)
+    sessions[host.id]?.update(host)
+  }
+
   /// The app came forward or the network changed: every desktop redials and reads its list again.
   func nudgeAll() {
     for session in sessions.values { session.nudge() }

@@ -138,7 +138,7 @@ public actor OrcaConnection {
   /// The path of the open socket, or of the last one.
   public private(set) var path: ConnectionPath?
 
-  private let configuration: Configuration
+  private var configuration: Configuration
   private let dialer: any WebSocketDialer
   private let director: any RelayDirector
   private var relay: RelayEndpoint?
@@ -160,6 +160,15 @@ public actor OrcaConnection {
   private var connectWaiters: [Int: CheckedContinuation<Void, Error>] = [:]
   private var stateObservers: [Int: AsyncStream<ConnectionState>.Continuation] = [:]
   private var binaryObservers: [Int: AsyncStream<[UInt8]>.Continuation] = [:]
+  private var log: [ConnectionLogEntry] = []
+  private var logObservers: [Int: AsyncStream<ConnectionLogEntry>.Continuation] = [:]
+  /// How far the socket being dialed got, so a failure can say which step timed out.
+  private var dialStage = DialStage.opening
+  private var dialAttempt = 0
+  private enum DialStage { case opening, handshaking, open }
+
+  /// The newest events kept for Network diagnostics.
+  static let logLimit = 300
 
   public init(
     configuration: Configuration, dialer: any WebSocketDialer = URLSessionWebSocketDialer(),
@@ -188,6 +197,7 @@ public actor OrcaConnection {
     guard runTask == nil, !closed else {
       return
     }
+    record(.info, "Mobile client session started", code: .clientSessionStarted)
     runTask = Task { await self.run() }
   }
 
@@ -211,11 +221,80 @@ public actor OrcaConnection {
     for (_, observer) in binaryObservers {
       observer.finish()
     }
+    for (_, observer) in logObservers {
+      observer.finish()
+    }
   }
 
   /// The app came to the foreground or the network changed: redial now instead of waiting out the backoff.
   public func nudge() {
     backoffTask?.cancel()
+  }
+
+  /// Edit host saved a new address: the open socket closes and the next dial uses it.
+  public func updateEndpoint(_ endpoint: String) {
+    guard configuration.endpoint != endpoint else {
+      return
+    }
+    configuration.endpoint = endpoint
+    socket?.close()
+    backoffTask?.cancel()
+  }
+
+  /// The events kept so far, then every new one, for Network diagnostics.
+  public func logEvents() -> AsyncStream<ConnectionLogEntry> {
+    let id = nextCounter()
+    let (stream, continuation) = AsyncStream<ConnectionLogEntry>.makeStream()
+    for entry in log {
+      continuation.yield(entry)
+    }
+    logObservers[id] = continuation
+    continuation.onTermination = { [weak self] _ in
+      Task { await self?.removeLogObserver(id) }
+    }
+    return stream
+  }
+
+  /// A dial or open socket that ended: which step it reached says what went wrong.
+  private func recordFailure(_ error: Error, path: ConnectionLogEntry.Path) {
+    switch (dialStage, error) {
+    case (.opening, ConnectionError.handshakeFailed):
+      record(.warn, "WebSocket connect timeout", HostEndpoint.display(configuration.endpoint), code: .connectTimeout, path: path)
+    case (.handshaking, ConnectionError.handshakeFailed):
+      record(.warn, "Handshake timeout", "The desktop did not finish the encrypted handshake", code: .handshakeTimeout, path: path)
+    case (_, let closed as WebSocketClosedError):
+      record(.warn, "WebSocket closed", "Close code \(closed.code); reconnect scheduled", code: .socketClosed, path: path)
+    default:
+      record(.warn, "WebSocket closed", Self.describe(error), code: .socketClosed, path: path)
+    }
+  }
+
+  private static func describe(_ error: Error) -> String {
+    (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+  }
+
+  private func removeLogObserver(_ id: Int) {
+    logObservers[id] = nil
+  }
+
+  private func record(
+    _ level: ConnectionLogEntry.Level, _ message: String, _ detail: String? = nil, code: ConnectionLogEntry.Code? = nil,
+    path: ConnectionLogEntry.Path? = nil, relayCloseCode: Int? = nil
+  ) {
+    let entry = ConnectionLogEntry(
+      id: nextCounter(), level: level, message: message, detail: detail, code: code, path: path, relayCloseCode: relayCloseCode)
+    log.append(entry)
+    if log.count > Self.logLimit {
+      log.removeFirst(log.count - Self.logLimit)
+    }
+    for (_, observer) in logObservers {
+      observer.yield(entry)
+    }
+  }
+
+  /// The direct path's kind, as the diagnosis names it.
+  private var directLogPath: ConnectionLogEntry.Path {
+    HostEndpoint.isTailscale(configuration.endpoint) ? .tailscale : .lan
   }
 
   /// The current state, then every change.
@@ -331,6 +410,7 @@ public actor OrcaConnection {
     var authRejections = 0
     while !closed {
       setState(attempt == 0 ? .connecting : .reconnecting(attempt: attempt))
+      dialAttempt = attempt
       reachedConnected = false
       var routes = plannedRoutes()
       var resolvedDirector = false
@@ -339,6 +419,7 @@ public actor OrcaConnection {
         do {
           try await runSession(route, quickDirect: routes.contains { $0.isRelay })
         } catch ConnectionError.authenticationRejected {
+          record(.warn, "Authentication rejected", "The desktop refused this device's token", code: .authenticationRejected)
           authRejections += 1
           if authRejections >= configuration.authRejectionLimit {
             closed = true
@@ -353,6 +434,9 @@ public actor OrcaConnection {
         } catch let error where route.isRelay && !reachedConnected {
           // A cell's refusal says what to try next.
           let code = Self.relayCode(of: error)
+          record(
+            .warn, "Relay: cell dial failed", code.map { "Close code \($0)" } ?? Self.describe(error), code: .relayDialFailed,
+            path: .relay, relayCloseCode: code)
           if code == RelayCloseCode.badCredential.rawValue, let version = route.relayVersion {
             rejectedRelayVersions.insert(version)
             continue
@@ -365,6 +449,7 @@ public actor OrcaConnection {
           }
         } catch {
           // Any other failure is a dropped or refused socket: try the next path, then redial.
+          recordFailure(error, path: route.isRelay ? .relay : directLogPath)
         }
       }
       if reachedConnected {
@@ -394,6 +479,8 @@ public actor OrcaConnection {
   private func backoff(_ attempt: Int) async {
     // 0.5s, 1s, 2s … capped at 15s, with jitter so several hosts do not redial in step.
     let delay = min(.seconds(15), configuration.reconnectBaseDelay * Int(pow(2, Double(min(attempt, 10) - 1)))) * Double.random(in: 0.8...1.2)
+    let milliseconds = delay.components.seconds * 1000 + delay.components.attoseconds / 1_000_000_000_000_000
+    record(.info, "Reconnect scheduled in \(milliseconds)ms", "Attempt \(attempt)", code: .retryScheduled)
     let task = Task {
       _ = try? await Task.sleep(for: delay)
     }
@@ -487,6 +574,12 @@ public actor OrcaConnection {
       url = connectURL
       transport = .relay
     }
+    dialStage = .opening
+    if route.isRelay {
+      record(.info, "Relay: dialing cell", url.host, path: .relay)
+    } else {
+      record(.info, dialAttempt > 0 ? "Reconnecting (attempt \(dialAttempt + 1))" : "Opening WebSocket", HostEndpoint.display(configuration.endpoint))
+    }
     let socket = dialer.dial(url)
     self.socket = socket
     let session = try E2EEV2ClientSession(
@@ -519,12 +612,16 @@ public actor OrcaConnection {
       guard hello.kind == (version == nil ? "invite" : "resume") else {
         throw RelayError.invalidHello
       }
+      record(.success, "Relay: cell accepted credential", "Starting E2EE handshake", path: .relay)
     }
     send(.text(session.helloText), on: socket)
+    record(.info, "Sent e2ee_hello (v2)", "Awaiting server e2ee_ready")
     setState(.handshaking)
     guard case .text(let ready) = try await Self.receive(on: socket, by: deadline), session.acceptReady(ready) else {
       throw ConnectionError.handshakeFailed
     }
+    dialStage = .handshaking
+    record(.success, "Received e2ee_ready (v2)", "Sending device token")
     send(.text(try session.sealTokenAuth(deviceToken: configuration.deviceToken)), on: socket)
     guard case .text(let sealedReply) = try await Self.receive(on: socket, by: deadline), let reply = session.openText(sealedReply) else {
       throw ConnectionError.handshakeFailed
@@ -536,6 +633,10 @@ public actor OrcaConnection {
     e2ee = session
     lastInboundAt = clock.now
     path = route.isRelay ? .relay : .direct
+    dialStage = .open
+    record(
+      .success, route.isRelay ? "Relay: authenticated" : "Authenticated", "Channel ready for RPC",
+      code: route.isRelay ? .relayConnected : .directConnected, path: route.isRelay ? .relay : directLogPath)
 
     background.append(Task {
       await self.negotiateCapabilities(on: socket)
@@ -663,6 +764,9 @@ public actor OrcaConnection {
       }
       missed += 1
       if missed >= configuration.missedProbeLimit {
+        record(
+          .warn, "Connection health check failed", "\(missed) liveness probes unanswered", code: .livenessTimeout,
+          path: path == .relay ? .relay : directLogPath)
         socket.close()
         return
       }

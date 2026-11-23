@@ -11,12 +11,23 @@ final class AutomationsViewController: UIViewController {
   private var hostId: PairedHost.ID?
   private var automations: [Automation] = []
   private var loadedFor: PairedHost.ID?
+  /// Set when a desktop's ⋯ menu opened this page (`/h/<id>/automations`): that desktop only, no picker.
+  private let pinnedHostId: PairedHost.ID?
+
+  init(hostId: PairedHost.ID? = nil) {
+    pinnedHostId = hostId
+    self.hostId = hostId
+    super.init(nibName: nil, bundle: nil)
+    hidesBottomBarWhenPushed = hostId != nil
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
   override func viewDidLoad() {
     super.viewDidLoad()
     title = HomeTab.automations.title
     view.backgroundColor = Palette.bgBase
-    navigationItem.largeTitleDisplayMode = .always
+    navigationItem.largeTitleDisplayMode = pinnedHostId == nil ? .always : .never
     let add = UIBarButtonItem(image: Lucide.plus.image(size: 20, strokeWidth: 2.2), style: .prominent, target: nil, action: nil)
     add.primaryAction = UIAction(image: Lucide.plus.image(size: 20, strokeWidth: 2.2)) { [weak self] _ in self?.edit(nil) }
     add.tintColor = Palette.createActionFill
@@ -33,7 +44,7 @@ final class AutomationsViewController: UIViewController {
       hostButton.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: Spacing.lg),
       hostButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
     ])
-    table.tableHeaderView = header
+    table.tableHeaderView = pinnedHostId == nil ? header : nil
     table.backgroundColor = Palette.bgBase
     table.dataSource = self
     table.delegate = self
@@ -65,8 +76,13 @@ final class AutomationsViewController: UIViewController {
   override func updateProperties() {
     super.updateProperties()
     let hosts = model.orderedHosts
-    if hostId == nil || !hosts.contains(where: { $0.id == hostId }) { hostId = hosts.first?.id }
+    if pinnedHostId == nil, hostId == nil || !hosts.contains(where: { $0.id == hostId }) { hostId = hosts.first?.id }
     guard let hostId, let session = model.session(for: hostId) else { return }
+    if pinnedHostId != nil {
+      navigationItem.subtitle = session.name
+      if session.connectionState == .connected, loadedFor != hostId { load() }
+      return
+    }
     let status = HostConnectionPresentation(session.connectionState)
     var title = AttributedString("● ", attributes: AttributeContainer([.foregroundColor: status.dot, .font: UIFont.systemFont(ofSize: 11)]))
     title += AttributedString(session.name, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 16)]))

@@ -6,7 +6,7 @@ import Observation
 @MainActor
 @Observable
 public final class HostSession {
-  public let host: PairedHost
+  public private(set) var host: PairedHost
   public let api: HostAPI
 
   public private(set) var connectionState: ConnectionState = .disconnected
@@ -18,6 +18,10 @@ public final class HostSession {
   /// True until the first workspace list arrives.
   public private(set) var isLoading = true
   public private(set) var loadError: String?
+  /// Every step of dialing this desktop since the app started, oldest first, for Network diagnostics.
+  public private(set) var connectionLog: [ConnectionLogEntry] = []
+  /// When the connection last came up, for the diagnostics report.
+  public private(set) var lastConnectedAt: Date?
 
   @ObservationIgnored private var catalog = WorktreeCatalog()
   @ObservationIgnored private var tasks: [Task<Void, Never>] = []
@@ -82,6 +86,17 @@ public final class HostSession {
     }
     let connection = api.connection
     tasks.append(Task { [weak self] in
+      for await entry in await connection.logEvents() {
+        guard let self else {
+          return
+        }
+        self.connectionLog.append(entry)
+        if self.connectionLog.count > OrcaConnection.logLimit {
+          self.connectionLog.removeFirst()
+        }
+      }
+    })
+    tasks.append(Task { [weak self] in
       await connection.start()
       for await state in await connection.states() {
         guard let self else {
@@ -91,6 +106,7 @@ public final class HostSession {
         self.connectionState = state
         self.path = await connection.path
         if state == .connected, !wasConnected {
+          self.lastConnectedAt = Date()
           self.connected()
         }
       }
@@ -133,8 +149,20 @@ public final class HostSession {
     repos.first { $0.id == id }
   }
 
+  /// The name this phone gave the desktop, else the one it reports.
   public var name: String {
-    status?.machineName ?? host.name
+    host.personalName ?? status?.machineName ?? host.name
+  }
+
+  /// Edit host saved this host: a new address redials on it.
+  public func update(_ host: PairedHost) {
+    let endpointChanged = host.endpoint != self.host.endpoint
+    self.host = host
+    guard endpointChanged else {
+      return
+    }
+    let connection = api.connection
+    Task { await connection.updateEndpoint(host.endpoint) }
   }
 
   private func connected() {

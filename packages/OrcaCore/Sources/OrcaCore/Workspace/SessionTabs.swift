@@ -113,6 +113,8 @@ public struct HostStatus: Sendable, Equatable {
   public var hostModel: String?
   public var capabilities: Set<String>
   public var pairedDeviceId: String?
+  /// The desktop has its Floating Workspace turned on (host-status-gates.ts): only an explicit true counts.
+  public var floatingWorkspaceEnabled: Bool
 
   public init(_ json: JSONValue) {
     machineName = json["machineName"]?.stringValue
@@ -121,6 +123,7 @@ public struct HostStatus: Sendable, Equatable {
     hostKind = json["hostMachine"]?["kind"]?.stringValue
     hostModel = json["hostMachine"]?["model"]?.stringValue
     pairedDeviceId = json["pairedDeviceId"]?.stringValue
+    floatingWorkspaceEnabled = json["floatingWorkspaceEnabled"]?.boolValue == true
     // One bad entry drops the whole list, as the official client does: a partial list would
     // silently disable features the host does have.
     let entries = json["capabilities"]?.arrayValue ?? []

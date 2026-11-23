@@ -5,6 +5,8 @@ import Security
 public struct PairedHost: Sendable, Equatable, Codable, Identifiable {
   public var id: UUID
   public var name: String
+  /// The name this phone gives the desktop (Edit host); nil shows the name the desktop reports.
+  public var personalName: String?
   public var endpoint: String
   public var deviceToken: String
   public var publicKeyB64: String

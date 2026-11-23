@@ -43,6 +43,8 @@ final class HostViewController: UIViewController {
     navigationItem.largeTitleDisplayMode = .always
     navigationItem.rightBarButtonItem = UIBarButtonItem(
       image: Lucide.ellipsis.image(size: 20, strokeWidth: 2), menu: hostMenu())
+    navigationItem.rightBarButtonItem?.accessibilityLabel = String(
+      localized: "hostScreen.hostScreenHeader.moreActions", defaultValue: "More actions")
 
     search.searchBar.placeholder = String(
       localized: "hostScreen.hostBottomBar.searchWorkspaces", defaultValue: "Search workspaces")
@@ -94,6 +96,8 @@ final class HostViewController: UIViewController {
       NSAttributedString(
         string: line, attributes: [.foregroundColor: status.connected ? Palette.textSecondary : status.labelColor]))
     navigationItem.attributedSubtitle = AttributedString(subtitle)
+    // The menu follows the connection, the host's bots and its Floating Workspace setting.
+    navigationItem.rightBarButtonItem?.menu = hostMenu()
     if status.connected, !workspaceViewLoaded { loadWorkspaceView() }
     applySnapshot()
   }
@@ -393,25 +397,66 @@ final class HostViewController: UIViewController {
 
   // MARK: Menus
 
+  /// The ⋯ menu (host-screen-header.tsx): this desktop's pages, then the saved host's own settings.
   private func hostMenu() -> UIMenu {
-    UIMenu(children: [
-      UIAction(
-        title: String(localized: "hostScreen.hostScreenHeader.tasks", defaultValue: "Tasks"),
-        image: Lucide.listTodo.image(size: 18)) { [weak self] _ in self?.openTasks() },
-      UIAction(
-        title: String(localized: "hostScreen.hostScreenHeader.automations", defaultValue: "Automations"),
-        image: Lucide.calendarClock.image(size: 18)) { [weak self] _ in self?.openTab(.automations) },
-      UIAction(
-        title: String(localized: "hostScreen.hostScreenHeader.accounts", defaultValue: "Accounts"),
-        image: Lucide.userRound.image(size: 18)) { [weak self] _ in self?.openTab(.usage) },
-      UIMenu(
-        options: .displayInline,
-        children: [
-          UIAction(
-            title: String(localized: "hostScreen.hostScreenHeader.reconnect", defaultValue: "Reconnect"),
-            image: Lucide.refreshCw.image(size: 18)) { [weak self] _ in self?.session.nudge() }
-        ]),
-    ])
+    let connected = session.connectionState == .connected
+    func item(_ title: String, _ icon: Lucide, needsConnection: Bool = true, _ action: @escaping (HostViewController) -> Void) -> UIAction {
+      let item = UIAction(title: title, image: icon.image(size: 18)) { [weak self] _ in
+        guard let self else { return }
+        action(self)
+      }
+      if needsConnection, !connected { item.attributes = .disabled }
+      return item
+    }
+    var navigation = [
+      item(String(localized: "hostScreen.hostScreenHeader.tasks", defaultValue: "Tasks"), .list) { $0.openTasks() },
+      item(String(localized: "hostScreen.hostScreenHeader.automations", defaultValue: "Automations"), .calendarClock) {
+        $0.push(AutomationsViewController(hostId: $0.session.host.id))
+      },
+      item(String(localized: "hostScreen.hostScreenHeader.accounts", defaultValue: "Accounts"), .userCircle) {
+        $0.push(UsageViewController(hostId: $0.session.host.id))
+      },
+    ]
+    // The desktop's own bot links, once it lists bots.
+    if session.bots.enabled {
+      navigation.append(
+        item(String(localized: "hostScreen.hostScreenHeader.sharedLinks", defaultValue: "Shared links"), .link) {
+          $0.present(HostSharedLinksViewController.sheet(session: $0.session), animated: true)
+        })
+    }
+    if session.status?.floatingWorkspaceEnabled == true {
+      navigation.append(
+        item(String(localized: "hostScreen.hostScreenHeader.floatingWorkspace", defaultValue: "Floating Workspace"), .squareTerminal) {
+          $0.openFloatingWorkspace()
+        })
+    }
+    // Unlike the pages above, these work on the saved host, so they stay offered while disconnected.
+    let host = [
+      item(String(localized: "hostScreen.hostListActionSheetActions.editHost", defaultValue: "Edit host"), .edit3, needsConnection: false) {
+        $0.push(EditHostViewController(session: $0.session))
+      },
+      item(
+        String(localized: "hostScreen.hostListActionSheetActions.networkDiagnostics", defaultValue: "Network diagnostics"), .activity,
+        needsConnection: false
+      ) { $0.push(NetworkDiagnosticsViewController(session: $0.session)) },
+    ]
+    var groups = [UIMenu(options: .displayInline, children: navigation), UIMenu(options: .displayInline, children: host)]
+    // The official header offers Reconnect beside the status line during an outage; the bar's subtitle can't hold a button.
+    if !connected, session.connectionState != .authFailed {
+      groups.append(
+        UIMenu(
+          options: .displayInline,
+          children: [
+            item(String(localized: "hostScreen.hostScreenHeader.reconnect", defaultValue: "Reconnect"), .refreshCw, needsConnection: false) {
+              $0.session.nudge()
+            }
+          ]))
+    }
+    return UIMenu(children: groups)
+  }
+
+  private func push(_ controller: UIViewController) {
+    navigationController?.pushViewController(controller, animated: true)
   }
 
   /// This desktop's issues and reviews; making a workspace from one opens it.
@@ -423,9 +468,11 @@ final class HostViewController: UIViewController {
     navigationController?.pushViewController(tasks, animated: true)
   }
 
-  /// Automations and Accounts live in their own tabs; this desktop is the one they open on.
-  private func openTab(_ tab: HomeTab) {
-    (tabBarController as? HomeTabController)?.open(tab, hostId: session.host.id)
+  /// The desktop's Floating Workspace (session/floating-workspace.ts): a synthetic workspace with no repo behind it.
+  private func openFloatingWorkspace() {
+    let floating = SessionViewController(session: session, worktreeId: "global-floating-terminal")
+    floating.fallbackTitle = String(localized: "session.floatingWorkspace.title", defaultValue: "Floating Workspace")
+    push(floating)
   }
 
   private func open(_ worktree: Worktree) {

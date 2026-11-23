@@ -21,6 +21,8 @@ final class SessionViewController: UIViewController {
 
   /// The chat to bring to the front once the tabs arrive, as an item or a past session asked.
   private var focusSessionId: String?
+  /// The title for a workspace the list doesn't carry, such as the Floating Workspace.
+  var fallbackTitle: String?
 
   init(session: HostSession, worktreeId: String, sessionId: String? = nil) {
     self.session = session
@@ -117,7 +119,7 @@ final class SessionViewController: UIViewController {
   override func updateProperties() {
     super.updateProperties()
     let worktree = session.worktree(id: worktreeId)
-    title = worktree?.displayName
+    title = worktree?.displayName ?? fallbackTitle
     let status = HostConnectionPresentation(session.connectionState)
     // "● 正在工作 · main": what the agent is doing in words, then the branch; offline, the connection's state.
     let state = shownState(worktree)

@@ -14,15 +14,27 @@ final class UsageViewController: UIViewController {
   private var loadedAt: Date?
   private var loading = false
   private var refresh: UIBarButtonItem!
+  /// Set when a desktop's ⋯ menu opened this page (`/h/<id>/accounts`): that desktop only, no picker.
+  private let pinnedHostId: PairedHost.ID?
+
+  init(hostId: PairedHost.ID? = nil) {
+    pinnedHostId = hostId
+    self.hostId = hostId
+    super.init(nibName: nil, bundle: nil)
+    hidesBottomBarWhenPushed = hostId != nil
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
   override func viewDidLoad() {
     super.viewDidLoad()
     NotificationCenter.default.addObserver(forName: UsagePercentageDisplay.changed, object: nil, queue: .main) { [weak self] _ in
       MainActor.assumeIsolated { self?.render() }
     }
-    title = HomeTab.usage.title
+    title =
+      pinnedHostId == nil ? HomeTab.usage.title : String(localized: "hostScreen.hostScreenHeader.accounts", defaultValue: "Accounts")
     view.backgroundColor = Palette.bgBase
-    navigationItem.largeTitleDisplayMode = .always
+    navigationItem.largeTitleDisplayMode = pinnedHostId == nil ? .always : .never
     refresh = UIBarButtonItem(
       image: Lucide.refreshCw.image(size: 20, strokeWidth: 2), primaryAction: UIAction { [weak self] _ in self?.load() })
     refresh.accessibilityLabel = String(localized: "home.usage.refresh", defaultValue: "Refresh usage")
@@ -52,7 +64,7 @@ final class UsageViewController: UIViewController {
   override func updateProperties() {
     super.updateProperties()
     let hosts = model.orderedHosts
-    if hostId == nil || !hosts.contains(where: { $0.id == hostId }) {
+    if pinnedHostId == nil, hostId == nil || !hosts.contains(where: { $0.id == hostId }) {
       hostId = hosts.first?.id
       stats = nil
       accounts = nil
@@ -87,7 +99,32 @@ final class UsageViewController: UIViewController {
   private func render() {
     stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
     guard let session else { return }
+    if pinnedHostId != nil {
+      navigationItem.subtitle = session.name
+    } else {
+      addHostPicker(session)
+    }
 
+    stack.addArrangedSubview(heading(String(localized: "home.stats.heading", defaultValue: "Your stats"), aside: nil, top: 20))
+    stack.addArrangedSubview(StatsCard(stats: stats))
+
+    for (provider, label, mark) in [("claude", "Claude Code", AgentMark.claude), ("codex", "Codex", AgentMark.codex)] {
+      // A provider shows once the desktop has limits for it (home-usage-cards.ts).
+      guard let accounts, let entry = provider == "claude" ? accounts.claude : accounts.codex as ProviderAccounts?,
+        entry.usage?.session != nil || entry.usage?.weekly != nil || entry.usage?.fableWeekly != nil
+      else { continue }
+      let aside = entry.usage?.updatedAt.map { updated -> String in
+        let seconds = Date().timeIntervalSince1970 - updated / 1000
+        guard seconds >= 60 else { return String(localized: "home.usage.updatedJustNow", defaultValue: "Updated just now") }
+        return String(
+          format: String(localized: "home.usage.updatedAgo", defaultValue: "Updated %1$@ ago"), RelativeTime.short(updated) ?? "")
+      }
+      stack.addArrangedSubview(heading(label, aside: aside, top: 28))
+      stack.addArrangedSubview(AccountCard(provider: entry, mark: mark))
+    }
+  }
+
+  private func addHostPicker(_ session: HostSession) {
     // The desktop picker: a glass pill with the connection dot, choosing between paired desktops.
     let status = HostConnectionPresentation(session.connectionState)
     var title = AttributedString("● ", attributes: AttributeContainer([.foregroundColor: status.dot, .font: UIFont.systemFont(ofSize: 11)]))
@@ -113,24 +150,6 @@ final class UsageViewController: UIViewController {
       hostButton.bottomAnchor.constraint(equalTo: hostRow.bottomAnchor),
     ])
     stack.addArrangedSubview(hostRow)
-
-    stack.addArrangedSubview(heading(String(localized: "home.stats.heading", defaultValue: "Your stats"), aside: nil, top: 20))
-    stack.addArrangedSubview(StatsCard(stats: stats))
-
-    for (provider, label, mark) in [("claude", "Claude Code", AgentMark.claude), ("codex", "Codex", AgentMark.codex)] {
-      // A provider shows once the desktop has limits for it (home-usage-cards.ts).
-      guard let accounts, let entry = provider == "claude" ? accounts.claude : accounts.codex as ProviderAccounts?,
-        entry.usage?.session != nil || entry.usage?.weekly != nil || entry.usage?.fableWeekly != nil
-      else { continue }
-      let aside = entry.usage?.updatedAt.map { updated -> String in
-        let seconds = Date().timeIntervalSince1970 - updated / 1000
-        guard seconds >= 60 else { return String(localized: "home.usage.updatedJustNow", defaultValue: "Updated just now") }
-        return String(
-          format: String(localized: "home.usage.updatedAgo", defaultValue: "Updated %1$@ ago"), RelativeTime.short(updated) ?? "")
-      }
-      stack.addArrangedSubview(heading(label, aside: aside, top: 28))
-      stack.addArrangedSubview(AccountCard(provider: entry, mark: mark))
-    }
   }
 
   private func heading(_ text: String, aside: String?, top: CGFloat) -> UIView {
