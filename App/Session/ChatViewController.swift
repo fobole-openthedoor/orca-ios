@@ -1,3 +1,4 @@
+import TipKit
 import OrcaCore
 import PhotosUI
 import SafariServices
@@ -8,6 +9,8 @@ import UniformTypeIdentifiers
 final class ChatViewController: UIViewController {
   let model: ChatSessionModel
   private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: Self.layout())
+  /// Runs under the navigation bar and the tab strip, which blur it with the soft scroll edge.
+  var edgeScrollView: UIScrollView { collection }
   private var dataSource: UICollectionViewDiffableDataSource<Int, ChatLine>!
   private let composer = ChatComposerView()
   private let dock = ChatDockView()
@@ -401,7 +404,7 @@ final class ChatViewController: UIViewController {
   /// shell's command and its output so far. Matched by call id, by the id a background shell's output names,
   /// or by the label the strip shows; older pages are read in until it turns up. Without a match the task's
   /// own facts show.
-  private func openBackgroundTask(_ task: BackgroundTask) {
+  private func openBackgroundTask(_ task: OrcaCore.BackgroundTask) {
     // A subagent's own words and calls, when the journal carries them under its id.
     let own = task.kind == "agent" ? model.subagentItems(task.id) : []
     if !own.isEmpty {
@@ -434,7 +437,7 @@ final class ChatViewController: UIViewController {
       }, alwaysLoad: true), animated: true)
   }
 
-  private func backgroundTaskCall(_ task: BackgroundTask) -> (String, TranscriptItem.ToolCall)? {
+  private func backgroundTaskCall(_ task: OrcaCore.BackgroundTask) -> (String, TranscriptItem.ToolCall)? {
     let label = task.label.trimmingCharacters(in: .whitespacesAndNewlines)
     for item in model.transcript.items.reversed() {
       guard case .toolCall(let call) = item.body else { continue }
@@ -467,7 +470,7 @@ final class ChatViewController: UIViewController {
   }
 
   /// What the strip knows of a task whose starting call is out of reach: its label, kind and running time.
-  private static func placeholderCall(for task: BackgroundTask) -> TranscriptItem.ToolCall {
+  private static func placeholderCall(for task: OrcaCore.BackgroundTask) -> TranscriptItem.ToolCall {
     var facts = [task.kind]
     if let started = task.startedAt, started > 0 {
       facts.append(WorkSummaryView.duration(max(1, Int(Date().timeIntervalSince1970 - started / 1000))))
@@ -971,6 +974,33 @@ final class ChatViewController: UIViewController {
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     if followsBottom { scrollToBottom(animated: false) }
+    watchSendTip()
+  }
+
+  private var tipTask: Task<Void, Never>?
+
+  /// The send hint, the first time any chat shows; its Settings button opens Chat UI settings.
+  private func watchSendTip() {
+    guard tipTask == nil else { return }
+    let tip = SendHoldTip()
+    tipTask = Task { [weak self] in
+      for await shows in tip.shouldDisplayUpdates {
+        guard let self else { return }
+        if shows, self.presentedViewController == nil, self.view.window != nil {
+          let popover = TipUIPopoverViewController(tip, sourceItem: self.composer.sendAnchor) { [weak self] action in
+            self?.dismiss(animated: true)
+            if action.id == "settings" {
+              self?.navigationController?.pushViewController(OrcaIOSSettingsViewController(), animated: true)
+            }
+            tip.invalidate(reason: .actionPerformed)
+          }
+          popover.popoverPresentationController?.permittedArrowDirections = .down
+          self.present(popover, animated: true)
+        } else if !shows, self.presentedViewController is TipUIPopoverViewController {
+          self.dismiss(animated: true)
+        }
+      }
+    }
   }
 
   private var distanceFromBottom: CGFloat {

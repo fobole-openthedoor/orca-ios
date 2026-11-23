@@ -35,6 +35,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private let surface = UIVisualEffectView()
   private let attach = UIButton(configuration: .glass())
   let modelChip = UIButton(configuration: .glass())
+  /// Where hints about sending point.
+  var sendAnchor: UIView { sendButton }
   /// How full the context window is; the chat opens the breakdown from it.
   let contextRing = ContextRingButton()
   private let mic = UIButton(configuration: .plain())
@@ -153,7 +155,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
     grabberArea.accessibilityLabel = String(localized: "orcaios.composer.fullScreen", defaultValue: "Full screen editor")
     textView.onHardwareReturn = { [weak self] in
       guard self?.sendButton.action == .send else { return }
-      self?.send(queue: false)
+      self?.send(queue: (self?.working ?? false) && SendWhileWorking.current == .queue)
     }
     // The text sits under the attachment chips when there are any.
     textTop = textView.topAnchor.constraint(equalTo: surface.contentView.topAnchor, constant: Spacing.md + 2)
@@ -412,7 +414,8 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private func primaryTapped() {
     switch sendButton.action {
     case .send:
-      send(queue: false)
+      // While the agent works, a tap sends the way Settings › Chat UI says.
+      send(queue: working && SendWhileWorking.current == .queue)
     case .stop:
       UIImpactFeedbackGenerator(style: .medium).impactOccurred()
       sendButton.set(.loading)
@@ -785,7 +788,8 @@ extension ChatComposerView: UIContextMenuInteractionDelegate {
         subtitle: String(localized: "chat.composer.sendQueueHint", defaultValue: "Runs after the current turn"),
         image: Lucide.listEnd.image(size: 18)
       ) { _ in self?.send(queue: true) }
-      return UIMenu(children: [queue, steer])
+      // The tap's own way last, nearest the finger, so the hold offers the other first.
+      return UIMenu(children: SendWhileWorking.current == .queue ? [steer, queue] : [queue, steer])
     })
   }
 }

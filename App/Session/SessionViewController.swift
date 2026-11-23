@@ -8,6 +8,7 @@ final class SessionViewController: UIViewController {
   private let worktreeId: String
   private let strip = SessionTabStrip()
   private let content = UIView()
+  private let stripEdge = UIScrollEdgeElementContainerInteraction()
   private var tabs = SessionTabs()
   private var tabsTask: Task<Void, Never>?
   private var shownTabId: String?
@@ -78,6 +79,8 @@ final class SessionViewController: UIViewController {
       self.run { try await api.closeTab(tab.id, worktree: selector) }
     }
     strip.newTabMenu = { [weak self] in self?.newTabMenu() ?? UIMenu() }
+    stripEdge.edge = .top
+    strip.addInteraction(stripEdge)
     content.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(content)
     view.addSubview(strip)
@@ -85,7 +88,8 @@ final class SessionViewController: UIViewController {
       strip.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
       strip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       strip.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-      content.topAnchor.constraint(equalTo: strip.bottomAnchor),
+      // Under the bar and the strip: a chat scrolls beneath both and the soft edge fades it.
+      content.topAnchor.constraint(equalTo: view.topAnchor),
       content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
       content.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -256,7 +260,17 @@ final class SessionViewController: UIViewController {
     }
     addChild(next)
     content.addSubview(next.view)
-    next.view.pin(to: content)
+    next.view.translatesAutoresizingMaskIntoConstraints = false
+    let chat = (next as? ChatViewController)?.edgeScrollView
+    NSLayoutConstraint.activate([
+      next.view.topAnchor.constraint(equalTo: chat != nil ? content.topAnchor : strip.bottomAnchor),
+      next.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+      next.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+      next.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+    ])
+    // A chat starts below the strip and scrolls under it; the strip joins the bar's soft edge.
+    next.additionalSafeAreaInsets.top = chat != nil ? SessionTabStrip.height : 0
+    stripEdge.scrollView = chat
     next.didMove(toParent: self)
     current = next
   }

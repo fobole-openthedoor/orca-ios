@@ -38,6 +38,9 @@ final class SettingsViewController: UITableViewController {
           icon: .messageSquare, title: String(localized: "settings.menuItems.chatUi", defaultValue: "Chat UI"),
           opens: { ChatUISettingsViewController() }),
         Row(
+          icon: .smartphone, title: String(localized: "orcaios.settings.title", defaultValue: "Orca iOS"),
+          opens: { OrcaIOSSettingsViewController() }),
+        Row(
           icon: .globe, title: String(localized: "settings.menuItems.browser", defaultValue: "Browser"),
           opens: { BrowserSettingsViewController() }),
         Row(

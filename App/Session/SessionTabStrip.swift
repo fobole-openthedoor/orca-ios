@@ -28,7 +28,6 @@ final class SessionTabStrip: UIView {
   init() {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
-    backgroundColor = Palette.bgBase
 
     capsule.cornerConfiguration = .capsule()
     capsule.translatesAutoresizingMaskIntoConstraints = false

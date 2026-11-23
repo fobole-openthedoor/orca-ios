@@ -89949,6 +89949,75 @@
         }
       }
     },
+    "orcaios.chat.sendFooter": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "While the agent works, tapping send does this; holding send offers the other."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "智能体工作时，轻点发送按这里的方式发出；长按发送可以选另一种。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理工作時，輕點傳送按這裡的方式送出；長按傳送可以選另一種。"
+          }
+        }
+      }
+    },
+    "orcaios.chat.sendHeading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SENDING"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发送"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "傳送"
+          }
+        }
+      }
+    },
+    "orcaios.chat.sendWhileWorking": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send while working"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工作中点发送"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工作中點傳送"
+          }
+        }
+      }
+    },
     "orcaios.chat.submit": {
       "extractionState": "manual",
       "localizations": {
@@ -90468,6 +90537,144 @@
         }
       }
     },
+    "orcaios.settings.activityFooter": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A working agent shows on the Lock Screen and in the Dynamic Island until it stops."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "智能体工作时显示在锁定屏幕和灵动岛上，停下后消失。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理工作時顯示在鎖定畫面和動態島上，停下後消失。"
+          }
+        }
+      }
+    },
+    "orcaios.settings.activityHeading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LIVE ACTIVITIES"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "实时活动"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "即時動態"
+          }
+        }
+      }
+    },
+    "orcaios.settings.activityToggle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show working agents"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示工作中的智能体"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "顯示工作中的代理"
+          }
+        }
+      }
+    },
+    "orcaios.settings.pipFooter": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens only while the agent works. The session's ⋯ menu opens it at any time."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只在智能体工作时自动打开；会话的 ⋯ 菜单随时可以手动打开。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只在代理工作時自動開啟；工作階段的 ⋯ 選單隨時可以手動開啟。"
+          }
+        }
+      }
+    },
+    "orcaios.settings.pipHeading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PICTURE IN PICTURE"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画中画"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子母畫面"
+          }
+        }
+      }
+    },
+    "orcaios.settings.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca iOS"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca iOS"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca iOS"
+          }
+        }
+      }
+    },
     "orcaios.sourceControl.stage": {
       "extractionState": "manual",
       "localizations": {
@@ -90579,6 +90786,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$lld 週"
+          }
+        }
+      }
+    },
+    "orcaios.tip.openSettings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "去设置"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前往設定"
+          }
+        }
+      }
+    },
+    "orcaios.tip.sendMessage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "While the agent works, hold send to queue your message for after this turn. Prefer the other way? Change it in Settings."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "智能体工作时，长按发送可以把消息排到这一轮之后。想换成默认排队？可以去设置里改。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理工作時，長按傳送可以把訊息排到這一輪之後。想改成預設排隊？可以到設定裡改。"
+          }
+        }
+      }
+    },
+    "orcaios.tip.sendTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold to queue"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "长按加入队列"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "長按加入佇列"
           }
         }
       }
@@ -90717,6 +90993,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "所有已配對的桌面及其儲存的憑證都會從這支手機上移除。之後可以重新配對。"
+          }
+        }
+      }
+    },
+    "orcaios.usage.resetsInDays": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resets in %1$@d %2$@h"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 天 %2$@ 小时后重置"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 天 %2$@ 小時後重置"
           }
         }
       }

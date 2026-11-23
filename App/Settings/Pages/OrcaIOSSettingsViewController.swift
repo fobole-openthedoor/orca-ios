@@ -1,0 +1,59 @@
+import UIKit
+
+/// Settings › Orca iOS: what only this app does, beyond the official one. Sending while an agent works,
+/// picture in picture, and Live Activities. All kept on this phone.
+final class OrcaIOSSettingsViewController: SettingsPageViewController {
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    title = String(localized: "orcaios.settings.title", defaultValue: "Orca iOS")
+    rebuild()
+  }
+
+  private func rebuild() {
+    let send = SendWhileWorking.current
+    sections = [
+      Section(
+        header: String(localized: "orcaios.chat.sendHeading", defaultValue: "SENDING"),
+        footer: String(
+          localized: "orcaios.chat.sendFooter",
+          defaultValue: "While the agent works, tapping send does this; holding send offers the other."),
+        rows: [
+          .menu(
+            title: String(localized: "orcaios.chat.sendWhileWorking", defaultValue: "Send while working"),
+            value: send.title,
+            options: SendWhileWorking.allCases.map { choice in
+              Option(title: choice.title, subtitle: choice.subtitle, selected: choice == send) { [weak self] in
+                SendWhileWorking.current = choice
+                self?.rebuild()
+              }
+            })
+        ]),
+      Section(
+        header: String(localized: "orcaios.settings.pipHeading", defaultValue: "PICTURE IN PICTURE"),
+        footer: String(
+          localized: "orcaios.settings.pipFooter",
+          defaultValue: "Opens only while the agent works. The session's ⋯ menu opens it at any time."),
+        rows: [
+          .toggle(
+            title: String(localized: "orcaios.pip.onLeave", defaultValue: "Picture in Picture on leaving"),
+            isOn: PiPCenter.startsOnLeave
+          ) { on in PiPCenter.startsOnLeave = on },
+          .toggle(
+            title: String(localized: "orcaios.pip.commands", defaultValue: "Show each command in Picture in Picture"),
+            isOn: PiPCenter.showsCommands
+          ) { on in PiPCenter.showsCommands = on },
+        ]),
+      Section(
+        header: String(localized: "orcaios.settings.activityHeading", defaultValue: "LIVE ACTIVITIES"),
+        footer: String(
+          localized: "orcaios.settings.activityFooter",
+          defaultValue: "A working agent shows on the Lock Screen and in the Dynamic Island until it stops."),
+        rows: [
+          .toggle(
+            title: String(localized: "orcaios.settings.activityToggle", defaultValue: "Show working agents"),
+            isOn: AgentActivityCenter.enabled
+          ) { on in AgentActivityCenter.enabled = on }
+        ]),
+    ]
+  }
+}

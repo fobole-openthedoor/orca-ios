@@ -1,3 +1,4 @@
+import TipKit
 import OrcaCore
 import UIKit
 
@@ -7,6 +8,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     _ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     ScrollEdges.install()
+    try? Tips.configure()
     return true
   }
 

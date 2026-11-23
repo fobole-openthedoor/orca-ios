@@ -322,9 +322,15 @@ private final class UsageBarRow: UIView {
     guard minutes >= 60 else {
       return String(format: String(localized: "orcaios.usage.resetsInMinutes", defaultValue: "Resets in %1$@m"), "\(minutes)")
     }
+    // A day or more counts days and hours: "6 天 23 小时后重置", not 167 hours.
+    guard minutes >= 24 * 60 else {
+      return String(
+        format: String(localized: "orcaios.usage.resetsInHours", defaultValue: "Resets in %1$@h %2$@m"), "\(minutes / 60)",
+        "\(minutes % 60)")
+    }
     return String(
-      format: String(localized: "orcaios.usage.resetsInHours", defaultValue: "Resets in %1$@h %2$@m"), "\(minutes / 60)",
-      "\(minutes % 60)")
+      format: String(localized: "orcaios.usage.resetsInDays", defaultValue: "Resets in %1$@d %2$@h"), "\(minutes / (24 * 60))",
+      "\(minutes / 60 % 24)")
   }
 }
 

@@ -17,7 +17,10 @@
         "previous": "Previous",
         "next": "Next",
         "chooseAny": "Choose any that apply",
-        "cancelled": "Cancelled"
+        "cancelled": "Cancelled",
+        "sendHeading": "SENDING",
+        "sendFooter": "While the agent works, tapping send does this; holding send offers the other.",
+        "sendWhileWorking": "Send while working"
       },
       "dictation": {
         "denied": "Allow Microphone and Speech Recognition for Orca in Settings.",
@@ -61,7 +64,8 @@
       },
       "usage": {
         "resetsInHours": "Resets in {{hours}}h {{minutes}}m",
-        "resetsInMinutes": "Resets in {{minutes}}m"
+        "resetsInMinutes": "Resets in {{minutes}}m",
+        "resetsInDays": "Resets in {{days}}d {{hours}}h"
       },
       "imageViewer": {
         "unavailable": "Couldn't load this image"
@@ -88,6 +92,19 @@
       },
       "host": {
         "projectFolder": "Project folder"
+      },
+      "tip": {
+        "sendTitle": "Hold to queue",
+        "sendMessage": "While the agent works, hold send to queue your message for after this turn. Prefer the other way? Change it in Settings.",
+        "openSettings": "Settings"
+      },
+      "settings": {
+        "title": "Orca iOS",
+        "pipHeading": "PICTURE IN PICTURE",
+        "pipFooter": "Opens only while the agent works. The session's ⋯ menu opens it at any time.",
+        "activityHeading": "LIVE ACTIVITIES",
+        "activityFooter": "A working agent shows on the Lock Screen and in the Dynamic Island until it stops.",
+        "activityToggle": "Show working agents"
       }
     }
   },
@@ -109,7 +126,10 @@
         "previous": "上一题",
         "next": "下一题",
         "chooseAny": "可多选",
-        "cancelled": "已取消"
+        "cancelled": "已取消",
+        "sendHeading": "发送",
+        "sendFooter": "智能体工作时，轻点发送按这里的方式发出；长按发送可以选另一种。",
+        "sendWhileWorking": "工作中点发送"
       },
       "dictation": {
         "denied": "请在“设置”中允许 Orca 使用麦克风和语音识别。",
@@ -153,7 +173,8 @@
       },
       "usage": {
         "resetsInHours": "{{hours}} 小时 {{minutes}} 分钟后重置",
-        "resetsInMinutes": "{{minutes}} 分钟后重置"
+        "resetsInMinutes": "{{minutes}} 分钟后重置",
+        "resetsInDays": "{{days}} 天 {{hours}} 小时后重置"
       },
       "imageViewer": {
         "unavailable": "无法加载这张图片"
@@ -180,6 +201,19 @@
       },
       "host": {
         "projectFolder": "项目目录"
+      },
+      "tip": {
+        "sendTitle": "长按加入队列",
+        "sendMessage": "智能体工作时，长按发送可以把消息排到这一轮之后。想换成默认排队？可以去设置里改。",
+        "openSettings": "去设置"
+      },
+      "settings": {
+        "title": "Orca iOS",
+        "pipHeading": "画中画",
+        "pipFooter": "只在智能体工作时自动打开；会话的 ⋯ 菜单随时可以手动打开。",
+        "activityHeading": "实时活动",
+        "activityFooter": "智能体工作时显示在锁定屏幕和灵动岛上，停下后消失。",
+        "activityToggle": "显示工作中的智能体"
       }
     },
     "overrides": {
@@ -223,7 +257,10 @@
         "previous": "上一題",
         "next": "下一題",
         "chooseAny": "可複選",
-        "cancelled": "已取消"
+        "cancelled": "已取消",
+        "sendHeading": "傳送",
+        "sendFooter": "代理工作時，輕點傳送按這裡的方式送出；長按傳送可以選另一種。",
+        "sendWhileWorking": "工作中點傳送"
       },
       "dictation": {
         "denied": "請在「設定」中允許 Orca 使用麥克風和語音辨識。",
@@ -267,7 +304,8 @@
       },
       "usage": {
         "resetsInHours": "{{hours}} 小時 {{minutes}} 分鐘後重置",
-        "resetsInMinutes": "{{minutes}} 分鐘後重置"
+        "resetsInMinutes": "{{minutes}} 分鐘後重置",
+        "resetsInDays": "{{days}} 天 {{hours}} 小時後重置"
       },
       "imageViewer": {
         "unavailable": "無法載入這張圖片"
@@ -294,6 +332,19 @@
       },
       "host": {
         "projectFolder": "專案目錄"
+      },
+      "tip": {
+        "sendTitle": "長按加入佇列",
+        "sendMessage": "代理工作時，長按傳送可以把訊息排到這一輪之後。想改成預設排隊？可以到設定裡改。",
+        "openSettings": "前往設定"
+      },
+      "settings": {
+        "title": "Orca iOS",
+        "pipHeading": "子母畫面",
+        "pipFooter": "只在代理工作時自動開啟；工作階段的 ⋯ 選單隨時可以手動開啟。",
+        "activityHeading": "即時動態",
+        "activityFooter": "代理工作時顯示在鎖定畫面和動態島上，停下後消失。",
+        "activityToggle": "顯示工作中的代理"
       }
     }
   }

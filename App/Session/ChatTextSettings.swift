@@ -165,3 +165,30 @@ final class ChatTextSettingsController: UITableViewController {
     return cell
   }
 }
+
+/// What tapping send does while the agent is working: steer into the running turn (the default) or queue
+/// the message for after it. Holding send always offers the other.
+enum SendWhileWorking: String, CaseIterable {
+  case steer, queue
+
+  private static let key = "orca.chat.sendWhileWorking"
+
+  static var current: SendWhileWorking {
+    get { UserDefaults.standard.string(forKey: key).flatMap(SendWhileWorking.init) ?? .steer }
+    set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+  }
+
+  var title: String {
+    switch self {
+    case .steer: String(localized: "chat.composer.sendSteer", defaultValue: "Steer")
+    case .queue: String(localized: "chat.composer.sendQueue", defaultValue: "Queue")
+    }
+  }
+
+  var subtitle: String {
+    switch self {
+    case .steer: String(localized: "chat.composer.sendSteerHint", defaultValue: "Goes into what the agent is doing now")
+    case .queue: String(localized: "chat.composer.sendQueueHint", defaultValue: "Runs after the current turn")
+    }
+  }
+}

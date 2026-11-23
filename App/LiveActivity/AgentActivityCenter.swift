@@ -22,6 +22,16 @@ final class AgentActivityCenter {
   private var activities: [String: Activity<AgentActivityAttributes>] = [:]
   private var lastStates: [String: AgentActivityAttributes.ContentState] = [:]
   private var observing = false
+  private weak var model: AppModel?
+
+  /// Settings › Orca iOS: off, no activity starts and the ones showing end.
+  static var enabled: Bool {
+    get { UserDefaults.standard.object(forKey: "orca.liveActivities.enabled") as? Bool ?? true }
+    set {
+      UserDefaults.standard.set(newValue, forKey: "orca.liveActivities.enabled")
+      if let model = shared.model { shared.sync(model) }
+    }
+  }
 
   private init() {}
 
@@ -29,6 +39,7 @@ final class AgentActivityCenter {
   func start(model: AppModel) {
     guard !observing else { return }
     observing = true
+    self.model = model
     // Adopt activities that outlived the last launch, so they are updated or ended instead of orphaned.
     for activity in Activity<AgentActivityAttributes>.activities { adopt(activity) }
     Task { [weak self] in
@@ -62,7 +73,7 @@ final class AgentActivityCenter {
     var working = Set<String>()
     var known = Set<String>()
     var everyHostConnected = true
-    for host in model.hosts {
+    for host in model.hosts where Self.enabled {
       guard let session = model.session(for: host.id), session.connectionState == .connected else {
         everyHostConnected = false
         continue
@@ -131,7 +142,7 @@ final class AgentActivityCenter {
   func reportChat(
     hostId: UUID, hostName: String, worktree: Worktree, agentType: String?, working: Bool, detail: String?
   ) {
-    guard working else { return }
+    guard working, Self.enabled else { return }
     var agent = Worktree.Agent.placeholder(agentType: agentType)
     agent.state = "working"
     agent.prompt = detail ?? ""
