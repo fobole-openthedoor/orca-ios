@@ -239,6 +239,15 @@ final class SessionViewController: UIViewController {
           let selector = self.selector
           self.run { try await api.createChat(agent: agentType ?? "claude", worktree: selector, forkFrom: (sessionId, itemId)) }
         }
+        chat.onSideQuestion = { [weak self] question, itemId in
+          guard let self else { return }
+          let api = self.session.api
+          let selector = self.selector
+          self.run {
+            try await api.createChat(
+              agent: agentType ?? "claude", worktree: selector, forkFrom: (sessionId, itemId), firstMessage: question)
+          }
+        }
         chats[sessionId] = chat
         next = chat
       }

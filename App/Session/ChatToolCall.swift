@@ -88,11 +88,12 @@ final class ToolCallView: UIView {
 
     let inputText = Self.inputText(call)
     input.show(inputText)
-    input.isHidden = inputText.isEmpty
-    let text = call.output ?? ""
+    input.isHidden = inputText.allSatisfy(\.isWhitespace)
+    // Trailing blank lines (a command's last newline, a cleared screen) draw as empty space under the box.
+    let text = (call.output ?? "").replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
     output.showTerminal(lines.prefix(Self.outputLines).joined(separator: "\n"))
-    output.isHidden = text.isEmpty
+    output.isHidden = text.allSatisfy(\.isWhitespace)
     var parts: [String] = []
     if let exit = call.exitCode { parts.append("exit \(exit)") }
     if let ms = call.durationMs, ms > 0 { parts.append(ms < 1000 ? "\(Int(ms)) ms" : String(format: "%.1f s", ms / 1000)) }

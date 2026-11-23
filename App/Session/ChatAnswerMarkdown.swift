@@ -51,9 +51,62 @@ final class ChatAnswerMarkdownView: UIView {
     invalidateIntrinsicContentSize()
   }
 
+  /// Done typing out a reply that arrived whole.
+  var onRevealFinished: (() -> Void)?
+
+  /// Words that arrive in one piece (or a big jump) type out over a moment, as ChatGPT's do, instead of
+  /// landing as a block. Set by the chat for replies arriving now, not for history scrolled to.
+  var reveals = false
+
+  private var target: (text: String, streaming: Bool, identity: String)?
+  private var revealed = 0
+  private var revealLink: CADisplayLink?
+
   func show(_ raw: String, streaming: Bool, identity: String) {
-    // Trailing blank lines would draw as empty paragraphs under the words.
     let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let fresh = markdown.streamIdentity != AnyHashable(identity)
+    // How far the words already on screen go; a new reply starts from nothing.
+    let from = fresh ? 0 : (revealLink != nil ? revealed : (shown?.count ?? 0))
+    let jump = text.count - from
+    guard reveals, jump > 24 else {
+      stopReveal()
+      apply(text, streaming: streaming, identity: identity)
+      return
+    }
+    target = (text, streaming, identity)
+    revealed = from
+    if fresh { apply("", streaming: true, identity: identity) }
+    if revealLink == nil {
+      let link = CADisplayLink(target: self, selector: #selector(revealStep))
+      link.add(to: .main, forMode: .common)
+      revealLink = link
+    }
+  }
+
+  @objc private func revealStep() {
+    guard let target else { return stopReveal() }
+    let total = target.text.count
+    // Quick: a long reply still finishes in about a second.
+    revealed = min(total, revealed + max(3, Int((Double(total) / 70).rounded(.up))))
+    if revealed >= total {
+      stopReveal()
+      apply(target.text, streaming: target.streaming, identity: target.identity)
+      if !target.streaming { onRevealFinished?() }
+      return
+    }
+    apply(String(target.text.prefix(revealed)), streaming: true, identity: target.identity)
+  }
+
+  private func stopReveal() {
+    revealLink?.invalidate()
+    revealLink = nil
+    target = nil
+  }
+
+  /// Still typing out.
+  var isRevealing: Bool { revealLink != nil }
+
+  private func apply(_ text: String, streaming: Bool, identity: String) {
     let settings = ChatTextSettings.current
     if settings != themeKey {
       themeKey = settings

@@ -603,6 +603,16 @@ final class AnswerView: UIView {
   var onOpenPath: ((String) -> Void)? {
     didSet { body.onOpenPath = onOpenPath }
   }
+  /// Type out what arrives (see ChatAnswerMarkdownView.reveals).
+  var reveals: Bool {
+    get { body.reveals }
+    set { body.reveals = newValue }
+  }
+  var onRevealFinished: (() -> Void)? {
+    didSet { body.onRevealFinished = onRevealFinished }
+  }
+  var isRevealing: Bool { body.isRevealing }
+
   /// Selected words, sent to the composer as a quote.
   var onQuote: ((String) -> Void)? {
     didSet { body.onQuote = onQuote }

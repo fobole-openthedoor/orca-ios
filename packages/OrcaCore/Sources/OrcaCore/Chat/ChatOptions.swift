@@ -157,6 +157,26 @@ public struct ChatCommand: Sendable, Equatable, Identifiable {
 
   public var id: String { kind + ":" + name }
 
+  public init(name: String, kind: String = "command", description: String?, argumentHint: String?) {
+    self.name = name
+    self.kind = kind
+    self.description = description
+    self.argumentHint = argumentHint
+  }
+
+  /// `/side` and its alias `/btw`: a side question asked in a fork beside the chat, never sent to the agent
+  /// (native-chat-side-chat-command.ts).
+  public static let sideChatCommands = ["side", "btw"]
+
+  /// The question of a `/side …` or `/btw …` message; nil for anything else.
+  public static func sideQuestion(_ text: String) -> String? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix("/") else { return nil }
+    let parts = trimmed.dropFirst().split(maxSplits: 1, whereSeparator: \.isWhitespace)
+    guard let name = parts.first, sideChatCommands.contains(name.lowercased()) else { return nil }
+    return parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+  }
+
   init?(_ json: JSONValue) {
     guard let name = json["name"]?.stringValue, !name.isEmpty else {
       return nil
@@ -185,10 +205,4 @@ public struct ChatCommand: Sendable, Equatable, Identifiable {
     }
   }
 
-  init(name: String, kind: String, description: String?, argumentHint: String?) {
-    self.name = name
-    self.kind = kind
-    self.description = description
-    self.argumentHint = argumentHint
-  }
 }

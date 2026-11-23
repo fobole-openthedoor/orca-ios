@@ -158,6 +158,14 @@ import Testing
     #expect(transcript.fence == 4)
   }
 
+  @Test func readsSideQuestions() {
+    #expect(ChatCommand.sideQuestion("/btw is this community run?") == "is this community run?")
+    #expect(ChatCommand.sideQuestion("  /SIDE  why? ") == "why?")
+    #expect(ChatCommand.sideQuestion("/btw") == "")
+    #expect(ChatCommand.sideQuestion("/btwx hi") == nil)
+    #expect(ChatCommand.sideQuestion("btw hi") == nil)
+  }
+
   @MainActor @Test func aSendWithAFileSettlesAgainstItsWordsAndPath() {
     var transcript = ChatTranscript()
     transcript.apply(Self.snapshot)

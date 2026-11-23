@@ -120,10 +120,18 @@ public struct HostAPI: Sendable {
 
   /// Opens a new agent chat tab (`agentSession.create`). A refusal inside the reply is thrown as an RPCError.
   /// `forkFrom` starts it as a copy of another chat through one of its items.
-  public func createChat(agent: String, worktree selector: String, forkFrom: (sessionId: String, throughItemId: String)? = nil) async throws {
+  /// A new chat; with `forkFrom` it holds that one through the item, and `firstMessage` goes in as its first
+  /// question (`/btw`, on hosts with `agentSession.create.message.v1`).
+  public func createChat(
+    agent: String, worktree selector: String, forkFrom: (sessionId: String, throughItemId: String)? = nil,
+    firstMessage: String? = nil
+  ) async throws {
     var fields: [String: JSONValue] = ["worktree": .string(selector), "agent": .string(agent)]
     if let forkFrom {
       fields["forkFrom"] = ["sessionId": .string(forkFrom.sessionId), "throughItemId": .string(forkFrom.throughItemId)]
+    }
+    if let firstMessage, let body = ChatMessageBody.send(text: firstMessage, filePaths: [], imagePaths: []) {
+      fields["firstMessage"] = ["clientMessageId": .string(AgentSessionMutation.newOperationId()), "body": body]
     }
     let mutation = AgentSessionMutation(
       method: "agentSession.create", sessionId: UUID().uuidString.lowercased(), fields: fields, expectedRuntimeFence: nil)

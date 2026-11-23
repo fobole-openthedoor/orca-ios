@@ -46,6 +46,8 @@ final class ChatViewController: UIViewController {
   var onOpenPath: ((String) -> Void)?
   /// Fork from a response: a new chat holding this one through that item.
   var onFork: ((String) -> Void)?
+  /// `/btw question`: fork through the newest finished answer and ask there, beside this chat.
+  var onSideQuestion: ((_ question: String, _ throughItemId: String) -> Void)?
   /// Reads the images messages point at from the workspace's host.
   /// A bot's chat: its quiet answers (NO_REPLY) don't show their marker.
   var isBotChat = false
@@ -139,6 +141,10 @@ final class ChatViewController: UIViewController {
       self, selector: #selector(saveDraft), name: UIApplication.willResignActiveNotification, object: nil)
     composer.onSend = { [weak self] typed, attachments, queue in
       guard let self else { return }
+      if let question = ChatCommand.sideQuestion(typed), self.onSideQuestion != nil {
+        self.askAside(question, typed: typed, attachments: attachments)
+        return
+      }
       // A quote goes first, as a Markdown block quote the agent reads as quoted.
       let text = ChatQuote.wrap(self.quoteBar.quoted, around: typed)
       self.setQuote(nil)
@@ -260,7 +266,11 @@ final class ChatViewController: UIViewController {
     }
     composer.setWorking(model.isWorking)
     // A turn's end moves the goal's time and status; read them again.
-    if lastWorking == true, !model.isWorking { Task { await model.refreshOptions() } }
+    if lastWorking == true, !model.isWorking {
+      Task { await model.refreshOptions() }
+      buzzPending = true
+      DispatchQueue.main.async { [weak self] in self?.buzzIfDone() }
+    }
     lastWorking = model.isWorking
     dock.show(
       tasks: model.transcript.backgroundTasks, stopsAll: model.transcript.stopsBackgroundTasks, goal: model.goal,
@@ -528,7 +538,16 @@ final class ChatViewController: UIViewController {
     }
     switch token {
     case .command(let query, _):
-      pick(ChatCommand.matching(query, in: model.commands).prefix(30).map { command in
+      // Orca's own /side and /btw first, ahead of the agent's catalog, as the desktop lists them.
+      let side = ChatCommand.sideChatCommands.map {
+        ChatCommand(
+          name: $0,
+          description: String(
+            localized: "components.native-chat.sideChat.description", defaultValue: "Ask a side question in a fork beside this chat"),
+          argumentHint: String(localized: "components.native-chat.sideChat.argumentHint", defaultValue: "<question>"))
+      }
+      let catalog = side + model.commands.filter { !ChatCommand.sideChatCommands.contains($0.name) }
+      pick(ChatCommand.matching(query, in: catalog).prefix(30).map { command in
         ChatSuggestionPanel.Row(
           icon: command.kind == "skill" ? .sparkles : .squareChevronRight,
           title: "/" + command.name + (command.argumentHint.map { " " + $0 } ?? ""),
@@ -888,7 +907,15 @@ final class ChatViewController: UIViewController {
             : quiet.words
         }
       }
+      // A reply arriving now types out; one already read when the chat opened just shows.
+      if !self.fadesNewLines { self.settledAnswers.insert(id) }
+      view.reveals = !self.settledAnswers.contains(id)
+      view.onRevealFinished = { [weak self] in
+        self?.settledAnswers.insert(id)
+        self?.buzzIfDone()
+      }
       view.show(markdown: text, id: id, at: item.observedAt, streaming: streaming, width: self.collection.bounds.width)
+      if !streaming, !view.isRevealing { self.settledAnswers.insert(id) }
       view.onHeightChange = { [weak self] in self?.answerGrew() }
       view.onOpenURL = { [weak self] url in self?.open(url) }
       view.onFork = { [weak self] in self?.onFork?(id) }
@@ -1102,6 +1129,36 @@ final class ChatViewController: UIViewController {
     }
   }
 
+  /// Asks `/btw`'s question in a fork through the newest finished answer; while a reply runs, or before
+  /// the first, says why not and keeps the draft.
+  private func askAside(_ question: String, typed: String, attachments: [OutgoingAttachment]) {
+    let refuse = { (reason: String) in
+      self.composer.restore(text: typed, attachments: attachments)
+      self.say(reason)
+    }
+    guard !question.isEmpty else {
+      return refuse(String(localized: "components.native-chat.sideChat.argumentHint", defaultValue: "<question>"))
+    }
+    guard attachments.isEmpty else {
+      return refuse(
+        String(
+          localized: "components.native-chat.sideChat.textOnly",
+          defaultValue: "Side chats take text only. Remove attachments, then send it again."))
+    }
+    guard !model.isWorking else {
+      return refuse(
+        String(localized: "components.native-chat.sideChat.replyRunning", defaultValue: "Available when this reply finishes."))
+    }
+    guard let through = projection.finalAnswers.compactMap({ projection.items[$0] }).max(by: { $0.observedAt < $1.observedAt })?.id
+    else {
+      return refuse(
+        String(localized: "components.native-chat.sideChat.noReply", defaultValue: "Available after the first reply."))
+    }
+    ChatDraftStore.save(model.sessionId, text: "", attachments: [])
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    onSideQuestion?(question, through)
+  }
+
   /// Selected words, quoted into the next message.
   private func quote(_ text: String) {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1131,6 +1188,20 @@ final class ChatViewController: UIViewController {
   /// Lines already shown once; a line seen for the first time after the chat has loaded fades in rather
   /// than popping, so a turn's new thoughts, calls and words arrive smoothly.
   private var shownLines: Set<ChatLine> = []
+  /// Replies shown in full; others type out as they arrive.
+  private var settledAnswers: Set<String> = []
+  /// The turn just ended: one tap of the Taptic Engine once its reply is fully on screen.
+  private var buzzPending = false
+
+  private func buzzIfDone() {
+    guard buzzPending, view.window != nil else { return }
+    let typing = collection.visibleCells.contains { cell in
+      (cell.contentView.subviews.first as? HostedRowView<AnswerView>)?.content.isRevealing ?? false
+    }
+    guard !typing else { return }
+    buzzPending = false
+    UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.9)
+  }
   /// Set by a tap that opens or closes a row; the next change to the list animates.
   private var animatesNextChange = false
   private var fadesNewLines = false
