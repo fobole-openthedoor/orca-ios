@@ -90790,6 +90790,29 @@
         }
       }
     },
+    "orcaios.host.hideChildWorkspaces": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide child workspaces"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "折叠子工作区"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收合子工作區"
+          }
+        }
+      }
+    },
     "orcaios.host.projectFolder": {
       "extractionState": "manual",
       "localizations": {
@@ -90809,6 +90832,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "專案目錄"
+          }
+        }
+      }
+    },
+    "orcaios.host.showChildWorkspaces": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show child workspaces"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "展开子工作区"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "展開子工作區"
           }
         }
       }

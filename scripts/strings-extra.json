@@ -122,7 +122,9 @@
         "open": "Open now"
       },
       "host": {
-        "projectFolder": "Project folder"
+        "projectFolder": "Project folder",
+        "hideChildWorkspaces": "Hide child workspaces",
+        "showChildWorkspaces": "Show child workspaces"
       },
       "tip": {
         "sendTitle": "Hold to queue",
@@ -312,7 +314,9 @@
         "open": "立即打开"
       },
       "host": {
-        "projectFolder": "项目目录"
+        "projectFolder": "项目目录",
+        "hideChildWorkspaces": "折叠子工作区",
+        "showChildWorkspaces": "展开子工作区"
       },
       "tip": {
         "sendTitle": "长按加入队列",
@@ -523,7 +527,9 @@
         "open": "立即開啟"
       },
       "host": {
-        "projectFolder": "專案目錄"
+        "projectFolder": "專案目錄",
+        "hideChildWorkspaces": "收合子工作區",
+        "showChildWorkspaces": "展開子工作區"
       },
       "tip": {
         "sendTitle": "長按加入佇列",

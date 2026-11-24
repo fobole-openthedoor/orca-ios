@@ -147,6 +147,11 @@ public struct Worktree: Sendable, Equatable, Identifiable {
   public var createdAt: Double?
   /// The workspace's board status id (`todo`, `in-progress`…), from the host's own list.
   public var workspaceStatus: String?
+  private let lineageHostId: String
+  private let worktreeInstanceId: String?
+  private let parentWorktreeId: String?
+  private let lineageWorktreeInstanceId: String?
+  private let parentWorktreeInstanceId: String?
 
   /// No live terminal, unread, or status other than inactive (workspace-row-filtering.ts isWorktreeActive).
   public var isSleeping: Bool {
@@ -226,6 +231,11 @@ public struct Worktree: Sendable, Equatable, Identifiable {
     manualOrder = json["manualOrder"]?.doubleValue
     createdAt = json["createdAt"]?.doubleValue
     workspaceStatus = json["workspaceStatus"]?.stringValue
+    lineageHostId = json["hostId"]?.stringValue ?? "local"
+    worktreeInstanceId = json["worktreeInstanceId"]?.stringValue
+    parentWorktreeId = json["parentWorktreeId"]?.stringValue
+    lineageWorktreeInstanceId = json["lineageWorktreeInstanceId"]?.stringValue
+    parentWorktreeInstanceId = json["parentWorktreeInstanceId"]?.stringValue
     if let pr = json["linkedPR"], let number = pr["number"]?.intValue {
       linkedPR = LinkedPR(
         number: number, state: pr["state"]?.stringValue ?? "", title: pr["title"]?.stringValue, url: pr["url"]?.stringValue)
@@ -235,6 +245,25 @@ public struct Worktree: Sendable, Equatable, Identifiable {
 
   public var title: String {
     displayName.isEmpty ? (branch.isEmpty ? path : branch) : displayName
+  }
+
+  /// Build over the visible rows of one desktop. Descendants follow their parent into its section,
+  /// while an explicitly pinned row can start its own branch in Pinned.
+  public static func lineage(_ rows: [Self]) -> [LineageBranch<Self>] {
+    let rows = rows.filter { !$0.isArchived }
+    let byId = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    return LineageBranch.build(rows, id: \.id) { child in
+      guard let parentId = child.parentWorktreeId, let parent = byId[parentId],
+        child.lineageHostId == parent.lineageHostId, !child.isPinned || parent.isPinned
+      else { return nil }
+      // A legacy host sends only an id. With instance ids, reject an edge left by a replaced checkout.
+      if child.lineageWorktreeInstanceId != nil || child.parentWorktreeInstanceId != nil {
+        guard child.worktreeInstanceId == child.lineageWorktreeInstanceId,
+          parent.worktreeInstanceId == child.parentWorktreeInstanceId
+        else { return nil }
+      }
+      return parentId
+    }
   }
 }
 
