@@ -20,14 +20,22 @@ struct PiPFrame: Equatable {
     var tokenCountIsPartial = false
     var toolCount: String?
     var toolRunning = false
+    var activeToolKind: TranscriptItem.ToolCall.ActivityKind?
+    var webSearchStartedAt: TimeInterval?
+    var elapsedText: String?
+
+    var showsChildStackSpinner: Bool { activity == .working && !leadWorking && !childTypes.isEmpty }
+    var showsWorkingSpinner: Bool { activity == .working && (leadWorking || !childTypes.isEmpty) }
   }
   struct ScrollState: Equatable {
     let activities: [WorkingAgent.Activity]
     let activeIndices: [Int]
     let pinsFirstRow: Bool
+    let splitAt: Int?
   }
   struct StatusRow: Equatable {
     let id: WorkingAgent.ID
+    let worktreeId: String
     let line: StatusLine
   }
 
@@ -47,6 +55,15 @@ struct PiPFrame: Equatable {
       && a.statusAvailable == b.statusAvailable
       && a.lines.elementsEqual(b.lines) { $0.text == $1.text && $0.style == $1.style }
   }
+}
+
+struct PiPScrollTransition: Equatable {
+  enum Kind: Equatable {
+    case full(leaving: PiPFrame.StatusLine)
+    case perRow(leavingFirst: PiPFrame.StatusLine?, leavingSecond: PiPFrame.StatusLine?)
+  }
+  let kind: Kind
+  let fromScroll: PiPFrame.ScrollState?
 }
 
 enum PiPLayout {
@@ -115,9 +132,13 @@ final class PiPCenter: NSObject {
   private var workStatus: PiPWorkStatus?
   private var rotation = WorkingAgentRotation()
   private var waitingAgents: Set<WorkingAgent.ID> = []
+  private var activitySince: [WorkingAgent.ID: (activity: WorkingAgent.Activity, uptime: TimeInterval)] = [:]
+  private var lastPresentedAttention: (host: UUID, worktreeId: String)?
+  private var lastPresentedRow: (host: UUID, worktreeId: String)?
   private let telemetry = PiPAgentTelemetry()
   private var controller: AVPictureInPictureController?
   private var timer: Timer?
+  private var animationTimer: Timer?
   private var last: PiPFrame?
   private var lastLayout: PiPLayout?
   private var transition: Task<Void, Never>?
@@ -153,6 +174,12 @@ final class PiPCenter: NSObject {
   /// The source layer must be in the live window for iOS to offer picture in picture.
   private func refreshAttachment() {
     dumpForDebugging()
+    if telemetry.onUpdate == nil {
+      telemetry.onUpdate = { [weak self] in
+        guard let self, self.isActive, Self.usesCompactLayout else { return }
+        self.draw(force: false)
+      }
+    }
     if !Self.usesCompactLayout || compactHost == nil { telemetry.follow([], model: AppModel.shared) }
     guard isSupported else { return }
     guard let view = Self.usesCompactLayout ? compactHost : sessionHost else {
@@ -160,6 +187,7 @@ final class PiPCenter: NSObject {
       cancelTransition()
       timer?.invalidate()
       timer = nil
+      setAnimatingFrames(false)
       last = nil
       lastLayout = nil
       updateAutoStart()
@@ -184,10 +212,10 @@ final class PiPCenter: NSObject {
     draw(force: true)
   }
 
-  private func frame() -> (content: PiPFrame, didAdvance: Bool, scrollsOnlySecondRow: Bool)? {
+  private func frame() -> (content: PiPFrame, didAdvance: Bool, scrollsOnlySecondRow: Bool, isSplit: Bool)? {
     guard Self.usesCompactLayout else {
       guard let transcript = transcriptFrame?() else { return nil }
-      return (transcript, false, false)
+      return (transcript, false, false, false)
     }
     let status: PiPWorkStatus
     if let workStatus {
@@ -204,23 +232,45 @@ final class PiPCenter: NSObject {
       workStatus = status
     }
     let time = ProcessInfo.processInfo.systemUptime
+    let nowEpoch = Date().timeIntervalSince1970
+    let activeIDs = Set(status.entries.map(\.id))
+    activitySince = activitySince.filter { activeIDs.contains($0.key) }
+    for entry in status.entries where activitySince[entry.id]?.activity != entry.activity {
+      activitySince[entry.id] = (entry.activity, time)
+    }
     let waiting = status.entries.filter { $0.activity != .working }.map(\.id)
     let newlyWaiting = waiting.first { !waitingAgents.contains($0) }
     waitingAgents = Set(waiting)
     let pinned = waiting.count == 1 && status.entries.count > 2 ? waiting.first : nil
+    let splitAt = waiting.count >= 2 && waiting.count < status.entries.count ? waiting.count : nil
     let page = rotation.page(
       in: status.entries.map(\.id), at: time, rotating: isActive,
-      preferring: pinned == nil ? newlyWaiting : nil, pinned: pinned)
+      preferring: pinned == nil ? newlyWaiting : nil, pinned: pinned, splitAt: splitAt)
     let entries = page.indices.map { status.entries[$0] }
     if isActive {
       var targets = Set(entries.compactMap(\.session))
       if let next = page.nextIndex, let key = status.entries[next].session { targets.insert(key) }
+      if let secondaryNext = page.secondaryNextIndex, let key = status.entries[secondaryNext].session { targets.insert(key) }
       telemetry.follow(targets, model: AppModel.shared)
     }
+    let includeSeconds = isActive
     return (
-      status.frame(showing: entries, page: page) { telemetry.reading($0) },
+      status.frame(showing: entries, page: page, elapsed: { entry, turnStartedAt in
+        let seconds: Int?
+        if entry.activity == .working, let start = PiPWorkStatus.normalizedEpochSeconds(turnStartedAt, relativeTo: nowEpoch) {
+          seconds = max(0, Int(nowEpoch - start))
+        } else if let updated = PiPWorkStatus.normalizedEpochSeconds(entry.agent.updatedAt, relativeTo: nowEpoch) {
+          seconds = max(0, Int(nowEpoch - updated))
+        } else if let since = activitySince[entry.id]?.uptime {
+          seconds = max(0, Int(time - since))
+        } else {
+          seconds = nil
+        }
+        return seconds.flatMap { PiPWorkStatus.formatElapsed($0, includeSeconds: includeSeconds) }
+      }, reading: { telemetry.reading($0, at: time) }),
       page.didAdvance,
-      page.scrollsOnlySecondRow
+      page.scrollsOnlySecondRow,
+      page.splitAt != nil
     )
   }
 
@@ -283,10 +333,31 @@ final class PiPCenter: NSObject {
     }
   }
 
+  /// Redraw the current frame without polling agent telemetry or advancing the rows.
+  private func setAnimatingFrames(_ animating: Bool) {
+    if !animating {
+      animationTimer?.invalidate()
+      animationTimer = nil
+      return
+    }
+    guard animationTimer == nil else { return }
+    let timer = Timer(timeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self, self.transition == nil, let frame = self.last,
+          self.layer.sampleBufferRenderer.isReadyForMoreMediaData
+        else { return }
+        self.enqueue(frame, layout: .compact)
+      }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    animationTimer = timer
+  }
+
   /// Draws a new frame when the content changed, and at least every few seconds so the layer stays live.
   private func draw(force: Bool) {
     guard host.superview != nil else { return }
-    guard let (frame, didAdvance, scrollsOnlySecondRow) = frame() else {
+    guard let (frame, didAdvance, scrollsOnlySecondRow, isSplit) = frame() else {
+      setAnimatingFrames(false)
       if last != nil {
         last = nil
         cancelTransition()
@@ -296,25 +367,51 @@ final class PiPCenter: NSObject {
       return
     }
     let layout = Self.layout
+    if isActive, layout == .compact {
+      if let attention = frame.statusRows.first(where: { $0.line.activity != .working }) {
+        lastPresentedAttention = (attention.id.host, attention.worktreeId)
+      } else {
+        lastPresentedAttention = nil
+      }
+      if let first = frame.statusRows.first {
+        lastPresentedRow = (first.id.host, first.worktreeId)
+      } else {
+        lastPresentedRow = nil
+      }
+    }
+    let animate = isActive && !UIAccessibility.isReduceMotionEnabled && layout == .compact
+    let shouldAnimateFrames = animate && frame.statusRows.contains { row in
+      row.line.showsWorkingSpinner || (row.line.activity == .working && row.line.webSearchStartedAt != nil)
+    }
+    let animationChanged = shouldAnimateFrames != (animationTimer != nil)
     let now = Date()
-    guard force || frame != last || layout != lastLayout || now.timeIntervalSince(lastDrawn) > 4 else { return }
+    guard force || frame != last || layout != lastLayout || animationChanged || now.timeIntervalSince(lastDrawn) > 4 else { return }
     let previous = layout == .compact && lastLayout == .compact ? last?.statusRows : nil
+    let previousScroll = layout == .compact && lastLayout == .compact ? last?.scrollState : nil
     if lastLayout != layout { layer.flushAndRemoveImage() }
     last = frame
     lastLayout = layout
     lastDrawn = now
+    setAnimatingFrames(shouldAnimateFrames)
     updateAutoStart()
-    let animate = isActive && !UIAccessibility.isReduceMotionEnabled && layout == .compact
     // Update telemetry during the animation without interrupting the rows that are already moving.
     if animate, transition != nil, previous?.map(\.id) == frame.statusRows.map(\.id) { return }
     cancelTransition()
     if animate, didAdvance, let previous, previous.count == 2, frame.statusRows.count == 2 {
       if scrollsOnlySecondRow, previous[0].id == frame.statusRows[0].id, previous[1].id != frame.statusRows[1].id {
-        scroll(leaving: previous[1].line, onlySecondRow: true)
+        scroll(.init(kind: .perRow(leavingFirst: nil, leavingSecond: previous[1].line), fromScroll: previousScroll))
         return
       }
-      if !scrollsOnlySecondRow, previous[1].id == frame.statusRows[0].id {
-        scroll(leaving: previous[0].line, onlySecondRow: false)
+      if isSplit {
+        let leavingFirst = previous[0].id != frame.statusRows[0].id ? previous[0].line : nil
+        let leavingSecond = previous[1].id != frame.statusRows[1].id ? previous[1].line : nil
+        if leavingFirst != nil || leavingSecond != nil {
+          scroll(.init(kind: .perRow(leavingFirst: leavingFirst, leavingSecond: leavingSecond), fromScroll: previousScroll))
+          return
+        }
+      }
+      if !scrollsOnlySecondRow, !isSplit, previous[1].id == frame.statusRows[0].id {
+        scroll(.init(kind: .full(leaving: previous[0].line), fromScroll: previousScroll))
         return
       }
     }
@@ -326,14 +423,14 @@ final class PiPCenter: NSObject {
     transition = nil
   }
 
-  private func scroll(leaving line: PiPFrame.StatusLine, onlySecondRow: Bool) {
+  private func scroll(_ scrollTransition: PiPScrollTransition) {
     transition = Task { [weak self] in
       let start = ProcessInfo.processInfo.systemUptime
       let duration: TimeInterval = 0.3
       while !Task.isCancelled, let self, let frame = last {
         let elapsed = ProcessInfo.processInfo.systemUptime - start
         let progress = min(CGFloat(elapsed / duration), 1)
-        enqueue(frame, layout: .compact, leaving: line, onlySecondRow: onlySecondRow, progress: progress)
+        enqueue(frame, layout: .compact, transition: scrollTransition, progress: progress)
         if progress == 1 {
           transition = nil
           return
@@ -344,11 +441,19 @@ final class PiPCenter: NSObject {
   }
 
   private func enqueue(
-    _ frame: PiPFrame, layout: PiPLayout, leaving: PiPFrame.StatusLine? = nil,
-    onlySecondRow: Bool = false, progress: CGFloat = 1
+    _ frame: PiPFrame, layout: PiPLayout, transition: PiPScrollTransition? = nil, progress: CGFloat = 1
   ) {
+    let time = ProcessInfo.processInfo.systemUptime
+    let animateSpinners = isActive && layout == .compact && !UIAccessibility.isReduceMotionEnabled
+    let spinnerAngle: CGFloat = animateSpinners
+      ? CGFloat(time.truncatingRemainder(dividingBy: 0.9) / 0.9) * 2 * .pi
+      : 0
+    let childSpinnerAngle: CGFloat = animateSpinners
+      ? CGFloat(time.truncatingRemainder(dividingBy: 1.25) / 1.25) * 2 * .pi
+      : 0
     guard let buffer = PiPRenderer.sampleBuffer(
-      for: frame, layout: layout, leaving: leaving, onlySecondRow: onlySecondRow, progress: progress)
+      for: frame, layout: layout, transition: transition, progress: progress,
+      spinnerAngle: spinnerAngle, childSpinnerAngle: childSpinnerAngle, at: time)
     else { return }
     if layer.status == .failed { layer.flush() }
     layer.enqueue(buffer)
@@ -362,7 +467,11 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
       updateAutoStart()
       startTimer(interval: 0.5)
       // Opened on its own when it shouldn't have (the setting is off, or nothing runs): close it again.
-      if !openedByHand, !Self.startsOnLeave || !(last?.working ?? false) { controller.stopPictureInPicture() }
+      if !openedByHand, !Self.startsOnLeave || !(last?.working ?? false) {
+        controller.stopPictureInPicture()
+      } else {
+        draw(force: true)
+      }
     }
   }
 
@@ -371,7 +480,11 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
       isActive = false
       telemetry.follow([], model: AppModel.shared)
       cancelTransition()
+      setAnimatingFrames(false)
       openedByHand = false
+      lastPresentedAttention = nil
+      lastPresentedRow = nil
+      PiPRenderer.clearCache()
       updateAutoStart()
       if host.superview != nil { startTimer(interval: 1) }
     }
@@ -390,7 +503,21 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
     _ controller: AVPictureInPictureController,
     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completion: @escaping (Bool) -> Void
   ) {
-    completion(true)
+    MainActor.assumeIsolated {
+      if Self.usesCompactLayout, let target = lastPresentedAttention ?? lastPresentedRow {
+        var components = URLComponents()
+        components.scheme = "orca"
+        components.host = "open"
+        components.queryItems = [
+          URLQueryItem(name: "host", value: target.host.uuidString),
+          URLQueryItem(name: "worktree", value: target.worktreeId),
+        ]
+        if let url = components.url {
+          NotificationCenter.default.post(name: .orcaOpenURL, object: url)
+        }
+      }
+      completion(true)
+    }
   }
 }
 
