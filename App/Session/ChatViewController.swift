@@ -787,7 +787,9 @@ final class ChatViewController: UIViewController {
     } else if let worker, !model.isWorking || lines.isEmpty {
       lines.append((worker.title.isEmpty ? worker.agent ?? ChatDockView.unnamedAgent : worker.title, .body))
     }
-    return (model.isWorking || subagent != nil || worker != nil, lines)
+    // Subagents and workers show here, but only the chat's own turn counts as working: one left running in
+    // the background shouldn't open picture in picture on leaving, as with background tasks.
+    return (model.isWorking, lines)
   }
 
   /// Markdown read as plain words: markers and fences dropped, list items as bullets, a table's rows as
