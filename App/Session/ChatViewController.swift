@@ -713,10 +713,21 @@ final class ChatViewController: UIViewController {
 
   /// A streaming answer laid out a longer document after its row was sized: size the rows again, and stay
   /// at the end if the reader was there.
+  /// Waits for the next turn of the main loop: a row can report while the collection view is still
+  /// preparing it, and laying the collection out from inside that is an assertion. Several reports in one
+  /// turn settle once.
   private func answerGrew() {
-    collection.collectionViewLayout.invalidateLayout()
-    if followsBottom { scrollToBottom(animated: false) }
+    guard !answerGrowthPending else { return }
+    answerGrowthPending = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.answerGrowthPending = false
+      self.collection.collectionViewLayout.invalidateLayout()
+      if self.followsBottom { self.scrollToBottom(animated: false) }
+    }
   }
+
+  private var answerGrowthPending = false
 
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
