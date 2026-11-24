@@ -91,6 +91,7 @@ final class ChatAnswerMarkdownView: UIView {
     if revealed >= total {
       stopReveal()
       apply(target.text, streaming: target.streaming, identity: target.identity)
+      contentChanged()
       if !target.streaming { onRevealFinished?() }
       return
     }
@@ -126,10 +127,16 @@ final class ChatAnswerMarkdownView: UIView {
     invalidateIntrinsicContentSize()
   }
 
+  /// The height the row last heard about. `intrinsicContentSize` is measured fresh each time, so it can't
+  /// stand in for the height before a change.
+  private var reportedHeight: CGFloat = 0
+
   private func contentChanged() {
-    let before = intrinsicContentSize.height
     invalidateIntrinsicContentSize()
-    if abs(intrinsicContentSize.height - before) > 0.5 { onHeightChange?() }
+    let height = intrinsicContentSize.height
+    guard abs(height - reportedHeight) > 0.5 else { return }
+    reportedHeight = height
+    onHeightChange?()
   }
 
   override var intrinsicContentSize: CGSize {
