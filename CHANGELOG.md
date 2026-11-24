@@ -5,6 +5,20 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-24
+
+### Added
+
+- Delete a workspace from its long-press menu; a folder workspace leaves Orca and stays on disk.
+- Child worktrees show under their parent, folding and unfolding from a count on the parent row.
+- The two-line Picture in Picture scrolls one row at a time when three or more agents work, and shows
+  each agent's total tokens.
+
+### Fixed
+
+- Scrolling up a chat jumped and showed blank screens.
+- A project's workspace count didn't drop after one was deleted.
+
 ## [0.1.2] - 2026-11-24
 
 ### Fixed
