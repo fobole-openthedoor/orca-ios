@@ -115,6 +115,9 @@ final class ChatAnswerMarkdownView: UIView {
     }
     guard text != shown || markdown.isStreaming != streaming else { return }
     let first = markdown.streamIdentity != AnyHashable(identity)
+    // A row put to another reply sizes itself as it comes on screen; only the same reply growing (streaming
+    // or typing out) needs the list told.
+    grows = !first
     markdown.streamIdentity = identity
     markdown.isStreaming = streaming
     shown = text
@@ -129,9 +132,11 @@ final class ChatAnswerMarkdownView: UIView {
 
   /// The row is told only when the words need a height the row doesn't have now. Comparing with the laid-out
   /// height, not the last measure, keeps a reused row from re-measuring on every pass.
+  private var grows = false
+
   private func contentChanged() {
     invalidateIntrinsicContentSize()
-    guard window != nil, bounds.height > 0 else { return }
+    guard grows, window != nil, bounds.height > 0 else { return }
     if abs(intrinsicContentSize.height - bounds.height) > 0.5 { onHeightChange?() }
   }
 
