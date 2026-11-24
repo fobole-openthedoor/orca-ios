@@ -148,7 +148,11 @@ struct ChatProjection {
           if case .toolCall(let call) = item.body { return call }
           return nil
         }
-        let shown = Self.viewedImagePaths(calls)
+        var shown = Self.viewedImagePaths(calls)
+        for item in items {
+          guard case .message(let message) = item.body, message.isImageOperation else { continue }
+          for path in message.imagePaths where !shown.contains(path) { shown.append(path) }
+        }
         if !shown.isEmpty {
           let key = turn.key + "#images"
           viewedImages[key] = shown
@@ -191,6 +195,17 @@ struct ChatProjection {
           continue
         }
         switch item.body {
+        case .message(let message) where message.isImageOperation:
+          // Codex viewed or made an image: the picture, as a read's shows, not the words "Viewed image".
+          runKey = nil
+          thoughtKey = nil
+          filesKey = nil
+          if message.imagePaths.isEmpty {
+            if !message.text.isEmpty { lines.append(.workItem(id: item.id)) }
+          } else {
+            viewedImages[item.id] = message.imagePaths
+            lines.append(.viewedImages(key: item.id))
+          }
         case .toolCall:
           thoughtKey = nil
           filesKey = nil
@@ -315,7 +330,7 @@ struct ChatProjection {
 
   static func prose(_ item: TranscriptItem) -> String? {
     guard case .message(let message) = item.body, message.role == "assistant",
-      message.agentSenders == nil, !message.text.isEmpty else { return nil }
+      message.agentSenders == nil, !message.isImageOperation, !message.text.isEmpty else { return nil }
     return message.text
   }
 

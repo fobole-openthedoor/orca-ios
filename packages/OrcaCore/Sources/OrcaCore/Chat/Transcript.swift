@@ -117,6 +117,9 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
     public var agentSenders: [String]? = nil
     /// Mail's human-readable fields, when the host supplies their ranges in the canonical message.
     public var agentMailText: String? = nil
+    /// Work the agent did with an image, not words it said: Codex viewing one, or making one
+    /// (native-chat-generated-image.ts). Its image blocks are the pictures.
+    public var isImageOperation = false
 
     public var subagents: [ChatSubagent] {
       blocks.flatMap { block -> [ChatSubagent] in
@@ -335,7 +338,11 @@ public struct TranscriptItem: Sendable, Equatable, Identifiable {
         agentSenders: source.flatMap { source in
           guard source["kind"]?.stringValue == "agent" else { return nil }
           return (source["senders"]?.arrayValue ?? []).compactMap { $0["name"]?.stringValue ?? $0["agent"]?.stringValue }
-        }, agentMailText: mailText(source, blocks: blocks)))
+        }, agentMailText: mailText(source, blocks: blocks),
+        isImageOperation: (json["blocks"]?.arrayValue ?? []).contains { block in
+          block["type"]?.stringValue == "text"
+            && ["image-operation", "generated-image"].contains(block["presentation"]?.stringValue ?? "")
+        }))
     case "tool-call":
       return .toolCall(ToolCall(json))
     case "diff":
