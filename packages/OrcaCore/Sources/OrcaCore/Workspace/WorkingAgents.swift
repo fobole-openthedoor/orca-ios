@@ -1,11 +1,23 @@
 import Foundation
 
-/// Identity metadata suitable for the status-only picture-in-picture display.
+/// A pane and the active agents it owns, for the status-only picture-in-picture display.
 public struct WorkingAgent: Equatable, Sendable, Identifiable {
+  public enum Activity: Hashable, Sendable {
+    case working
+    case needsDecision
+    case needsAnswer
+  }
+
   public struct ID: Hashable, Sendable {
     public let host: UUID
     public let pane: String
-    public let child: String?
+  }
+
+  public struct Child: Equatable, Sendable {
+    public let agentType: String?
+    /// Provider children sometimes report a role name in agentType, such as "explorer".
+    public let owningAgentType: String?
+    public let activity: Activity
   }
 
   public let id: ID
@@ -13,45 +25,112 @@ public struct WorkingAgent: Equatable, Sendable, Identifiable {
   public let name: String?
   public let agentType: String?
   public let isWorker: Bool
+  public let leadActivity: Activity?
   public let structuredSessionId: String?
-  public let journalAgentId: String?
-  public var isSubagent: Bool { id.child != nil }
+  public let children: [Child]
 
-  public static func inCatalog(_ worktrees: [Worktree], host: UUID) -> [Self] {
-    var panes = Set<String>()
-    var result: [Self] = []
-    let relevant = worktrees.filter { !$0.isArchived && !$0.agents.isEmpty }
-    for worktree in relevant.sorted(by: { $0.id < $1.id }) {
-      // A nameless workspace can keep its path private on an overlay.
-      let workspace = worktree.displayName.isEmpty ? worktree.repo : worktree.displayName
-      for agent in worktree.agents.sorted(by: { $0.paneKey < $1.paneKey }) where panes.insert(agent.paneKey).inserted {
-        guard !agent.restoredUnconfirmed else { continue }
-        if agent.isActivelyWorking {
-          result.append(Self(
-            id: ID(host: host, pane: agent.paneKey, child: nil), workspace: workspace,
-            name: agent.displayName.flatMap { $0.isEmpty ? nil : $0 },
-            agentType: agent.agentType, isWorker: agent.parentPaneKey != nil || agent.listParentPaneKey != nil,
-            structuredSessionId: agent.structuredSessionId, journalAgentId: nil))
-        }
-        var children = Set<String>()
-        for child in agent.children.sorted(by: { $0.id < $1.id }) where child.state == "working" && children.insert(child.id).inserted {
-          result.append(Self(
-            id: ID(host: host, pane: agent.paneKey, child: child.id), workspace: workspace, name: nil,
-            agentType: child.agentType, isWorker: false,
-            structuredSessionId: agent.structuredSessionId, journalAgentId: child.providerId))
-        }
+  public var activity: Activity {
+    if leadActivity == .needsDecision || children.contains(where: { $0.activity == .needsDecision }) {
+      return .needsDecision
+    }
+    if leadActivity == .needsAnswer || children.contains(where: { $0.activity == .needsAnswer }) {
+      return .needsAnswer
+    }
+    return .working
+  }
+
+  private struct Pane: Sendable {
+    let agent: Worktree.Agent
+    let workspace: String
+
+    var parent: String? { agent.parentPaneKey ?? agent.listParentPaneKey }
+    var leadActivity: Activity? { WorkingAgent.activity(of: agent) }
+
+    var providerChildren: [Child] {
+      var seen = Set<String>()
+      return agent.children.sorted(by: { $0.id < $1.id }).compactMap { child in
+        // Child work uses blocked for a failure. Waiting is the explicit request for a person.
+        guard child.state == "working" || child.state == "waiting", seen.insert(child.id).inserted else { return nil }
+        return Child(agentType: child.agentType, owningAgentType: agent.agentType,
+          activity: child.state == "waiting" ? .needsDecision : .working)
       }
     }
-    return result
+  }
+
+  public static func inCatalog(_ worktrees: [Worktree], host: UUID) -> [Self] {
+    let panes = worktrees.filter { !$0.isArchived }.sorted(by: { $0.id < $1.id }).flatMap { worktree in
+      // A nameless workspace can keep its path private on an overlay.
+      let workspace = worktree.displayName.isEmpty ? worktree.repo : worktree.displayName
+      return worktree.agents.filter { !$0.restoredUnconfirmed }.sorted(by: { $0.paneKey < $1.paneKey })
+        .map { Pane(agent: $0, workspace: workspace) }
+    }
+    let groups = LineageBranch.build(panes, id: \.agent.paneKey, parent: \.parent)
+    func descendants(_ branch: LineageBranch<Pane>) -> [Child] {
+      branch.children.flatMap { child in
+        let pane = child.entry
+        var agents: [Child] = []
+        if let activity = pane.leadActivity {
+          agents.append(Child(agentType: pane.agent.agentType, owningAgentType: nil, activity: activity))
+        }
+        return agents + pane.providerChildren + descendants(child)
+      }
+    }
+    return groups.compactMap { group in
+      let pane = group.entry
+      let agent = pane.agent
+      let children = pane.providerChildren + descendants(group)
+      let leadActivity = pane.leadActivity
+      guard leadActivity != nil || !children.isEmpty else { return nil }
+      return Self(id: ID(host: host, pane: agent.paneKey), workspace: pane.workspace,
+        name: agent.displayName.flatMap { $0.isEmpty ? nil : $0 }, agentType: agent.agentType,
+        isWorker: pane.parent != nil, leadActivity: leadActivity,
+        structuredSessionId: agent.structuredSessionId, children: children)
+    }
+  }
+
+  /// Returns normalized titles that appear on two or more distinct hosts across the active roster,
+  /// so compact status displays can show a host subtitle only when disambiguation is needed.
+  public static func crossHostDuplicateTitles(in items: [(host: UUID, title: String)]) -> Set<String> {
+    var hostsByTitle: [String: Set<UUID>] = [:]
+    for item in items {
+      let key = normalizedTitleKey(item.title)
+      guard !key.isEmpty else { continue }
+      hostsByTitle[key, default: []].insert(item.host)
+    }
+    return Set(hostsByTitle.compactMap { $0.value.count > 1 ? $0.key : nil })
+  }
+
+  public static func normalizedTitleKey(_ title: String) -> String {
+    title.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
+  }
+
+  private static func activity(of agent: Worktree.Agent) -> Activity? {
+    guard agent.listState != "unconfirmed", agent.listState != "unverifiable" else { return nil }
+    switch agent.mainState ?? agent.listState ?? agent.state {
+    case "waiting":
+      // The structured host uses the lead's waiting state for questions, including async ones.
+      return agent.structuredSessionId != nil && agent.mainState == "waiting" ? .needsAnswer : .needsDecision
+    case "blocked", "permission": return .needsDecision
+    default: return agent.isActivelyWorking ? .working : nil
+    }
   }
 }
 
 /// Advances one line at a time and gives a changed pair a full interval to read.
+/// When a single agent is pinned in row 1, row 2 rotates through the remaining agents independently.
 public struct WorkingAgentRotation {
   public struct Page: Equatable {
     public let indices: [Int]
     public let nextIndex: Int?
     public let didAdvance: Bool
+    public let scrollsOnlySecondRow: Bool
+
+    public init(indices: [Int], nextIndex: Int?, didAdvance: Bool, scrollsOnlySecondRow: Bool = false) {
+      self.indices = indices
+      self.nextIndex = nextIndex
+      self.didAdvance = didAdvance
+      self.scrollsOnlySecondRow = scrollsOnlySecondRow
+    }
   }
 
   private var visible: [WorkingAgent.ID] = []
@@ -62,7 +141,10 @@ public struct WorkingAgentRotation {
 
   public init() {}
 
-  public mutating func page(in agents: [WorkingAgent.ID], at time: TimeInterval, rotating: Bool) -> Page {
+  public mutating func page(
+    in agents: [WorkingAgent.ID], at time: TimeInterval, rotating: Bool,
+    preferring priority: WorkingAgent.ID? = nil, pinned: WorkingAgent.ID? = nil
+  ) -> Page {
     guard agents.count > Self.pageSize else {
       visible = agents
       shownAt = time
@@ -70,14 +152,33 @@ public struct WorkingAgentRotation {
       return Page(indices: Array(agents.indices), nextIndex: nil, didAdvance: false)
     }
 
+    if let pinned, let pinnedIndex = agents.firstIndex(of: pinned) {
+      let others = agents.indices.filter { $0 != pinnedIndex }
+      let otherCount = others.count
+      let previousSecond = visible.count >= 2 && visible[0] == pinned ? visible[1] : visible.first { $0 != pinned }
+      let anchorSlot = previousSecond.flatMap { id in others.firstIndex { agents[$0] == id } }
+        ?? min(lastStart, otherCount - 1)
+      let current = [agents[pinnedIndex], agents[others[anchorSlot]]]
+      let samePair = visible == current
+      let advance = rotating && samePair && time - shownAt >= Self.interval
+      let slot = advance ? (anchorSlot + 1) % otherCount : anchorSlot
+      let secondIndex = others[slot]
+      let nextIndex = others[(slot + 1) % otherCount]
+      if advance || !rotating || !samePair { shownAt = time }
+      visible = [agents[pinnedIndex], agents[secondIndex]]
+      lastStart = slot
+      return Page(indices: [pinnedIndex, secondIndex], nextIndex: nextIndex, didAdvance: advance, scrollsOnlySecondRow: true)
+    }
+
     let count = agents.count
-    let anchor = visible.lazy.compactMap { agents.firstIndex(of: $0) }.first ?? min(lastStart, count - 1)
+    let preferred = priority.flatMap { agents.firstIndex(of: $0) }
+    let anchor = preferred ?? visible.lazy.compactMap { agents.firstIndex(of: $0) }.first ?? min(lastStart, count - 1)
     let current = [agents[anchor], agents[(anchor + 1) % count]]
     let samePair = visible == current
-    let advance = rotating && samePair && time - shownAt >= Self.interval
+    let advance = preferred == nil && rotating && samePair && time - shownAt >= Self.interval
     let start = advance ? (anchor + 1) % count : anchor
     let indices = [start, (start + 1) % count]
-    if advance || !rotating || !samePair { shownAt = time }
+    if preferred != nil || advance || !rotating || !samePair { shownAt = time }
     visible = indices.map { agents[$0] }
     lastStart = start
     return Page(indices: indices, nextIndex: (start + Self.pageSize) % count, didAdvance: advance)

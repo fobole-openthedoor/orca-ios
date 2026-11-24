@@ -27,7 +27,7 @@ This app follows its upstream, Orca:
 
 | Project | License | Used for |
 | --- | --- | --- |
-| [Orca](https://github.com/stablyai/orca) | MIT | Interface copy, translations, design, protocol |
+| [Orca](https://github.com/stablyai/orca) | MIT | Interface copy, translations, design, agent icons, protocol |
 | [Ghostty](https://github.com/ghostty-org/ghostty) via [libghostty-spm](https://github.com/Lakr233/libghostty-spm) | MIT | Terminal |
 | [MarkdownView](https://github.com/Lakr233/MarkdownView) | MIT | Chat and file Markdown |
 | [Litext](https://github.com/Lakr233/Litext) | MIT | Text layout (via MarkdownView) |

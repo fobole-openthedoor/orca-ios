@@ -4,6 +4,7 @@ import Foundation
 public struct AgentActivityMetrics: Sendable {
   public struct Reading: Sendable, Equatable {
     public let totalTokens: Int?
+    public let tokenCountIsPartial: Bool
     public let toolCalls: Int?
     public let toolCountIsPartial: Bool
     public let toolIsRunning: Bool
@@ -162,9 +163,9 @@ public struct AgentActivityMetrics: Sendable {
     }
   }
 
-  public func reading(agentId: String?) -> Reading {
+  public func reading(agentId: String?, includeChildTokenFloor: Bool = false) -> Reading {
     guard cursor != nil, !catchingUp else {
-      return Reading(totalTokens: nil, toolCalls: nil, toolCountIsPartial: false, toolIsRunning: false)
+      return Reading(totalTokens: nil, tokenCountIsPartial: false, toolCalls: nil, toolCountIsPartial: false, toolIsRunning: false)
     }
     let turnId = turn?.id
     let agentRows = rows.values.filter { $0.agentId == agentId }
@@ -177,9 +178,13 @@ public struct AgentActivityMetrics: Sendable {
       row.turnId == nil && !row.calls.isEmpty && row.sequence >= (start ?? 0)
     }
     let partial = canCount && ((hasOlder && start == nil) || unscoped)
+    // Providers can report the same child through several identities. The maximum
+    // observed child total is a lower bound for the group even when aliases overlap.
+    let floor = includeChildTokenFloor && agentId == nil ? subagentTokens.values.max() : nil
     return Reading(
       // Mobile frames publish provider totals for child agents. A root's context-window reading is separate.
-      totalTokens: agentId.flatMap { subagentTokens[$0] },
+      totalTokens: agentId.flatMap { subagentTokens[$0] } ?? floor,
+      tokenCountIsPartial: floor != nil,
       toolCalls: canCount && (!partial || !calls.isEmpty) ? calls.count : nil,
       toolCountIsPartial: partial,
       toolIsRunning: running)
