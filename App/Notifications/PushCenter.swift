@@ -66,9 +66,32 @@ final class PushCenter: NSObject {
     guard Settings.current.suppressWhileViewing, UIApplication.shared.applicationState == .active,
       let viewing, let orca = userInfo["orca"] as? [String: Any],
       let host = orca["host"] as? String, host.caseInsensitiveCompare(viewing.hostKey) == .orderedSame,
-      let worktreeId = orca["worktreeId"] as? String, worktreeId == viewing.worktreeId
+      let worktreeId = orca["worktreeId"] as? String,
+      workspaceId(worktreeId) == workspaceId(viewing.worktreeId)
     else { return false }
     return orca["executionHost"] as? String == viewing.executionHost
+  }
+
+  /// Whether `worktreeId` on host `hostId` is the workspace on screen now.
+  static func isViewing(hostId: UUID, worktreeId: String) -> Bool {
+    guard let viewing else { return false }
+    return viewing.hostKey.caseInsensitiveCompare(hostId.uuidString) == .orderedSame
+      && workspaceId(viewing.worktreeId) == workspaceId(worktreeId)
+  }
+
+  /// A workspace id as the desktop compares them (normalizeWorkspaceSessionKeyToWorkspaceId): a push may
+  /// name it host-qualified (`local|repo::path`) or as a key (`worktree:repo::path`), the app's list bare.
+  static func workspaceId(_ value: String) -> String {
+    var id = value
+    if id.hasPrefix("worktree:") { id = String(id.dropFirst("worktree:".count)) }
+    if let bar = id.firstIndex(of: "|") {
+      let host = id[..<bar]
+      if host.isEmpty || host == "local" || host.hasPrefix("ssh:") || host.hasPrefix("runtime:") {
+        id = String(id[id.index(after: bar)...])
+      }
+    }
+    if id.hasPrefix("worktree:") { id = String(id.dropFirst("worktree:".count)) }
+    return id
   }
 
   private var model: AppModel?
@@ -299,7 +322,9 @@ extension PushCenter: UNUserNotificationCenterDelegate {
     let worktree = orca?["worktreeId"] as? String
     DispatchQueue.main.async {
       if let host, let worktree, var components = URLComponents(string: "orca://open") {
-        components.queryItems = [URLQueryItem(name: "host", value: host), URLQueryItem(name: "worktree", value: worktree)]
+        components.queryItems = [
+          URLQueryItem(name: "host", value: host), URLQueryItem(name: "worktree", value: PushCenter.workspaceId(worktree)),
+        ]
         if let url = components.url { NotificationCenter.default.post(name: .orcaOpenURL, object: url) }
       }
       completionHandler()

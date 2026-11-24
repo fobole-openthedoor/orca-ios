@@ -125,6 +125,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       }
       return
     }
+    // Already looking at it (the banner came while it was open, or the app was left on it): stay.
+    if PushCenter.isViewing(hostId: hostId, worktreeId: worktreeId) { return }
     // The first-launch welcome page closes first.
     if let welcome = tabs.presentedViewController as? WelcomeViewController { WelcomeViewController.seen = true; welcome.dismiss(animated: false) }
     tabs.presentedViewController?.dismiss(animated: false)
