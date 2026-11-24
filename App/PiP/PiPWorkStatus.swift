@@ -28,8 +28,12 @@ struct PiPWorkStatus {
         let key = agent.structuredSessionId.flatMap { sessionId in
           agent.isSubagent && agent.journalAgentId == nil ? nil : PiPAgentTelemetry.Key(host: host.id, sessionId: sessionId)
         }
-        entries.append(Entry(id: agent.id, line: .init(agent: Self.title(agent), host: Self.oneLine(session.name)),
-          session: key, agentId: agent.journalAgentId))
+        let type = agent.agentType == "claude-agent-teams" ? "claude" : agent.agentType
+        let markType = AgentMark.icon(for: type) == nil ? nil : type
+        let role: WorkspaceAgentRole? = agent.isSubagent ? .subagent : agent.isWorker ? .worker : nil
+        let line = PiPFrame.StatusLine(
+          agent: Self.title(agent), agentType: markType, agentRole: role, host: Self.oneLine(session.name))
+        entries.append(Entry(id: agent.id, line: line, session: key, agentId: agent.journalAgentId))
       }
     }
     let counts = Dictionary(grouping: entries, by: \.line).mapValues(\.count)
@@ -37,14 +41,15 @@ struct PiPWorkStatus {
     self.entries = entries.map { entry in
       guard counts[entry.line, default: 0] > 1 else { return entry }
       ordinals[entry.line, default: 0] += 1
-      let title = "\(ordinals[entry.line, default: 1]). \(entry.line.agent)"
-      return Entry(id: entry.id, line: .init(agent: title, host: entry.line.host), session: entry.session, agentId: entry.agentId)
+      var line = entry.line
+      line.agent = "\(ordinals[entry.line, default: 1]). \(line.agent)"
+      return Entry(id: entry.id, line: line, session: entry.session, agentId: entry.agentId)
     }
     self.hostCount = hostCount
     allHostsObserved = observed > 0 && observed == model.hosts.count
   }
 
-  func frame(showing page: Range<Int>, reading: (Entry) -> AgentActivityMetrics.Reading?) -> PiPFrame {
+  func frame(showing visible: [Entry], reading: (Entry) -> AgentActivityMetrics.Reading?) -> PiPFrame {
     let title: String
     let status: String
     if entries.isEmpty {
@@ -60,26 +65,20 @@ struct PiPWorkStatus {
     }
     return PiPFrame(
       title: title, status: status, working: !entries.isEmpty, lines: [], terminal: false,
-      statusRows: entries[page].map { entry in
+      statusRows: visible.map { entry in
         var line = entry.line
         if let value = reading(entry) {
-          line.rate = value.estimatedTokensPerSecond
+          line.totalTokens = value.totalTokens
           line.toolCount = value.toolCalls.map { (value.toolCountIsPartial ? "≥" : "") + String($0) }
           line.toolRunning = value.toolIsRunning
         }
-        return line
+        return .init(id: entry.id, line: line)
       }, fleetCounts: .init(agents: entries.count, hosts: hostCount))
   }
 
   private static func title(_ agent: WorkingAgent) -> String {
-    let provider: String? = agent.agentType.map { type in
-      type == "claude-agent-teams" ? "Claude" : type.prefix(1).uppercased() + String(type.dropFirst())
-    }
-    let role: WorkspaceAgentRole? = agent.isSubagent ? .subagent : agent.isWorker ? .worker : nil
-    let name = agent.name ?? agent.workspace
-    let parts: [String?] = [provider, role?.title, name]
-    let label = parts.compactMap { $0 }.map(oneLine).filter { !$0.isEmpty }.joined(separator: " · ")
-    return label.isEmpty ? String(localized: "session.backgroundTask.agent", defaultValue: "Agent") : label
+    let name = oneLine(agent.name ?? agent.workspace)
+    return name.isEmpty ? String(localized: "session.backgroundTask.agent", defaultValue: "Agent") : name
   }
 
   private static func oneLine(_ value: String) -> String {
@@ -121,7 +120,7 @@ final class PiPAgentTelemetry {
           do {
             for try await frame in subscription.events {
               guard !Task.isCancelled else { break }
-              stream?.metrics.apply(frame, at: ProcessInfo.processInfo.systemUptime)
+              stream?.metrics.apply(frame)
               if frame["type"]?.stringValue == "end" { break }
               delay = .seconds(1)
             }
@@ -139,7 +138,7 @@ final class PiPAgentTelemetry {
     }
   }
 
-  func reading(_ entry: PiPWorkStatus.Entry, at time: TimeInterval) -> AgentActivityMetrics.Reading? {
-    entry.session.flatMap { streams[$0]?.metrics.reading(agentId: entry.agentId, at: time) }
+  func reading(_ entry: PiPWorkStatus.Entry) -> AgentActivityMetrics.Reading? {
+    entry.session.flatMap { streams[$0]?.metrics.reading(agentId: entry.agentId) }
   }
 }

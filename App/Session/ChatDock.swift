@@ -346,11 +346,11 @@ final class ChatDockView: UIView {
   }
 
   /// 293600 as "293.6k", as the official strip writes token counts.
-  static func compact(_ value: Int) -> String {
+  static func compact(_ value: Int, millionDigits: Int = 1) -> String {
     switch value {
     case ..<1000: return "\(value)"
     case ..<1_000_000: return String(format: "%.1fk", Double(value) / 1000)
-    default: return String(format: "%.1fM", Double(value) / 1_000_000)
+    default: return String(format: "%.*fM", millionDigits, Double(value) / 1_000_000)
     }
   }
 }

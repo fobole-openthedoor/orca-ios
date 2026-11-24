@@ -8,15 +8,21 @@ import UIKit
 struct PiPFrame: Equatable {
   enum Style: Equatable { case body, muted, call, terminal }
   struct StatusLine: Hashable {
-    let agent: String
+    var agent: String
+    let agentType: String?
+    let agentRole: WorkspaceAgentRole?
     let host: String
-    var rate: Int?
+    var totalTokens: Int?
     var toolCount: String?
     var toolRunning = false
   }
   struct FleetCounts: Equatable {
     let agents: Int
     let hosts: Int
+  }
+  struct StatusRow: Equatable {
+    let id: WorkingAgent.ID
+    let line: StatusLine
   }
 
   var title: String
@@ -25,7 +31,7 @@ struct PiPFrame: Equatable {
   var lines: [(text: String, style: Style)]
   /// A terminal's frame: monospaced on the terminal's ground.
   var terminal: Bool
-  var statusRows: [StatusLine] = []
+  var statusRows: [StatusRow] = []
   var fleetCounts: FleetCounts?
 
   static func == (a: PiPFrame, b: PiPFrame) -> Bool {
@@ -85,7 +91,7 @@ final class PiPCenter: NSObject {
     guard ProcessInfo.processInfo.environment["ORCA_DEBUG_PIP"] == "1", debugTimer == nil else { return }
     debugTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
       MainActor.assumeIsolated {
-        guard let frame = self?.frame() else { return }
+        guard let frame = self?.last ?? self?.frame()?.content else { return }
         let image = PiPRenderer.image(for: frame, layout: Self.layout)
         try? image.pngData()?.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("pip.png"))
       }
@@ -142,7 +148,7 @@ final class PiPCenter: NSObject {
     guard isSupported else { return }
     guard let view = Self.usesCompactLayout ? compactHost : sessionHost else {
       host.removeFromSuperview()
-      transition?.cancel()
+      cancelTransition()
       timer?.invalidate()
       timer = nil
       last = nil
@@ -169,8 +175,11 @@ final class PiPCenter: NSObject {
     draw(force: true)
   }
 
-  private func frame() -> PiPFrame? {
-    guard Self.usesCompactLayout else { return transcriptFrame?() }
+  private func frame() -> (content: PiPFrame, didAdvance: Bool)? {
+    guard Self.usesCompactLayout else {
+      guard let transcript = transcriptFrame?() else { return nil }
+      return (transcript, false)
+    }
     let status: PiPWorkStatus
     if let workStatus {
       status = workStatus
@@ -187,14 +196,13 @@ final class PiPCenter: NSObject {
     }
     let time = ProcessInfo.processInfo.systemUptime
     let page = rotation.page(in: status.entries.map(\.id), at: time, rotating: isActive)
+    let entries = page.indices.map { status.entries[$0] }
     if isActive {
-      let count = status.entries.count
-      let nextStart = page.upperBound < count ? page.upperBound : 0
-      let nextPage = nextStart..<min(nextStart + WorkingAgentRotation.pageSize, count)
-      let targets = Set(status.entries[page].compactMap(\.session) + status.entries[nextPage].compactMap(\.session))
+      var targets = Set(entries.compactMap(\.session))
+      if let next = page.nextIndex, let key = status.entries[next].session { targets.insert(key) }
       telemetry.follow(targets, model: AppModel.shared)
     }
-    return status.frame(showing: page) { telemetry.reading($0, at: time) }
+    return (status.frame(showing: entries) { telemetry.reading($0) }, page.didAdvance)
   }
 
   /// Another feature (dictation) took the audio session and let it go: play again so leaving the app still
@@ -259,10 +267,10 @@ final class PiPCenter: NSObject {
   /// Draws a new frame when the content changed, and at least every few seconds so the layer stays live.
   private func draw(force: Bool) {
     guard host.superview != nil else { return }
-    guard let frame = frame() else {
+    guard let (frame, didAdvance) = frame() else {
       if last != nil {
         last = nil
-        transition?.cancel()
+        cancelTransition()
         layer.flushAndRemoveImage()
       }
       updateAutoStart()
@@ -277,24 +285,42 @@ final class PiPCenter: NSObject {
     lastLayout = layout
     lastDrawn = now
     updateAutoStart()
+    let animate = isActive && !UIAccessibility.isReduceMotionEnabled && layout == .compact
+    // Update telemetry during the animation without interrupting the rows that are already moving.
+    if animate, transition != nil, previous?.map(\.id) == frame.statusRows.map(\.id) { return }
+    cancelTransition()
+    if animate, didAdvance, let previous, previous.count == 2, frame.statusRows.count == 2,
+      previous[1].id == frame.statusRows[0].id {
+      scroll(leaving: previous[0].line)
+      return
+    }
+    enqueue(frame, layout: layout)
+  }
+
+  private func cancelTransition() {
     transition?.cancel()
-    if isActive, !UIAccessibility.isReduceMotionEnabled, let previous, !previous.isEmpty,
-      !frame.statusRows.isEmpty,
-      !previous.elementsEqual(frame.statusRows, by: { $0.agent == $1.agent && $0.host == $1.host }) {
-      transition = Task { [weak self] in
-        for step in 0...6 {
-          guard !Task.isCancelled else { return }
-          self?.enqueue(frame, layout: layout, previous: previous, progress: CGFloat(step) / 6)
-          if step < 6, (try? await Task.sleep(for: .milliseconds(34))) == nil { return }
+    transition = nil
+  }
+
+  private func scroll(leaving line: PiPFrame.StatusLine) {
+    transition = Task { [weak self] in
+      let start = ProcessInfo.processInfo.systemUptime
+      let duration: TimeInterval = 0.3
+      while !Task.isCancelled, let self, let frame = last {
+        let elapsed = ProcessInfo.processInfo.systemUptime - start
+        let progress = min(CGFloat(elapsed / duration), 1)
+        enqueue(frame, layout: .compact, leaving: line, progress: progress)
+        if progress == 1 {
+          transition = nil
+          return
         }
+        if (try? await Task.sleep(for: .milliseconds(33))) == nil { return }
       }
-    } else {
-      enqueue(frame, layout: layout)
     }
   }
 
-  private func enqueue(_ frame: PiPFrame, layout: PiPLayout, previous: [PiPFrame.StatusLine]? = nil, progress: CGFloat = 1) {
-    guard let buffer = PiPRenderer.sampleBuffer(for: frame, layout: layout, previous: previous, progress: progress) else { return }
+  private func enqueue(_ frame: PiPFrame, layout: PiPLayout, leaving: PiPFrame.StatusLine? = nil, progress: CGFloat = 1) {
+    guard let buffer = PiPRenderer.sampleBuffer(for: frame, layout: layout, leaving: leaving, progress: progress) else { return }
     if layer.status == .failed { layer.flush() }
     layer.enqueue(buffer)
   }
@@ -315,7 +341,7 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
     MainActor.assumeIsolated {
       isActive = false
       telemetry.follow([], model: AppModel.shared)
-      transition?.cancel()
+      cancelTransition()
       openedByHand = false
       updateAutoStart()
       if host.superview != nil { startTimer(interval: 1) }

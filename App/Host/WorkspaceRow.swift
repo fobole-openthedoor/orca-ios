@@ -80,7 +80,7 @@ struct WorkspaceRowConfiguration: UIContentConfiguration {
   func updated(for state: UIConfigurationState) -> WorkspaceRowConfiguration { self }
 }
 
-enum WorkspaceAgentRole {
+enum WorkspaceAgentRole: Hashable {
   case worker, subagent
 
   var title: String {

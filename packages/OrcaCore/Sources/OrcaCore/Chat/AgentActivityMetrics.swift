@@ -3,7 +3,7 @@ import Foundation
 /// A read-only view of a structured session. Keep journal identities and counts in memory, without message text.
 public struct AgentActivityMetrics: Sendable {
   public struct Reading: Sendable, Equatable {
-    public let estimatedTokensPerSecond: Int?
+    public let totalTokens: Int?
     public let toolCalls: Int?
     public let toolCountIsPartial: Bool
     public let toolIsRunning: Bool
@@ -15,6 +15,21 @@ public struct AgentActivityMetrics: Sendable {
     let standalone: Bool
   }
 
+  private struct TokenCount: Sendable {
+    let agentId: String
+    let total: Int
+
+    init?(id: String?, total: JSONValue?) {
+      guard let id, !id.isEmpty, let count = total?.intValue, count >= 0 else { return nil }
+      agentId = id
+      self.total = count
+    }
+
+    init?(_ entry: JSONValue?) {
+      self.init(id: entry?["id"]?.stringValue, total: entry?["tokens"])
+    }
+  }
+
   private struct Row: Sendable {
     let id: String
     let revision: Int
@@ -24,8 +39,7 @@ public struct AgentActivityMetrics: Sendable {
     let turnRunning: Bool?
     let calls: [Call]
     let results: [String]
-    let textBytes: Int?
-    let streaming: Bool
+    let subagentUsage: [TokenCount]
 
     init?(_ item: JSONValue) {
       guard let id = item["itemId"]?.stringValue, let body = item["body"],
@@ -37,7 +51,6 @@ public struct AgentActivityMetrics: Sendable {
       agentId = item["agentId"]?.stringValue
       turnId = item["turnScope"]?["turnItemId"]?.stringValue
       let kind = body["kind"]?.stringValue
-      let role = body["role"]?.stringValue
       let blocks = body["blocks"]?.arrayValue ?? []
       turnRunning = kind == "turn" ? body["state"]?.stringValue.map { $0 == "running" } : nil
       if kind == "tool-call" {
@@ -51,16 +64,12 @@ public struct AgentActivityMetrics: Sendable {
         }
       }
       results = blocks.compactMap { $0["type"]?.stringValue == "tool-result" ? $0["callId"]?.stringValue : nil }
-      streaming = body["state"]?.stringValue.map { $0 == "running" }
-        ?? (role == "assistant" && body["completedAt"] == nil)
-      if kind == "message", role == "assistant" || role == "reasoning", item["shortened"]?.boolValue != true,
-        item["recovered"]?.boolValue != true {
-        textBytes = blocks.reduce(0) { count, block in
-          guard block["type"]?.stringValue == "text" else { return count }
-          return count + (block["text"]?.stringValue?.utf8.count ?? 0)
+      subagentUsage = blocks.flatMap { block -> [TokenCount] in
+        switch block["type"]?.stringValue {
+        case "subagent": return [TokenCount(block)].compactMap { $0 }
+        case "subagent-group": return (block["agents"]?.arrayValue ?? []).compactMap { TokenCount($0) }
+        default: return []
         }
-      } else {
-        textBytes = nil
       }
     }
   }
@@ -70,23 +79,16 @@ public struct AgentActivityMetrics: Sendable {
     let running: Bool
   }
 
-  private struct Sample: Sendable {
-    let at: TimeInterval
-    let bytes: Int
-  }
-
-  private static let interval: TimeInterval = 4
-  private static let bytesPerToken = 4.0
   private var cursor: TranscriptCursor?
   private var turn: Turn?
   private var rows: [String: Row] = [:]
-  private var samples: [String?: [Sample]] = [:]
+  private var subagentTokens: [String: Int] = [:]
   private var hasOlder = true
   private var catchingUp = false
 
   public init() {}
 
-  public mutating func apply(_ frame: JSONValue, at time: TimeInterval) {
+  public mutating func apply(_ frame: JSONValue) {
     switch frame["type"]?.stringValue {
     case "snapshot", "reset":
       self = Self()
@@ -94,47 +96,53 @@ public struct AgentActivityMetrics: Sendable {
       cursor = TranscriptCursor(page["liveCursor"]) ?? TranscriptCursor(page["window"]?["nextCursor"])
       hasOlder = page["hasOlder"]?.boolValue != false
       catchingUp = page["hasNewer"]?.boolValue == true
-      for row in (page["items"]?.arrayValue ?? []).compactMap(Row.init) { rows[row.id] = row }
+      for record in page["subagentRoster"]?.arrayValue ?? [] {
+        recordTokenCount(TokenCount(record["entry"]))
+      }
+      observeBackgroundTokenCounts(frame["backgroundTasks"] ?? page["backgroundTasks"])
+      for row in (page["items"]?.arrayValue ?? []).compactMap(Row.init) { store(row) }
       noteTurn(frame["latestTurn"] ?? page["latestTurn"])
     case "batch":
       guard let batch = frame["batch"], let next = TranscriptCursor(batch["cursor"]) else { return }
       if cursor?.epoch != next.epoch { self = Self() }
-      let previous = cursor
-      if let previous, next.sequence < previous.sequence { return }
-      let hasNewer = frame["hasNewer"]?.boolValue == true
-      let live = previous.map { next.sequence > $0.sequence } == true && !catchingUp && !hasNewer
+      if let cursor, next.sequence < cursor.sequence { return }
       cursor = next
-      catchingUp = hasNewer
-      var growth: [(Row, Row?)] = []
+      catchingUp = frame["hasNewer"]?.boolValue == true
+      observeBackgroundTokenCounts(frame["backgroundTasks"])
       for row in (batch["items"]?.arrayValue ?? []).compactMap(Row.init) {
-        let old = rows[row.id]
-        if let old, old.revision >= row.revision { continue }
-        rows[row.id] = row
-        if live, row.textBytes != nil { growth.append((row, old)) }
+        if let old = rows[row.id], old.revision >= row.revision { continue }
+        store(row)
       }
       for id in (batch["removedItemIds"]?.arrayValue ?? []).compactMap(\.stringValue) { rows.removeValue(forKey: id) }
       noteTurn(frame["latestTurn"])
-      guard live, let previous else { return }
-
-      // Completed full responses, history, recoveries and repeated tool output do not measure live generation.
-      for (row, old) in growth where rows[row.id]?.revision == row.revision && (row.turnId == nil || row.turnId == turn?.id) {
-        guard let size = row.textBytes else { continue }
-        let base: Int
-        if let old {
-          guard old.agentId == row.agentId, old.streaming, let oldSize = old.textBytes else { continue }
-          base = oldSize
-        } else {
-          guard row.streaming, row.sequence > previous.sequence else { continue }
-          base = 0
-        }
-        if size > base {
-          samples[row.agentId, default: []].removeAll { time - $0.at >= Self.interval }
-          samples[row.agentId, default: []].append(Sample(at: time, bytes: size - base))
-        }
-      }
     case "end": self = Self()
     default: break
     }
+  }
+
+  private mutating func store(_ row: Row) {
+    rows[row.id] = row
+    for entry in row.subagentUsage { recordTokenCount(entry) }
+  }
+
+  private mutating func observeBackgroundTokenCounts(_ background: JSONValue?) {
+    for child in background?["children"]?.arrayValue ?? [] where child["kind"]?.stringValue == "agent" {
+      recordTokenCount(TokenCount(id: child["providerId"]?.stringValue, total: child["totalTokens"]))
+    }
+    for key in ["tasks", "settledTasks"] {
+      for task in background?[key]?.arrayValue ?? [] where task["kind"]?.stringValue == "agent" {
+        guard let id = task["id"]?.stringValue else { continue }
+        // Legacy Codex background-task rows prefix the thread ID used by the journal.
+        let prefix = "codex-agent:"
+        let providerId = id.hasPrefix(prefix) ? String(id.dropFirst(prefix.count)) : id
+        recordTokenCount(TokenCount(id: providerId, total: task["totalTokens"]))
+      }
+    }
+  }
+
+  private mutating func recordTokenCount(_ count: TokenCount?) {
+    guard let count else { return }
+    subagentTokens[count.agentId] = max(subagentTokens[count.agentId] ?? count.total, count.total)
   }
 
   private mutating func noteTurn(_ marker: JSONValue?) {
@@ -150,20 +158,13 @@ public struct AgentActivityMetrics: Sendable {
       }
     }
     if let id = turn?.id, previous != id {
-      samples.removeAll()
       rows = rows.filter { $0.value.turnId == nil || $0.value.turnId == id }
-    } else if turn == nil, previous != nil {
-      samples.removeAll()
     }
   }
 
-  public func reading(agentId: String?, at time: TimeInterval) -> Reading {
+  public func reading(agentId: String?) -> Reading {
     guard cursor != nil, !catchingUp else {
-      return Reading(estimatedTokensPerSecond: nil, toolCalls: nil, toolCountIsPartial: false, toolIsRunning: false)
-    }
-    let rate = samples[agentId].map { values in
-      let bytes = values.filter { time - $0.at < Self.interval }.reduce(0.0) { $0 + Double($1.bytes) }
-      return Int((bytes / Self.interval / Self.bytesPerToken).rounded())
+      return Reading(totalTokens: nil, toolCalls: nil, toolCountIsPartial: false, toolIsRunning: false)
     }
     let turnId = turn?.id
     let agentRows = rows.values.filter { $0.agentId == agentId }
@@ -177,7 +178,8 @@ public struct AgentActivityMetrics: Sendable {
     }
     let partial = canCount && ((hasOlder && start == nil) || unscoped)
     return Reading(
-      estimatedTokensPerSecond: rate,
+      // Mobile frames publish provider totals for child agents. A root's context-window reading is separate.
+      totalTokens: agentId.flatMap { subagentTokens[$0] },
       toolCalls: canCount && (!partial || !calls.isEmpty) ? calls.count : nil,
       toolCountIsPartial: partial,
       toolIsRunning: running)
