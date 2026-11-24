@@ -5,6 +5,12 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-24
+
+### Fixed
+
+- A crash, and blank gaps in a chat, when a reply grew while its row was still being prepared.
+
 ## [0.1.1] - 2026-11-24
 
 ### Added
