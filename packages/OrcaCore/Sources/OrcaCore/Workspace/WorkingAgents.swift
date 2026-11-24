@@ -46,42 +46,40 @@ public struct WorkingAgent: Equatable, Sendable, Identifiable {
   }
 }
 
-/// Keeps each two-agent page readable for a full interval even as the roster changes.
+/// Advances one line at a time and gives a changed pair a full interval to read.
 public struct WorkingAgentRotation {
-  private var selected: WorkingAgent.ID?
+  public struct Page: Equatable {
+    public let indices: [Int]
+    public let nextIndex: Int?
+    public let didAdvance: Bool
+  }
+
+  private var visible: [WorkingAgent.ID] = []
   private var shownAt: TimeInterval = 0
   private var lastStart = 0
-  public static let pageSize = 2
-  private static let interval: TimeInterval = 4
+  private static let pageSize = 2
+  private static let interval: TimeInterval = 3
 
   public init() {}
 
-  public mutating func page(in agents: [WorkingAgent.ID], at time: TimeInterval, rotating: Bool) -> Range<Int> {
-    guard !agents.isEmpty else {
-      selected = nil
-      lastStart = 0
-      return 0..<0
-    }
-    let pageSize = Self.pageSize
-    let start: Int
-    if let selected, let existing = agents.firstIndex(of: selected) {
-      let current = existing - existing % pageSize
-      let hasOtherPages = agents.count > pageSize
-      if rotating && hasOtherPages && time - shownAt >= Self.interval {
-        let next = current + pageSize
-        start = next < agents.count ? next : 0
-        shownAt = time
-      } else {
-        start = current
-        if !rotating || !hasOtherPages { shownAt = time }
-      }
-    } else {
-      let fallback = min(lastStart, agents.count - 1)
-      start = fallback - fallback % pageSize
+  public mutating func page(in agents: [WorkingAgent.ID], at time: TimeInterval, rotating: Bool) -> Page {
+    guard agents.count > Self.pageSize else {
+      visible = agents
       shownAt = time
+      lastStart = 0
+      return Page(indices: Array(agents.indices), nextIndex: nil, didAdvance: false)
     }
-    selected = agents[start]
+
+    let count = agents.count
+    let anchor = visible.lazy.compactMap { agents.firstIndex(of: $0) }.first ?? min(lastStart, count - 1)
+    let current = [agents[anchor], agents[(anchor + 1) % count]]
+    let samePair = visible == current
+    let advance = rotating && samePair && time - shownAt >= Self.interval
+    let start = advance ? (anchor + 1) % count : anchor
+    let indices = [start, (start + 1) % count]
+    if advance || !rotating || !samePair { shownAt = time }
+    visible = indices.map { agents[$0] }
     lastStart = start
-    return start..<min(start + pageSize, agents.count)
+    return Page(indices: indices, nextIndex: (start + Self.pageSize) % count, didAdvance: advance)
   }
 }

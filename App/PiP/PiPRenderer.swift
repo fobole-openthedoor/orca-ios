@@ -5,7 +5,7 @@ import UIKit
 /// lines filling the rest from the bottom up, as a chat or terminal reads while it runs.
 enum PiPRenderer {
   static func sampleBuffer(
-    for frame: PiPFrame, layout: PiPLayout, previous: [PiPFrame.StatusLine]? = nil, progress: CGFloat = 1
+    for frame: PiPFrame, layout: PiPLayout, leaving: PiPFrame.StatusLine? = nil, progress: CGFloat = 1
   ) -> CMSampleBuffer? {
     let size = layout.size
     let scale: CGFloat = 2
@@ -32,7 +32,7 @@ enum PiPRenderer {
     context.translateBy(x: 0, y: CGFloat(height))
     context.scaleBy(x: scale, y: -scale)
     UIGraphicsPushContext(context)
-    draw(frame, layout: layout, previous: previous, progress: progress)
+    draw(frame, layout: layout, leaving: leaving, progress: progress)
     UIGraphicsPopContext()
 
     var format: CMVideoFormatDescription?
@@ -63,13 +63,13 @@ enum PiPRenderer {
   private static let amber = UIColor(red: 0.95, green: 0.72, blue: 0.25, alpha: 1)
 
   private static func draw(
-    _ frame: PiPFrame, layout: PiPLayout, previous: [PiPFrame.StatusLine]? = nil, progress: CGFloat = 1
+    _ frame: PiPFrame, layout: PiPLayout, leaving: PiPFrame.StatusLine? = nil, progress: CGFloat = 1
   ) {
     let bounds = CGRect(origin: .zero, size: layout.size)
     (frame.terminal ? TerminalText.background : ground).setFill()
     UIRectFill(bounds)
     if layout == .compact {
-      drawCompact(frame, in: bounds, previous: previous, progress: progress)
+      drawCompact(frame, in: bounds, leaving: leaving, progress: progress)
       return
     }
     let pad: CGFloat = 14
@@ -134,7 +134,7 @@ enum PiPRenderer {
     }
   }
 
-  private static func drawCompact(_ frame: PiPFrame, in bounds: CGRect, previous: [PiPFrame.StatusLine]?, progress: CGFloat) {
+  private static func drawCompact(_ frame: PiPFrame, in bounds: CGRect, leaving: PiPFrame.StatusLine?, progress: CGFloat) {
     let padding: CGFloat = 9
     let labelX = padding + 12
     let right = bounds.maxX - padding
@@ -142,8 +142,6 @@ enum PiPRenderer {
     paragraph.lineBreakMode = .byTruncatingTail
     let middle = NSMutableParagraphStyle()
     middle.lineBreakMode = .byTruncatingMiddle
-    let head = NSMutableParagraphStyle()
-    head.lineBreakMode = .byTruncatingHead
     func label(_ text: String, font: UIFont, color: UIColor, truncation: NSParagraphStyle? = nil) -> NSAttributedString {
       NSAttributedString(
         string: text, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: truncation ?? paragraph])
@@ -170,10 +168,10 @@ enum PiPRenderer {
       let scale = min(1, (width - 2) / max(1, ceil(normal.size().width)))
       return scale < 1 ? label(text, font: metricsFont.withSize(metricsFont.pointSize * scale), color: color) : normal
     }
-    func symbol(_ name: String, color: UIColor, at x: CGFloat, y: CGFloat, width: CGFloat, alpha: CGFloat = 1) {
+    func symbol(_ name: String, color: UIColor, at x: CGFloat, y: CGFloat, width: CGFloat) {
       UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: width, weight: .medium))?
         .withTintColor(color, renderingMode: .alwaysOriginal)
-        .draw(in: CGRect(x: x, y: y, width: width, height: 10), blendMode: .normal, alpha: alpha)
+        .draw(in: CGRect(x: x, y: y, width: width, height: 10))
     }
     if let counts = frame.fleetCounts {
       let totals = [(counts.agents, "person.2.fill", amber), (counts.hosts, "desktopcomputer", muted)]
@@ -188,52 +186,65 @@ enum PiPRenderer {
     UIColor(white: 1, alpha: 0.15).setFill()
     UIBezierPath(rect: CGRect(x: dividerX, y: firstY + 1, width: 1, height: 2 * rowHeight - 2)).fill()
 
-    // Fade the page together. The summary stays readable throughout.
-    let rows = progress < 0.5 ? previous ?? frame.statusRows : frame.statusRows
-    let alpha = previous == nil ? 1 : abs(progress * 2 - 1)
     let agentsRight = dividerX - 7
     let toolWidth: CGFloat = 42
-    let rateWidth: CGFloat = 60
-    let namesRight = agentsRight - toolWidth - rateWidth - 8
-    for (offset, row) in rows.enumerated() {
-      let y = firstY + (rows.count == 1 ? rowHeight / 2 : CGFloat(offset) * rowHeight)
-      dot(at: y + 9, color: amber.withAlphaComponent(alpha))
+    let tokenWidth: CGFloat = 54
+    let namesRight = agentsRight - toolWidth - tokenWidth - 8
+    let markSize: CGFloat = 16
+    let nameFont = UIFont.systemFont(ofSize: 16, weight: .medium, width: .condensed)
+    let nameColor = UIColor(white: 1, alpha: 0.94)
+    func drawRow(_ row: PiPFrame.StatusLine, at y: CGFloat) {
+      let role: Lucide? = switch row.agentRole {
+      case .subagent: .cornerDownRight
+      case .worker: .workflow
+      case nil: nil
+      }
+      dot(at: y + (role == nil ? 9 : 5), color: amber)
+      if let role {
+        role.image(size: 9).withTintColor(muted, renderingMode: .alwaysOriginal)
+          .draw(in: CGRect(x: padding - 1, y: y + 14, width: 9, height: 9))
+      }
       let host = label(row.host, font: .systemFont(ofSize: 13, weight: .medium),
-        color: muted.withAlphaComponent(0.7 * alpha), truncation: middle)
+        color: muted.withAlphaComponent(0.7), truncation: middle)
       let hostWidth = min(ceil(host.size().width), (namesRight - labelX) * 0.32)
       let hostX = namesRight - hostWidth
       host.draw(in: CGRect(x: hostX, y: y + 4, width: hostWidth, height: 24))
-      let nameColor = UIColor(white: 1, alpha: 0.94 * alpha)
-      let nameFont = UIFont.systemFont(ofSize: 17, weight: .medium)
+      let mark = AgentMark.icon(for: row.agentType)
+      let icon = mark?.image(size: markSize) ?? Lucide.bot.image(size: markSize)
+      let renderedIcon = mark?.color == nil ? icon.withTintColor(.white, renderingMode: .alwaysOriginal) : icon
+      renderedIcon.draw(in: CGRect(x: labelX, y: y + 4, width: markSize, height: markSize))
+      let nameX = labelX + markSize + 4
       let name = label(row.agent, font: nameFont, color: nameColor, truncation: middle)
-      let nameWidth = max(0, hostX - labelX - 7)
-      var nameRect = CGRect(x: labelX, y: y + 2, width: nameWidth, height: 26)
-      if name.size().width > nameWidth, let separator = row.agent.range(of: " · ") {
-        let provider = label(String(row.agent[..<separator.lowerBound]), font: nameFont, color: nameColor)
-        let providerWidth = ceil(provider.size().width) + 3
-        if providerWidth < nameWidth * 0.75 {
-          provider.draw(in: CGRect(x: labelX, y: y + 2, width: providerWidth, height: 26))
-          nameRect.origin.x += providerWidth
-          nameRect.size.width -= providerWidth
-          label(String(row.agent[separator.lowerBound...]), font: nameFont, color: nameColor, truncation: head).draw(in: nameRect)
-        } else {
-          name.draw(in: nameRect)
-        }
-      } else {
-        name.draw(in: nameRect)
-      }
+      name.draw(in: CGRect(x: nameX, y: y + 3, width: max(0, hostX - nameX - 6), height: 25))
 
-      let rateX = namesRight + 8
-      let hasOutput = (row.rate ?? 0) > 0
-      let rateColor = hasOutput ? green.withAlphaComponent(0.94 * alpha) : muted.withAlphaComponent(0.58 * alpha)
-      let rate = metric(row.rate.map { "≈\($0) t/s" } ?? "—", color: rateColor, width: rateWidth - 4)
-      let rateSize = min(rateWidth - 4, ceil(rate.size().width) + 1)
-      rate.draw(in: CGRect(x: rateX + rateWidth - rateSize - 4, y: y + 4, width: rateSize, height: 23))
+      let tokenColor = UIColor(white: 1, alpha: row.totalTokens == nil ? 0.4 : 0.84)
+      let tokenText = row.totalTokens.map { ChatDockView.compact($0, millionDigits: 2) } ?? "—"
+      let tokens = metric(tokenText, color: tokenColor, width: tokenWidth - 4)
+      let tokenSize = min(tokenWidth - 4, ceil(tokens.size().width) + 1)
+      tokens.draw(in: CGRect(x: agentsRight - toolWidth - tokenSize - 4, y: y + 4, width: tokenSize, height: 23))
       let toolColor = row.toolRunning ? amber : UIColor(white: 1, alpha: row.toolCount == nil ? 0.45 : 0.8)
-      let call = metric(row.toolCount ?? "—", color: toolColor.withAlphaComponent(toolColor.cgColor.alpha * alpha), width: toolWidth - 14)
+      let call = metric(row.toolCount ?? "—", color: toolColor, width: toolWidth - 14)
       let callSize = min(toolWidth - 14, ceil(call.size().width) + 1)
       call.draw(in: CGRect(x: agentsRight - callSize, y: y + 4, width: callSize, height: 23))
-      symbol("wrench.fill", color: toolColor, at: agentsRight - callSize - 13, y: y + 7, width: 10, alpha: alpha)
+      symbol("wrench.fill", color: toolColor, at: agentsRight - callSize - 13, y: y + 7, width: 10)
+    }
+
+    // Only the agent columns scroll. Clip them at the two row edges and leave the fleet summary fixed.
+    if let leaving, progress < 1, let context = UIGraphicsGetCurrentContext() {
+      context.saveGState()
+      context.clip(to: CGRect(x: 0, y: firstY, width: dividerX, height: 2 * rowHeight))
+      let eased = progress * progress * (3 - 2 * progress)
+      let start = firstY - rowHeight * eased
+      drawRow(leaving, at: start)
+      for (offset, row) in frame.statusRows.enumerated() {
+        drawRow(row.line, at: start + CGFloat(offset + 1) * rowHeight)
+      }
+      context.restoreGState()
+    } else {
+      let start = firstY + (frame.statusRows.count == 1 ? rowHeight / 2 : 0)
+      for (offset, row) in frame.statusRows.enumerated() {
+        drawRow(row.line, at: start + CGFloat(offset) * rowHeight)
+      }
     }
   }
 }

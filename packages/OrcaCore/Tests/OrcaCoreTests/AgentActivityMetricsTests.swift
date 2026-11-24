@@ -1,4 +1,3 @@
-import Foundation
 import Testing
 
 @testable import OrcaCore
@@ -12,63 +11,81 @@ import Testing
       row("inline", sequence: 3, body: ["kind": "message", "role": "assistant", "blocks": [["type": "tool-call", "callId": "shell"]]]),
       row("child-call", sequence: 4, agent: "child", body: tool("child-command", state: "completed")),
       row("old-call", sequence: 5, body: tool("old", state: "completed"), scope: "earlier-turn"),
-    ]), at: 100)
-    #expect(metrics.reading(agentId: nil, at: 100).toolCalls == 1)
-    #expect(metrics.reading(agentId: nil, at: 100).toolIsRunning)
-    #expect(metrics.reading(agentId: "child", at: 100).toolCalls == 1)
-    #expect(!metrics.reading(agentId: "child", at: 100).toolIsRunning)
-    #expect(metrics.reading(agentId: "unmapped-child", at: 100).toolCalls == nil)
+    ]))
+    #expect(metrics.reading(agentId: nil).toolCalls == 1)
+    #expect(metrics.reading(agentId: nil).toolIsRunning)
+    #expect(metrics.reading(agentId: "child").toolCalls == 1)
+    #expect(!metrics.reading(agentId: "child").toolIsRunning)
+    #expect(metrics.reading(agentId: "unmapped-child").toolCalls == nil)
 
     let completion = batch(sequence: 6, rows: [row("call", sequence: 2, revision: 2, body: tool("shell", state: "completed"))])
-    metrics.apply(completion, at: 101)
-    metrics.apply(completion, at: 102)
-    #expect(metrics.reading(agentId: nil, at: 102).toolCalls == 1)
-    #expect(!metrics.reading(agentId: nil, at: 102).toolIsRunning)
+    metrics.apply(completion)
+    metrics.apply(completion)
+    #expect(metrics.reading(agentId: nil).toolCalls == 1)
+    #expect(!metrics.reading(agentId: nil).toolIsRunning)
 
     metrics.apply(batch(sequence: 7, rows: [row("new-turn", sequence: 7, body: ["kind": "turn", "state": "running"], scope: nil)],
-      turn: "new-turn"), at: 103)
-    #expect(metrics.reading(agentId: nil, at: 103).toolCalls == 0)
-    #expect(metrics.reading(agentId: "child", at: 103).toolCalls == nil)
+      turn: "new-turn"))
+    #expect(metrics.reading(agentId: nil).toolCalls == 0)
+    #expect(metrics.reading(agentId: "child").toolCalls == nil)
   }
 
-  @Test func startsFromLiveGrowthAndDecaysWhenOutputStops() {
+  @Test func usesCumulativeCodexChildTotalsFromTheBackgroundChannel() {
     var metrics = AgentActivityMetrics()
-    let base = String(repeating: "a", count: 240)
-    metrics.apply(snapshot(sequence: 10, rows: [
-      row("stream", sequence: 10, body: message(base)),
-    ]), at: 40)
-    #expect(metrics.reading(agentId: nil, at: 40).estimatedTokensPerSecond == nil)
-    let revision = batch(sequence: 11, rows: [
-      row("stream", sequence: 10, revision: 2, body: message(base + String(repeating: "b", count: 48))),
-      row("full-reply", sequence: 11, body: message(base, streaming: false)),
-    ])
-    metrics.apply(revision, at: 41)
-    metrics.apply(revision, at: 42)
-    #expect(metrics.reading(agentId: nil, at: 42).estimatedTokensPerSecond == 3)
-    #expect(metrics.reading(agentId: nil, at: 45).estimatedTokensPerSecond == 0)
+    let background: (Int) -> JSONValue = { total in
+      ["state": "monitoring", "tasks": [
+        ["id": "codex-agent:thread-a", "kind": "agent", "totalTokens": .number(Double(total))],
+        ["id": "shell", "kind": "command", "totalTokens": 123],
+      ]]
+    }
+    metrics.apply(snapshot(sequence: 5, rows: [], background: background(100_100)))
+    #expect(metrics.reading(agentId: "thread-a").totalTokens == 100_100)
+    #expect(metrics.reading(agentId: "shell").totalTokens == nil)
+    #expect(metrics.reading(agentId: nil).totalTokens == nil)
 
-    let child = row("child", sequence: 12, agent: "worker", body: message(String(repeating: "c", count: 32)))
-    metrics.apply(batch(sequence: 12, rows: [child]), at: 46)
-    #expect(metrics.reading(agentId: "worker", at: 47).estimatedTokensPerSecond == 2)
-    #expect(metrics.reading(agentId: nil, at: 47).estimatedTokensPerSecond == 0)
-    metrics.apply(["type": "end"], at: 48)
-    #expect(metrics.reading(agentId: "worker", at: 48).estimatedTokensPerSecond == nil)
+    // A token-only publication need not advance the journal cursor.
+    let update = batch(sequence: 5, rows: [], background: background(1_120_000))
+    metrics.apply(update)
+    metrics.apply(update)
+    metrics.apply(batch(sequence: 6, rows: [], turn: "next-turn"))
+    #expect(metrics.reading(agentId: "thread-a").totalTokens == 1_120_000)
+    metrics.apply(batch(sequence: 4, rows: [], background: background(1_290_000)))
+    #expect(metrics.reading(agentId: "thread-a").totalTokens == 1_120_000)
+    metrics.apply(["type": "end"])
+    #expect(metrics.reading(agentId: "thread-a").totalTokens == nil)
   }
 
-  @Test func clippedHistoryAndCatchUpDontLookLikeFreshWork() {
+  @Test func readsChildChannelAndJournalTotalsWithoutUsingTheRootsContextSize() {
+    var metrics = AgentActivityMetrics()
+    let parent = row("turn", sequence: 1, body: ["kind": "turn", "state": "running", "contextUsage": [
+      "used": ["kind": "report", "usedTokens": 55_000, "windowTokens": 200_000],
+    ]], scope: nil)
+    let roster = row("roster", sequence: 2, body: ["kind": "message", "blocks": [
+      ["type": "subagent-group", "agents": [["id": "a", "tokens": 11_000], ["id": "b", "tokens": 0]]],
+    ]])
+    metrics.apply(snapshot(sequence: 5, rows: [parent, roster], background: ["children": [
+      ["id": "work:3", "providerId": "c", "kind": "agent", "totalTokens": 42_000],
+    ]], roster: [["entry": ["id": "a", "tokens": 9_000]], ["entry": ["id": "d", "tokens": -1]]]))
+    #expect(metrics.reading(agentId: "a").totalTokens == 11_000)
+    #expect(metrics.reading(agentId: "b").totalTokens == 0)
+    #expect(metrics.reading(agentId: "c").totalTokens == 42_000)
+    #expect(metrics.reading(agentId: "d").totalTokens == nil)
+    #expect(metrics.reading(agentId: nil).totalTokens == nil)
+  }
+
+  @Test func suppressesPartialToolCountsDuringCatchUpAndAppliesRemovals() {
     var metrics = AgentActivityMetrics()
     metrics.apply(snapshot(sequence: 6, rows: [row("call", sequence: 6, body: tool("shell", state: "running"))],
-      hasOlder: true), at: 100)
-    #expect(metrics.reading(agentId: nil, at: 100).toolCalls == 1)
-    #expect(metrics.reading(agentId: nil, at: 100).toolCountIsPartial)
-
-    let text = String(repeating: "a", count: 1_000)
-    metrics.apply(batch(sequence: 7, rows: [row("history", sequence: 7, body: message(text))], hasNewer: true), at: 101)
-    metrics.apply(batch(sequence: 8, rows: [row("caught-up", sequence: 8, body: message(text))]), at: 102)
-    #expect(metrics.reading(agentId: nil, at: 102).estimatedTokensPerSecond == nil)
-    metrics.apply(batch(sequence: 9, rows: [], removed: ["call"]), at: 103)
-    #expect(metrics.reading(agentId: nil, at: 103).toolCalls == nil)
-    #expect(!metrics.reading(agentId: nil, at: 103).toolIsRunning)
+      hasOlder: true))
+    #expect(metrics.reading(agentId: nil).toolCalls == 1)
+    #expect(metrics.reading(agentId: nil).toolCountIsPartial)
+    metrics.apply(batch(sequence: 7, rows: [], hasNewer: true))
+    #expect(metrics.reading(agentId: nil).toolCalls == nil)
+    metrics.apply(batch(sequence: 8, rows: []))
+    #expect(metrics.reading(agentId: nil).toolCalls == 1)
+    metrics.apply(batch(sequence: 9, rows: [], removed: ["call"]))
+    #expect(metrics.reading(agentId: nil).toolCalls == nil)
+    #expect(!metrics.reading(agentId: nil).toolIsRunning)
   }
 
   private func row(_ id: String, sequence: Int, revision: Int = 1, agent: String? = nil, body: JSONValue,
@@ -84,19 +101,16 @@ import Testing
     ["kind": "tool-call", "callId": .string(id), "state": .string(state)]
   }
 
-  private func message(_ text: String, streaming: Bool = true) -> JSONValue {
-    ["kind": "message", "role": "assistant", "state": streaming ? "running" : "completed",
-      "blocks": [["type": "text", "text": .string(text)]]]
-  }
-
-  private func snapshot(sequence: Int, rows: [JSONValue], hasOlder: Bool = false) -> JSONValue {
+  private func snapshot(sequence: Int, rows: [JSONValue], hasOlder: Bool = false, background: JSONValue = .null,
+    roster: [JSONValue] = []) -> JSONValue {
     ["type": "snapshot", "page": ["liveCursor": cursor(sequence), "items": .array(rows),
-      "hasOlder": .bool(hasOlder), "latestTurn": marker("turn")]]
+      "hasOlder": .bool(hasOlder), "latestTurn": marker("turn"), "backgroundTasks": background,
+      "subagentRoster": .array(roster)]]
   }
 
   private func batch(sequence: Int, rows: [JSONValue], removed: [String] = [], turn: String = "turn",
-    hasNewer: Bool = false) -> JSONValue {
-    ["type": "batch", "latestTurn": marker(turn), "hasNewer": .bool(hasNewer),
+    hasNewer: Bool = false, background: JSONValue = .null) -> JSONValue {
+    ["type": "batch", "latestTurn": marker(turn), "hasNewer": .bool(hasNewer), "backgroundTasks": background,
       "batch": ["cursor": cursor(sequence), "items": .array(rows), "removedItemIds": .array(removed.map(JSONValue.string))]]
   }
 

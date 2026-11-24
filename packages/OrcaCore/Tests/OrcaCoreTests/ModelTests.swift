@@ -176,7 +176,7 @@ import Testing
     #expect(Set((first + second).map(\.id)).count == 6)
   }
 
-  @Test func rotatesTwoAtATimeWithoutRepeatingTheLastPage() {
+  @Test func scrollsOneLineAtATimeAndWrapsWithTwoVisibleAgents() {
     let host = UUID()
     let a = WorkingAgent.ID(host: host, pane: "a", child: nil)
     let b = WorkingAgent.ID(host: host, pane: "b", child: nil)
@@ -186,18 +186,33 @@ import Testing
     let e = WorkingAgent.ID(host: other, pane: "c", child: nil)
     let agents = [a, b, c, d, e]
     var rotation = WorkingAgentRotation()
-    #expect(rotation.page(in: agents, at: 0, rotating: true) == 0..<2)
-    #expect(rotation.page(in: agents, at: 3.9, rotating: true) == 0..<2)
-    #expect(rotation.page(in: agents, at: 4, rotating: true) == 2..<4)
-    #expect(rotation.page(in: agents, at: 8, rotating: true) == 4..<5)
-    #expect(rotation.page(in: agents, at: 12, rotating: true) == 0..<2)
+    #expect(rotation.page(in: agents, at: 0, rotating: true) == .init(indices: [0, 1], nextIndex: 2, didAdvance: false))
+    #expect(rotation.page(in: agents, at: 2.9, rotating: true) == .init(indices: [0, 1], nextIndex: 2, didAdvance: false))
+    #expect(rotation.page(in: agents, at: 3, rotating: true) == .init(indices: [1, 2], nextIndex: 3, didAdvance: true))
+    #expect(rotation.page(in: agents, at: 6, rotating: true) == .init(indices: [2, 3], nextIndex: 4, didAdvance: true))
+    #expect(rotation.page(in: agents, at: 9, rotating: true) == .init(indices: [3, 4], nextIndex: 0, didAdvance: true))
+    #expect(rotation.page(in: agents, at: 12, rotating: true) == .init(indices: [4, 0], nextIndex: 1, didAdvance: true))
+    #expect(rotation.page(in: agents, at: 15, rotating: true) == .init(indices: [0, 1], nextIndex: 2, didAdvance: true))
+  }
 
-    #expect(rotation.page(in: [b, c], at: 13, rotating: true) == 0..<2)
-    #expect(rotation.page(in: [b, c], at: 20, rotating: true) == 0..<2)
-    #expect(rotation.page(in: [b, c, d], at: 21, rotating: true) == 0..<2)
-    #expect(rotation.page(in: [b, c, d], at: 29, rotating: false) == 0..<2)
-    #expect(rotation.page(in: [d], at: 30, rotating: true) == 0..<1)
-    #expect(rotation.page(in: [], at: 31, rotating: true).isEmpty)
+  @Test func keepsTheVisibleAgentWhenTheRosterChangesAndStopsWithSmallLists() {
+    let host = UUID()
+    let agents = ["a", "b", "c", "d"].map { WorkingAgent.ID(host: host, pane: $0, child: nil) }
+    let (a, b, c, d) = (agents[0], agents[1], agents[2], agents[3])
+    var rotation = WorkingAgentRotation()
+    #expect(rotation.page(in: agents, at: 0, rotating: true).indices == [0, 1])
+    #expect(rotation.page(in: agents, at: 3, rotating: true).indices == [1, 2])
+    // b leaves. c stays on screen, in the first slot with a fresh interval.
+    let remaining = [a, c, d]
+    #expect(rotation.page(in: remaining, at: 5, rotating: true) == .init(indices: [1, 2], nextIndex: 0, didAdvance: false))
+    #expect(!rotation.page(in: remaining, at: 7.9, rotating: true).didAdvance)
+    #expect(rotation.page(in: remaining, at: 8, rotating: true).indices == [2, 0])
+    #expect(rotation.page(in: [d, a, b, c], at: 9, rotating: true).indices == [0, 1])
+    #expect(!rotation.page(in: remaining, at: 15, rotating: false).didAdvance)
+    #expect(!rotation.page(in: remaining, at: 16, rotating: true).didAdvance)
+    #expect(rotation.page(in: [c, d], at: 21, rotating: true) == .init(indices: [0, 1], nextIndex: nil, didAdvance: false))
+    #expect(rotation.page(in: [d], at: 30, rotating: true).indices == [0])
+    #expect(rotation.page(in: [], at: 31, rotating: true).indices.isEmpty)
   }
 }
 
