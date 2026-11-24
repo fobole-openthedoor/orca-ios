@@ -212,7 +212,20 @@ final class HostViewController: UIViewController {
       lane("all", worktrees)
     }
     snapshot.reconfigureItems(snapshot.itemIdentifiers)
-    dataSource.apply(snapshot, animatingDifferences: view.window != nil)
+    dataSource.apply(snapshot, animatingDifferences: view.window != nil) { [weak self] in self?.refreshHeaders() }
+  }
+
+  /// Headers count their rows when made; a section that stays while its rows change keeps its header, so
+  /// those on screen count again after each update.
+  private var configureHeader: ((WorkspaceSectionHeader, IndexPath) -> Void)?
+
+  private func refreshHeaders() {
+    let kind = UICollectionView.elementKindSectionHeader
+    for indexPath in collection.indexPathsForVisibleSupplementaryElements(ofKind: kind) {
+      if let header = collection.supplementaryView(forElementKind: kind, at: indexPath) as? WorkspaceSectionHeader {
+        configureHeader?(header, indexPath)
+      }
+    }
   }
 
   /// Projects in the host's order, or by their latest workspace activity.
@@ -271,9 +284,7 @@ final class HostViewController: UIViewController {
       background.backgroundColor = Palette.bgBase
       cell.backgroundConfiguration = background
     }
-    let header = UICollectionView.SupplementaryRegistration<WorkspaceSectionHeader>(
-      elementKind: UICollectionView.elementKindSectionHeader
-    ) { [weak self] header, _, indexPath in
+    let configureHeader = { [weak self] (header: WorkspaceSectionHeader, indexPath: IndexPath) in
       guard let self, let section = self.dataSource.sectionIdentifier(for: indexPath.section) else { return }
       switch section {
       case .bots:
@@ -292,6 +303,10 @@ final class HostViewController: UIViewController {
         }
       }
     }
+    self.configureHeader = configureHeader
+    let header = UICollectionView.SupplementaryRegistration<WorkspaceSectionHeader>(
+      elementKind: UICollectionView.elementKindSectionHeader
+    ) { header, _, indexPath in configureHeader(header, indexPath) }
     let botCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
       guard let self, let bot = self.session.bots.bots.first(where: { $0.id == id }) else { return }
       var configuration = BotRowConfiguration.make(bot: bot, session: self.session, showHost: false)
@@ -526,7 +541,56 @@ extension HostViewController: UICollectionViewDelegate, UISearchResultsUpdating 
         title: String(localized: "common.copy", defaultValue: "Copy"), subtitle: worktree.branch,
         image: Lucide.copy.image(size: 18)
       ) { _ in UIPasteboard.general.string = worktree.branch }
-      return UIMenu(title: worktree.displayName, children: [pin, copyBranch])
+      let delete = UIAction(
+        title: String(localized: "common.delete", defaultValue: "Delete"), image: Lucide.trash2.image(size: 18),
+        attributes: .destructive
+      ) { [weak self] _ in self?.confirmDelete(worktree) }
+      return UIMenu(title: worktree.displayName, children: [
+        UIMenu(options: .displayInline, children: [pin, copyBranch]), UIMenu(options: .displayInline, children: [delete]),
+      ])
+    }
+  }
+
+  /// The official delete sheet's words: a folder leaves Orca and stays on disk; a worktree goes with its branch.
+  private func confirmDelete(_ worktree: Worktree) {
+    let name = worktree.displayName.isEmpty ? worktree.repo : worktree.displayName
+    let folder = worktree.id.hasPrefix("folder:")
+    let alert = UIAlertController(
+      title: folder ? String(localized: "hostScreen.deleteConfirm.removeTitle", defaultValue: "Remove Workspace") : nil,
+      message: folder
+        ? String(
+          format: String(
+            localized: "hostScreen.deleteConfirm.removeFolderMessage",
+            defaultValue: "Remove \"%1$@\" from Orca? The folder on disk is kept."), name)
+        : String(
+          format: String(localized: "hostScreen.hostScreenOverlays.deleteConfirmMessage", defaultValue: "Delete \"%1$@\" (%2$@)?"),
+          name, worktree.branch.replacingOccurrences(of: "refs/heads/", with: "")),
+      preferredStyle: .alert)
+    alert.addAction(UIAlertAction(title: String(localized: "common.cancel", defaultValue: "Cancel"), style: .cancel))
+    alert.addAction(
+      UIAlertAction(title: String(localized: "common.delete", defaultValue: "Delete"), style: .destructive) { [weak self] _ in
+        self?.delete(worktree, name: name)
+      })
+    present(alert, animated: true)
+  }
+
+  private func delete(_ worktree: Worktree, name: String) {
+    let session = session
+    Task { [weak self] in
+      do {
+        try await session.api.removeWorkspace(id: worktree.id)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+      } catch {
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        let alert = UIAlertController(
+          title: String(
+            format: String(localized: "hostScreen.hostScreenOverlays.deleteFailed", defaultValue: "Failed to delete \"%1$@\""),
+            name),
+          message: (error as? RPCError)?.message ?? error.localizedDescription, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok", defaultValue: "OK"), style: .default))
+        self?.present(alert, animated: true)
+      }
+      await session.refresh()
     }
   }
 }

@@ -98,6 +98,23 @@ public struct HostAPI: Sendable {
     _ = try await connection.request("worktree.set", ["worktree": .string(selector), "isPinned": .bool(pinned)])
   }
 
+  /// Deletes a workspace, as the official phone does (worktree-remove-request.ts): a git worktree with
+  /// `worktree.rm`, uncommitted work and all; a folder workspace leaves Orca and its folder stays on disk.
+  /// The repository's archive hook doesn't run from the phone. Throws the desktop's refusal.
+  public func removeWorkspace(id: String) async throws {
+    if id.hasPrefix("folder:") {
+      _ = try await connection.request(
+        "folderWorkspace.delete",
+        [
+          "folderWorkspaceId": .string(String(id.dropFirst("folder:".count))), "requireUniqueId": true,
+          "runHooks": false,
+        ], timeout: .seconds(60))
+    } else {
+      _ = try await connection.request(
+        "worktree.rm", ["worktree": .string("id:\(id)"), "force": true, "runHooks": false], timeout: .seconds(60))
+    }
+  }
+
   // MARK: Tabs
 
   public func tabs(worktree selector: String) async -> RPCSubscription {
