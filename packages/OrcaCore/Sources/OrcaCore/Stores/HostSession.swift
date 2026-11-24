@@ -215,6 +215,8 @@ public final class HostSession {
   }
 
   private func load() async {
+    // Also when a reply from a dropped connection is thrown away below.
+    defer { isLoading = false }
     var catalog = catalog
     let connectedAt = lastConnectedAt
     do {
@@ -244,7 +246,6 @@ public final class HostSession {
       hasLiveWorktrees = false
       loadError = Self.describe(error)
     }
-    isLoading = false
   }
 
   static func describe(_ error: Error) -> String {
