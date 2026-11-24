@@ -32,6 +32,7 @@ struct PiPFrame: Equatable {
     let activeIndices: [Int]
     let pinsFirstRow: Bool
     let splitAt: Int?
+    let isPaused: Bool
   }
   struct StatusRow: Equatable {
     let id: WorkingAgent.ID
@@ -68,6 +69,13 @@ struct PiPScrollTransition: Equatable {
   }
   let kind: Kind
   let fromScroll: PiPFrame.ScrollState?
+  let direction: Int
+
+  init(kind: Kind, fromScroll: PiPFrame.ScrollState?, direction: Int = 1) {
+    self.kind = kind
+    self.fromScroll = fromScroll
+    self.direction = direction
+  }
 }
 
 enum PiPLayout {
@@ -149,9 +157,13 @@ final class PiPCenter: NSObject {
   private var lastDrawn = Date.distantPast
   private let silence = SilentAudio()
   private(set) var isActive = false
+  private var rotationPaused = false
+  private var pendingStep = 0
   /// The system starts picture in picture on leaving only from media that plays; idle, the frames read as
   /// paused, so nothing opens. Read from the playback delegate, off the main actor.
   nonisolated(unsafe) private static var playing = false
+  /// True when the mini status bar has >2 active groups so PiP skip buttons can step backward/forward.
+  nonisolated(unsafe) private static var skippable = false
   /// The window was opened from the session menu: it stays even while idle.
   private var openedByHand = false
 
@@ -216,10 +228,11 @@ final class PiPCenter: NSObject {
     draw(force: true)
   }
 
-  private func frame() -> (content: PiPFrame, didAdvance: Bool, scrollsOnlySecondRow: Bool, isSplit: Bool)? {
+  private func frame() -> (content: PiPFrame, didAdvance: Bool, stepDirection: Int, scrollsOnlySecondRow: Bool, isSplit: Bool)? {
     guard Self.usesCompactLayout else {
+      pendingStep = 0
       guard let transcript = transcriptFrame?() else { return nil }
-      return (transcript, false, false, false)
+      return (transcript, false, 0, false, false)
     }
     let status: PiPWorkStatus
     if let workStatus {
@@ -242,14 +255,16 @@ final class PiPCenter: NSObject {
     for entry in status.entries where activitySince[entry.id]?.activity != entry.activity {
       activitySince[entry.id] = (entry.activity, time)
     }
+    let manualStep = pendingStep
+    pendingStep = 0
     let waiting = status.entries.filter { $0.activity != .working }.map(\.id)
     let newlyWaiting = waiting.first { !waitingAgents.contains($0) }
     waitingAgents = Set(waiting)
     let pinned = waiting.count == 1 && status.entries.count > 2 ? waiting.first : nil
     let splitAt = waiting.count >= 2 && waiting.count < status.entries.count ? waiting.count : nil
     let page = rotation.page(
-      in: status.entries.map(\.id), at: time, rotating: isActive,
-      preferring: pinned == nil ? newlyWaiting : nil, pinned: pinned, splitAt: splitAt)
+      in: status.entries.map(\.id), at: time, rotating: isActive && !rotationPaused,
+      preferring: pinned == nil ? newlyWaiting : nil, pinned: pinned, splitAt: splitAt, step: manualStep)
     let entries = page.indices.map { status.entries[$0] }
     if isActive {
       var targets = Set(entries.compactMap(\.session))
@@ -259,7 +274,7 @@ final class PiPCenter: NSObject {
     }
     let includeSeconds = isActive
     return (
-      status.frame(showing: entries, page: page, elapsed: { entry, turnStartedAt in
+      status.frame(showing: entries, page: page, paused: rotationPaused, elapsed: { entry, turnStartedAt in
         let seconds: Int?
         if entry.activity == .working, let start = PiPWorkStatus.normalizedEpochSeconds(turnStartedAt, relativeTo: nowEpoch) {
           seconds = max(0, Int(nowEpoch - start))
@@ -273,6 +288,7 @@ final class PiPCenter: NSObject {
         return seconds.flatMap { PiPWorkStatus.formatElapsed($0, includeSeconds: includeSeconds) }
       }, reading: { telemetry.reading($0, at: time) }),
       page.didAdvance,
+      page.stepDirection,
       page.scrollsOnlySecondRow,
       page.splitAt != nil
     )
@@ -294,15 +310,36 @@ final class PiPCenter: NSObject {
     if controller?.canStartPictureInPictureAutomaticallyFromInline != wanted {
       controller?.canStartPictureInPictureAutomaticallyFromInline = wanted
     }
-    // Playing is what the system auto-starts from: only when leaving should open it, or the window is open
-    // because the person asked.
-    let playing = openedByHand || wanted
-    if Self.playing != playing {
+    // Enable PiP skip buttons only when the mini status bar has extra rows to flip through.
+    let canSkip = Self.usesCompactLayout && ((last?.scrollState?.activities.count ?? 0) > 2)
+    let needsLinear = !canSkip
+    if controller?.requiresLinearPlayback != needsLinear {
+      controller?.requiresLinearPlayback = needsLinear
+    }
+    let skipChanged = Self.skippable != canSkip
+    Self.skippable = canSkip
+    // While inactive, playing signals auto-start on leave. While active in mini status bar,
+    // playing reflects whether auto-rotation is running (pause pins the visible pair).
+    let playing = isActive && Self.usesCompactLayout ? !rotationPaused : (openedByHand || wanted)
+    if Self.playing != playing || skipChanged {
       Self.playing = playing
       controller?.invalidatePlaybackState()
     }
-    // Keep an open overlay updating. The app-wide layout can release audio while it has nothing to show.
+    // Keep an open overlay updating (including while rotation is paused).
     if attached && (isActive || playing || !Self.usesCompactLayout) { silence.start() } else { silence.stop() }
+  }
+
+  private func setRotationPaused(_ paused: Bool) {
+    guard isActive, Self.usesCompactLayout, rotationPaused != paused else { return }
+    rotationPaused = paused
+    updateAutoStart()
+    draw(force: true)
+  }
+
+  private func stepRotation(_ delta: Int) {
+    guard isActive, Self.usesCompactLayout, delta != 0 else { return }
+    pendingStep = delta > 0 ? 1 : -1
+    draw(force: true)
   }
 
   /// The app is about to go: decide from what is on screen right now, not the last frame drawn.
@@ -360,7 +397,7 @@ final class PiPCenter: NSObject {
   /// Draws a new frame when the content changed, and at least every few seconds so the layer stays live.
   private func draw(force: Bool) {
     guard host.superview != nil else { return }
-    guard let (frame, didAdvance, scrollsOnlySecondRow, isSplit) = frame() else {
+    guard let (frame, didAdvance, stepDirection, scrollsOnlySecondRow, isSplit) = frame() else {
       setAnimatingFrames(false)
       if last != nil {
         last = nil
@@ -419,21 +456,28 @@ final class PiPCenter: NSObject {
       }
     }
     if animate, didAdvance, let previous, previous.count == 2, frame.statusRows.count == 2 {
+      let dir = stepDirection < 0 ? -1 : 1
       if scrollsOnlySecondRow, previous[0].id == frame.statusRows[0].id, previous[1].id != frame.statusRows[1].id {
-        scroll(.init(kind: .perRow(leavingFirst: nil, leavingSecond: previous[1].line), fromScroll: previousScroll))
+        scroll(.init(kind: .perRow(leavingFirst: nil, leavingSecond: previous[1].line), fromScroll: previousScroll, direction: dir))
         return
       }
       if isSplit {
         let leavingFirst = previous[0].id != frame.statusRows[0].id ? previous[0].line : nil
         let leavingSecond = previous[1].id != frame.statusRows[1].id ? previous[1].line : nil
         if leavingFirst != nil || leavingSecond != nil {
-          scroll(.init(kind: .perRow(leavingFirst: leavingFirst, leavingSecond: leavingSecond), fromScroll: previousScroll))
+          scroll(.init(kind: .perRow(leavingFirst: leavingFirst, leavingSecond: leavingSecond), fromScroll: previousScroll, direction: dir))
           return
         }
       }
-      if !scrollsOnlySecondRow, !isSplit, previous[1].id == frame.statusRows[0].id {
-        scroll(.init(kind: .full(leaving: previous[0].line), fromScroll: previousScroll))
-        return
+      if !scrollsOnlySecondRow, !isSplit {
+        if dir > 0, previous[1].id == frame.statusRows[0].id {
+          scroll(.init(kind: .full(leaving: previous[0].line), fromScroll: previousScroll, direction: 1))
+          return
+        }
+        if dir < 0, previous[0].id == frame.statusRows[1].id {
+          scroll(.init(kind: .full(leaving: previous[1].line), fromScroll: previousScroll, direction: -1))
+          return
+        }
       }
     }
     enqueue(frame, layout: layout)
@@ -498,6 +542,8 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
   nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
     MainActor.assumeIsolated {
       isActive = false
+      rotationPaused = false
+      pendingStep = 0
       telemetry.follow([], model: AppModel.shared)
       cancelTransition()
       setAnimatingFrames(false)
@@ -542,11 +588,17 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
 }
 
 extension PiPCenter: AVPictureInPictureSampleBufferPlaybackDelegate {
-  nonisolated func pictureInPictureController(_ controller: AVPictureInPictureController, setPlaying playing: Bool) {}
+  nonisolated func pictureInPictureController(_ controller: AVPictureInPictureController, setPlaying playing: Bool) {
+    Task { @MainActor in
+      self.setRotationPaused(!playing)
+    }
+  }
 
-  /// Live: no start, no end, nothing to scrub.
+  /// Unbounded when >2 active groups can be stepped manually in both directions; otherwise standard live range.
   nonisolated func pictureInPictureControllerTimeRangeForPlayback(_ controller: AVPictureInPictureController) -> CMTimeRange {
-    CMTimeRange(start: .negativeInfinity, duration: .positiveInfinity)
+    Self.skippable
+      ? CMTimeRange(start: .negativeInfinity, duration: .positiveInfinity)
+      : CMTimeRange(start: .zero, duration: .positiveInfinity)
   }
 
   nonisolated func pictureInPictureControllerIsPlaybackPaused(_ controller: AVPictureInPictureController) -> Bool {
@@ -560,7 +612,13 @@ extension PiPCenter: AVPictureInPictureSampleBufferPlaybackDelegate {
   nonisolated func pictureInPictureController(
     _ controller: AVPictureInPictureController, skipByInterval skipInterval: CMTime, completion: @escaping () -> Void
   ) {
-    completion()
+    let seconds = CMTimeGetSeconds(skipInterval)
+    Task { @MainActor in
+      if Self.usesCompactLayout, self.isActive, seconds.isFinite, seconds != 0 {
+        self.stepRotation(seconds > 0 ? 1 : -1)
+      }
+      completion()
+    }
   }
 }
 

@@ -152,17 +152,19 @@ public struct WorkingAgentRotation {
     public let nextIndex: Int?
     public let secondaryNextIndex: Int?
     public let didAdvance: Bool
+    public let stepDirection: Int
     public let scrollsOnlySecondRow: Bool
     public let splitAt: Int?
 
     public init(
       indices: [Int], nextIndex: Int?, secondaryNextIndex: Int? = nil,
-      didAdvance: Bool, scrollsOnlySecondRow: Bool = false, splitAt: Int? = nil
+      didAdvance: Bool, stepDirection: Int? = nil, scrollsOnlySecondRow: Bool = false, splitAt: Int? = nil
     ) {
       self.indices = indices
       self.nextIndex = nextIndex
       self.secondaryNextIndex = secondaryNextIndex
       self.didAdvance = didAdvance
+      self.stepDirection = stepDirection ?? (didAdvance ? 1 : 0)
       self.scrollsOnlySecondRow = scrollsOnlySecondRow
       self.splitAt = splitAt
     }
@@ -180,7 +182,8 @@ public struct WorkingAgentRotation {
 
   public mutating func page(
     in agents: [WorkingAgent.ID], at time: TimeInterval, rotating: Bool,
-    preferring priority: WorkingAgent.ID? = nil, pinned: WorkingAgent.ID? = nil, splitAt: Int? = nil
+    preferring priority: WorkingAgent.ID? = nil, pinned: WorkingAgent.ID? = nil,
+    splitAt: Int? = nil, step: Int = 0
   ) -> Page {
     guard agents.count > Self.pageSize else {
       visible = agents
@@ -191,6 +194,8 @@ public struct WorkingAgentRotation {
       return Page(indices: Array(agents.indices), nextIndex: nil, didAdvance: false)
     }
 
+    let manualStep = step > 0 ? 1 : (step < 0 ? -1 : 0)
+
     if let pinned, let pinnedIndex = agents.firstIndex(of: pinned) {
       let others = agents.indices.filter { $0 != pinnedIndex }
       let otherCount = others.count
@@ -199,15 +204,18 @@ public struct WorkingAgentRotation {
         ?? min(lastBottomStart, otherCount - 1)
       let current = [agents[pinnedIndex], agents[others[anchorSlot]]]
       let samePair = visible == current
-      let advance = rotating && samePair && time - shownAt >= Self.interval
-      let slot = advance ? (anchorSlot + 1) % otherCount : anchorSlot
+      let autoAdvance = manualStep == 0 && rotating && samePair && time - shownAt >= Self.interval
+      let delta = manualStep != 0 ? manualStep : (autoAdvance ? 1 : 0)
+      let slot = (anchorSlot + delta + otherCount) % otherCount
       let secondIndex = others[slot]
       let nextIndex = others[(slot + 1) % otherCount]
-      if advance || !rotating || !samePair { shownAt = time }
+      if delta != 0 || !rotating || !samePair { shownAt = time }
       visible = [agents[pinnedIndex], agents[secondIndex]]
       lastStart = slot
       lastBottomStart = slot
-      return Page(indices: [pinnedIndex, secondIndex], nextIndex: nextIndex, didAdvance: advance, scrollsOnlySecondRow: true)
+      return Page(
+        indices: [pinnedIndex, secondIndex], nextIndex: nextIndex,
+        didAdvance: delta != 0, stepDirection: delta, scrollsOnlySecondRow: true)
     }
 
     if let splitAt, splitAt >= 2, splitAt < agents.count {
@@ -229,21 +237,22 @@ public struct WorkingAgentRotation {
       let bottomAnchor = previousBottom ?? min(lastBottomStart, bottomCount - 1)
       let current = [agents[topAnchor], agents[bottomIndices[bottomAnchor]]]
       let samePair = visible == current
-      let advance = preferredTop == nil && rotating && samePair && time - shownAt >= Self.interval
-      let topSlot = advance ? (topAnchor + 1) % topCount : topAnchor
-      let bottomSlot = (advance && bottomCount > 1) ? (bottomAnchor + 1) % bottomCount : bottomAnchor
+      let autoAdvance = manualStep == 0 && preferredTop == nil && rotating && samePair && time - shownAt >= Self.interval
+      let delta = preferredTop == nil ? (manualStep != 0 ? manualStep : (autoAdvance ? 1 : 0)) : 0
+      let topSlot = (topAnchor + delta + topCount) % topCount
+      let bottomSlot = (delta != 0 && bottomCount > 1) ? (bottomAnchor + delta + bottomCount) % bottomCount : bottomAnchor
       let firstIndex = topSlot
       let secondIndex = bottomIndices[bottomSlot]
       let nextTop = (topSlot + 1) % topCount
       let nextBottom = bottomCount > 1 ? bottomIndices[(bottomSlot + 1) % bottomCount] : nil
-      if preferredTop != nil || advance || !rotating || !samePair { shownAt = time }
+      if preferredTop != nil || delta != 0 || !rotating || !samePair { shownAt = time }
       visible = [agents[firstIndex], agents[secondIndex]]
       lastStart = firstIndex
       lastTopStart = topSlot
       lastBottomStart = bottomSlot
       return Page(
         indices: [firstIndex, secondIndex], nextIndex: nextTop, secondaryNextIndex: nextBottom,
-        didAdvance: advance, scrollsOnlySecondRow: false, splitAt: splitAt)
+        didAdvance: delta != 0, stepDirection: delta, scrollsOnlySecondRow: false, splitAt: splitAt)
     }
 
     let count = agents.count
@@ -251,12 +260,15 @@ public struct WorkingAgentRotation {
     let anchor = preferred ?? visible.lazy.compactMap { agents.firstIndex(of: $0) }.first ?? min(lastStart, count - 1)
     let current = [agents[anchor], agents[(anchor + 1) % count]]
     let samePair = visible == current
-    let advance = preferred == nil && rotating && samePair && time - shownAt >= Self.interval
-    let start = advance ? (anchor + 1) % count : anchor
+    let autoAdvance = manualStep == 0 && preferred == nil && rotating && samePair && time - shownAt >= Self.interval
+    let delta = preferred == nil ? (manualStep != 0 ? manualStep : (autoAdvance ? 1 : 0)) : 0
+    let start = (anchor + delta + count) % count
     let indices = [start, (start + 1) % count]
-    if preferred != nil || advance || !rotating || !samePair { shownAt = time }
+    if preferred != nil || delta != 0 || !rotating || !samePair { shownAt = time }
     visible = indices.map { agents[$0] }
     lastStart = start
-    return Page(indices: indices, nextIndex: (start + Self.pageSize) % count, didAdvance: advance)
+    return Page(
+      indices: indices, nextIndex: (start + Self.pageSize) % count,
+      didAdvance: delta != 0, stepDirection: delta)
   }
 }

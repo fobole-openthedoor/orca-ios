@@ -347,6 +347,30 @@ import Testing
     #expect(WorkingAgent.Activity.needsAnswer.priority < WorkingAgent.Activity.working.priority)
   }
 
+  @Test func stepsForwardAndBackwardManuallyEvenWhileRotationIsPaused() {
+    let host = UUID()
+    let agents = ["a", "b", "c", "d"].map { WorkingAgent.ID(host: host, pane: $0) }
+    var full = WorkingAgentRotation()
+    #expect(full.page(in: agents, at: 0, rotating: false).indices == [0, 1])
+    // Backward wraps 0 -> 3 cleanly while paused.
+    #expect(full.page(in: agents, at: 1, rotating: false, step: -1)
+      == .init(indices: [3, 0], nextIndex: 1, didAdvance: true, stepDirection: -1))
+    // Forward steps 3 -> 0 cleanly while paused.
+    #expect(full.page(in: agents, at: 2, rotating: false, step: 1)
+      == .init(indices: [0, 1], nextIndex: 2, didAdvance: true, stepDirection: 1))
+    // Pin-1 backward steps row 2 while keeping row 1 pinned.
+    var pinned = WorkingAgentRotation()
+    #expect(pinned.page(in: agents, at: 0, rotating: false, pinned: agents[0]).indices == [0, 1])
+    #expect(pinned.page(in: agents, at: 1, rotating: false, pinned: agents[0], step: -1)
+      == .init(indices: [0, 3], nextIndex: 1, didAdvance: true, stepDirection: -1, scrollsOnlySecondRow: true))
+    // Split-zone backward steps both zones cleanly.
+    let splitAgents = ["d1", "a1", "w1", "w2", "w3"].map { WorkingAgent.ID(host: host, pane: $0) }
+    var split = WorkingAgentRotation()
+    #expect(split.page(in: splitAgents, at: 0, rotating: false, splitAt: 2).indices == [0, 2])
+    #expect(split.page(in: splitAgents, at: 1, rotating: false, splitAt: 2, step: -1)
+      == .init(indices: [1, 4], nextIndex: 0, secondaryNextIndex: 2, didAdvance: true, stepDirection: -1, splitAt: 2))
+  }
+
   @Test func detectsCrossHostDuplicateTitlesOnlyAcrossDistinctHosts() {
     let hostA = UUID()
     let hostB = UUID()

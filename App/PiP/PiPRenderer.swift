@@ -984,14 +984,15 @@ enum PiPRenderer {
         drawRow(frame.statusRows[0].line, at: lerp(startY, rowTop, eased), heroFactor: eased, alpha: 1)
         context.restoreGState()
       case .perRow(let leavingFirst, let leavingSecond) where frame.statusRows.count == 2:
+        let dir = transition.direction < 0 ? -1 : 1
         // Row 1: independent scroll (split-zone) or static pin (Pin-1)
         if let leavingFirst {
           let row1Clip = CGRect(x: 0, y: rowTop, width: clipWidth, height: rowHeight)
           context.saveGState()
           context.clip(to: row1Clip)
-          let leavingY = row1Clip.minY - rowStride * eased
+          let leavingY = row1Clip.minY - CGFloat(dir) * rowStride * eased
           drawRow(leavingFirst, at: leavingY, alpha: max(0.20, 1 - eased * 0.80))
-          drawRow(frame.statusRows[0].line, at: leavingY + rowStride, alpha: 0.25 + eased * 0.75)
+          drawRow(frame.statusRows[0].line, at: leavingY + CGFloat(dir) * rowStride, alpha: 0.25 + eased * 0.75)
           drawEdgeFeather(in: row1Clip)
           context.restoreGState()
         } else {
@@ -1002,9 +1003,9 @@ enum PiPRenderer {
           let row2Clip = CGRect(x: 0, y: rowTop + rowStride, width: clipWidth, height: rowHeight)
           context.saveGState()
           context.clip(to: row2Clip)
-          let leavingY = row2Clip.minY - rowStride * eased
+          let leavingY = row2Clip.minY - CGFloat(dir) * rowStride * eased
           drawRow(leavingSecond, at: leavingY, alpha: max(0.20, 1 - eased * 0.80))
-          drawRow(frame.statusRows[1].line, at: leavingY + rowStride, alpha: 0.25 + eased * 0.75)
+          drawRow(frame.statusRows[1].line, at: leavingY + CGFloat(dir) * rowStride, alpha: 0.25 + eased * 0.75)
           drawEdgeFeather(in: row2Clip)
           context.restoreGState()
         } else {
@@ -1014,11 +1015,18 @@ enum PiPRenderer {
         let clipRect = CGRect(x: 0, y: rowTop, width: clipWidth, height: 2 * rowHeight + rowGap)
         context.saveGState()
         context.clip(to: clipRect)
-        let startY = rowTop - rowStride * eased
-        drawRow(leaving, at: startY, alpha: max(0.22, 1 - eased * 0.75))
-        for (offset, row) in frame.statusRows.enumerated() {
-          let rowAlpha: CGFloat = (offset == frame.statusRows.count - 1) ? (0.25 + eased * 0.75) : 1
-          drawRow(row.line, at: startY + CGFloat(offset + 1) * rowStride, alpha: rowAlpha)
+        if transition.direction < 0, frame.statusRows.count == 2 {
+          // Reverse step: rows glide downward, new row enters at top, old row 2 exits bottom.
+          drawRow(frame.statusRows[0].line, at: rowTop - rowStride + rowStride * eased, alpha: 0.25 + eased * 0.75)
+          drawRow(frame.statusRows[1].line, at: rowTop + rowStride * eased, alpha: 1)
+          drawRow(leaving, at: rowTop + rowStride + rowStride * eased, alpha: max(0.22, 1 - eased * 0.75))
+        } else {
+          let startY = rowTop - rowStride * eased
+          drawRow(leaving, at: startY, alpha: max(0.22, 1 - eased * 0.75))
+          for (offset, row) in frame.statusRows.enumerated() {
+            let rowAlpha: CGFloat = (offset == frame.statusRows.count - 1) ? (0.25 + eased * 0.75) : 1
+            drawRow(row.line, at: startY + CGFloat(offset + 1) * rowStride, alpha: rowAlpha)
+          }
         }
         drawEdgeFeather(in: clipRect)
         context.restoreGState()
@@ -1045,6 +1053,7 @@ enum PiPRenderer {
     }
 
     // MARK: Right-Edge 2pt Scroll Indicator (shown only when >2 active groups)
+    let scrollDir = transition?.direction ?? 1
     func drawAnimatedThumb(
       trackTop: CGFloat, trackHeight: CGFloat, thumbHeight: CGFloat,
       prevFrac: CGFloat?, targetFrac: CGFloat, color: UIColor
@@ -1053,18 +1062,22 @@ enum PiPRenderer {
       let span = max(0, trackHeight - thumbHeight)
       if progress < 1, let rawPrev = prevFrac {
         let clampedPrev = min(1, max(0, rawPrev))
-        if clampedTarget > clampedPrev + 0.001 {
-          let frac = clampedPrev + (clampedTarget - clampedPrev) * eased
-          color.setFill()
-          UIBezierPath(roundedRect: CGRect(x: scrollRailX, y: trackTop + span * frac, width: scrollRailW, height: thumbHeight), cornerRadius: 1).fill()
-          return
-        } else if clampedTarget < clampedPrev - 0.001 {
-          // Wraparound back to top: crossfade leaving bottom thumb into entering top thumb.
-          color.withAlphaComponent(color.cgColor.alpha * (1 - eased)).setFill()
-          UIBezierPath(roundedRect: CGRect(x: scrollRailX, y: trackTop + span * clampedPrev, width: scrollRailW, height: thumbHeight), cornerRadius: 1).fill()
-          color.withAlphaComponent(color.cgColor.alpha * eased).setFill()
-          UIBezierPath(roundedRect: CGRect(x: scrollRailX, y: trackTop + span * clampedTarget, width: scrollRailW, height: thumbHeight), cornerRadius: 1).fill()
-          return
+        let isWraparound = (scrollDir >= 0 && clampedTarget < clampedPrev - 0.001)
+          || (scrollDir < 0 && clampedTarget > clampedPrev + 0.001)
+        if abs(clampedTarget - clampedPrev) > 0.001 {
+          if !isWraparound {
+            let frac = clampedPrev + (clampedTarget - clampedPrev) * eased
+            color.setFill()
+            UIBezierPath(roundedRect: CGRect(x: scrollRailX, y: trackTop + span * frac, width: scrollRailW, height: thumbHeight), cornerRadius: 1).fill()
+            return
+          } else {
+            // Wraparound across track ends: crossfade leaving thumb into entering thumb.
+            color.withAlphaComponent(color.cgColor.alpha * (1 - eased)).setFill()
+            UIBezierPath(roundedRect: CGRect(x: scrollRailX, y: trackTop + span * clampedPrev, width: scrollRailW, height: thumbHeight), cornerRadius: 1).fill()
+            color.withAlphaComponent(color.cgColor.alpha * eased).setFill()
+            UIBezierPath(roundedRect: CGRect(x: scrollRailX, y: trackTop + span * clampedTarget, width: scrollRailW, height: thumbHeight), cornerRadius: 1).fill()
+            return
+          }
         }
       }
       color.setFill()
@@ -1073,6 +1086,8 @@ enum PiPRenderer {
 
     if let scroll = frame.scrollState, scroll.activities.count > 2 {
       let fromScroll = transition?.fromScroll
+      let workingThumbColor = scroll.isPaused ? compactAmber.withAlphaComponent(0.84) : UIColor(white: 1, alpha: 0.72)
+      let fullThumbColor = scroll.isPaused ? compactAmber.withAlphaComponent(0.84) : UIColor(white: 1, alpha: 0.68)
       if scroll.pinsFirstRow, let pinnedActivity = scroll.activities.first {
         let pinColor = pinnedActivity == .needsDecision ? decisionRed : answerOrange
         pinColor.setFill()
@@ -1094,7 +1109,7 @@ enum PiPRenderer {
         }
         drawAnimatedThumb(
           trackTop: lowerTop, trackHeight: lowerHeight, thumbHeight: thumbHeight,
-          prevFrac: prevFrac, targetFrac: targetFrac, color: UIColor(white: 1, alpha: 0.72))
+          prevFrac: prevFrac, targetFrac: targetFrac, color: workingThumbColor)
       } else if let splitAt = scroll.splitAt, splitAt >= 2, splitAt < scroll.activities.count {
         // Split-Zone Rail: Upper Attention track (y=12..31) + Lower Working track (y=37..56)
         let topTrackTop: CGFloat = 12
@@ -1135,7 +1150,7 @@ enum PiPRenderer {
           }
           drawAnimatedThumb(
             trackTop: botTrackTop, trackHeight: botTrackH, thumbHeight: botThumbH,
-            prevFrac: botPrevFrac, targetFrac: botTargetFrac, color: UIColor(white: 1, alpha: 0.72))
+            prevFrac: botPrevFrac, targetFrac: botTargetFrac, color: workingThumbColor)
         }
       } else {
         let trackTop: CGFloat = 12
@@ -1156,7 +1171,7 @@ enum PiPRenderer {
         }
         drawAnimatedThumb(
           trackTop: trackTop, trackHeight: trackHeight, thumbHeight: thumbHeight,
-          prevFrac: prevFrac, targetFrac: targetFrac, color: UIColor(white: 1, alpha: 0.68))
+          prevFrac: prevFrac, targetFrac: targetFrac, color: fullThumbColor)
 
         let visibleSet = Set(scroll.activeIndices)
         for (idx, act) in scroll.activities.enumerated() where act != .working && !visibleSet.contains(idx) {

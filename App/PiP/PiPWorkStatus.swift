@@ -63,7 +63,7 @@ struct PiPWorkStatus {
   }
 
   func frame(
-    showing visible: [Entry], page: WorkingAgentRotation.Page,
+    showing visible: [Entry], page: WorkingAgentRotation.Page, paused: Bool = false,
     elapsed: (Entry, Double?) -> String?,
     reading: (Entry) -> (metrics: AgentActivityMetrics.Reading, webSearchStartedAt: TimeInterval?)?
   ) -> PiPFrame {
@@ -85,7 +85,8 @@ struct PiPWorkStatus {
         activities: entries.map(\.activity),
         activeIndices: page.indices,
         pinsFirstRow: page.scrollsOnlySecondRow,
-        splitAt: page.splitAt)
+        splitAt: page.splitAt,
+        isPaused: paused)
       : nil
     return PiPFrame(
       title: title, status: status, working: !entries.isEmpty, lines: [], terminal: false,
