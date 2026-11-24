@@ -8,11 +8,12 @@ import UniformTypeIdentifiers
 /// One agent chat: the transcript over the glass composer.
 final class ChatViewController: UIViewController {
   let model: ChatSessionModel
+  private let transcriptGround: UIColor
   /// The row on screen when an older page was asked for, and how far below the top it sat.
   private var olderAnchor: (line: ChatLine, y: CGFloat)?
   private var lastInvisiblePage: TranscriptCursor?
 
-  private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: Self.layout())
+  private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: Self.layout(background: transcriptGround))
   /// Runs under the navigation bar and the tab strip, which blur it with the soft scroll edge.
   var edgeScrollView: UIScrollView { collection }
   private var dataSource: UICollectionViewDiffableDataSource<Int, ChatLine>!
@@ -47,8 +48,9 @@ final class ChatViewController: UIViewController {
   var onOpenPath: ((String) -> Void)?
   /// Fork from a response: a new chat holding this one through that item.
   var onFork: ((String) -> Void)?
-  /// Shows the conversation only: no composer or toolbar (a `/btw` answer's sheet).
+  /// Read-only transcript for `/btw` answers and terminal sessions.
   var readOnly = false
+  private lazy var terminalStatus = TextLabel(size: 15, color: Palette.textMuted, alignment: .center, lines: 0)
   /// `/btw question`: fork through the newest finished answer and ask there, beside this chat.
   var onSideQuestion: ((_ question: String, _ throughItemId: String) -> Void)?
   /// Reads the images messages point at from the workspace's host.
@@ -63,8 +65,9 @@ final class ChatViewController: UIViewController {
   }
   private var lastReported: (Bool, String?)?
 
-  init(model: ChatSessionModel) {
+  init(model: ChatSessionModel, terminalGround: UIColor? = nil) {
     self.model = model
+    transcriptGround = terminalGround ?? Palette.bgBase
     super.init(nibName: nil, bundle: nil)
   }
 
@@ -72,8 +75,8 @@ final class ChatViewController: UIViewController {
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    view.backgroundColor = Palette.bgBase
-    collection.backgroundColor = Palette.bgBase
+    view.backgroundColor = transcriptGround
+    collection.backgroundColor = transcriptGround
     collection.keyboardDismissMode = .interactive
     collection.delegate = self
     collection.alwaysBounceVertical = true
@@ -124,7 +127,7 @@ final class ChatViewController: UIViewController {
       quoteBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Spacing.lg),
       quoteBar.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -Spacing.xs),
 
-      toBottom.bottomAnchor.constraint(equalTo: dock.topAnchor, constant: -Spacing.sm),
+      toBottom.bottomAnchor.constraint(equalTo: model.isTerminalChat ? composer.topAnchor : dock.topAnchor, constant: -Spacing.sm),
       suggestions.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       suggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor),
       suggestions.bottomAnchor.constraint(equalTo: composer.topAnchor),
@@ -138,10 +141,12 @@ final class ChatViewController: UIViewController {
     view.keyboardLayoutGuide.usesBottomSafeArea = true
 
     // What was typed here before, and not sent, comes back.
-    let draft = ChatDraftStore.load(model.sessionId)
-    composer.restore(text: draft.text, attachments: draft.attachments)
-    NotificationCenter.default.addObserver(
-      self, selector: #selector(saveDraft), name: UIApplication.willResignActiveNotification, object: nil)
+    if !model.isTerminalChat {
+      let draft = ChatDraftStore.load(model.sessionId)
+      composer.restore(text: draft.text, attachments: draft.attachments)
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(saveDraft), name: UIApplication.willResignActiveNotification, object: nil)
+    }
     composer.onSend = { [weak self] typed, attachments, queue in
       guard let self else { return }
       if let question = ChatCommand.sideQuestion(typed), self.onSideQuestion != nil {
@@ -226,10 +231,26 @@ final class ChatViewController: UIViewController {
         self.collection.collectionViewLayout.invalidateLayout()
       }
     }
+    if model.isTerminalChat {
+      terminalStatus.translatesAutoresizingMaskIntoConstraints = false
+      view.addSubview(terminalStatus)
+      NSLayoutConstraint.activate([
+        terminalStatus.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
+        terminalStatus.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Spacing.xl),
+        terminalStatus.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Spacing.xl),
+      ])
+      updateTerminalStatus()
+    }
     model.start()
-    Task { await model.loadOptions() }
+    if !model.isTerminalChat { Task { await model.loadOptions() } }
     if readOnly {
-      composer.isHidden = true
+      if model.isTerminalChat {
+        let style = TerminalAppearance.interfaceStyle(for: transcriptGround)
+        let color = Palette.textPrimary.resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
+        composer.showReadOnly(String(localized: "orcaios.session.terminalChatReadOnly", defaultValue: "Read-only chat"), color: color)
+      } else {
+        composer.isHidden = true
+      }
       dock.isHidden = true
       quoteBar.isHidden = true
     }
@@ -239,9 +260,12 @@ final class ChatViewController: UIViewController {
     super.viewDidLayoutSubviews()
     // The transcript scrolls under the composer; its last row stops above it.
     // The docked strips sit over the transcript's tail too.
-    let top =
-      readOnly ? view.bounds.height - view.safeAreaInsets.bottom
-      : !dock.isHidden ? dock.frame.minY : !quoteBar.isHidden ? quoteBar.frame.minY : composer.frame.minY
+    let top: CGFloat
+    if readOnly && !model.isTerminalChat {
+      top = view.bounds.height - view.safeAreaInsets.bottom
+    } else {
+      top = !dock.isHidden ? dock.frame.minY : !quoteBar.isHidden ? quoteBar.frame.minY : composer.frame.minY
+    }
     let bottom = view.bounds.height - top + Spacing.sm - view.safeAreaInsets.bottom
     if collection.contentInset.bottom != bottom {
       collection.contentInset.bottom = bottom
@@ -253,7 +277,9 @@ final class ChatViewController: UIViewController {
   override func updateProperties() {
     super.updateProperties()
     projection = ChatProjection(
-      rows: model.rows, expanded: expanded, openThoughts: openThoughts, openRuns: openRuns, transcript: model.transcript)
+      rows: model.rows, expanded: expanded, openThoughts: openThoughts, openRuns: openRuns, transcript: model.transcript,
+      showsQuestionCalls: model.isTerminalChat)
+    if model.isTerminalChat { updateTerminalStatus() }
     var snapshot = NSDiffableDataSourceSnapshot<Int, ChatLine>()
     snapshot.appendSections([0])
     snapshot.appendItems(projection.lines)
@@ -272,9 +298,9 @@ final class ChatViewController: UIViewController {
         self.clampOffset()
       }
     }
-    composer.setWorking(model.isWorking)
+    if !model.isTerminalChat { composer.setWorking(model.isWorking) }
     // A turn's end moves the goal's time and status; read them again.
-    if lastWorking == true, !model.isWorking {
+    if !model.isTerminalChat, lastWorking == true, !model.isWorking {
       Task { await model.refreshOptions() }
       buzzPending = true
       DispatchQueue.main.async { [weak self] in self?.buzzIfDone() }
@@ -313,6 +339,21 @@ final class ChatViewController: UIViewController {
       lastReported = report
       onActivity?(report.0, report.1)
     }
+  }
+
+  private func updateTerminalStatus() {
+    let text: String
+    switch model.phase {
+    case .loading:
+      text = String(localized: "orcaios.session.terminalChatLoading", defaultValue: "Waiting for the agent’s transcript…")
+    case .ready:
+      text = String(localized: "orcaios.session.terminalChatEmpty", defaultValue: "No messages yet")
+    case .failed(let reason):
+      text = reason.isEmpty
+        ? String(localized: "orcaios.session.terminalChatUnavailable", defaultValue: "Transcript unavailable") : reason
+    }
+    terminalStatus.text = text
+    terminalStatus.isHidden = !projection.lines.isEmpty
   }
 
   private func updateModelChip() {
@@ -686,6 +727,7 @@ final class ChatViewController: UIViewController {
   }
 
   @objc private func saveDraft() {
+    guard !model.isTerminalChat else { return }
     ChatDraftStore.save(model.sessionId, text: composer.draftText, attachments: composer.attachments)
   }
 
@@ -964,14 +1006,15 @@ final class ChatViewController: UIViewController {
     present(picker, animated: true)
   }
 
-  private static func layout() -> UICollectionViewLayout {
+  private static func layout(background: UIColor) -> UICollectionViewLayout {
     var list = UICollectionLayoutListConfiguration(appearance: .plain)
     list.showsSeparators = false
-    list.backgroundColor = Palette.bgBase
+    list.backgroundColor = background
     return UICollectionViewCompositionalLayout.list(using: list)
   }
 
   private func configureDataSource() {
+    let ground = transcriptGround
     func registration<View: UIView>(
       _ make: @escaping () -> View, configure: @escaping (View, ChatLine) -> Void
     ) -> UICollectionView.CellRegistration<UICollectionViewListCell, ChatLine> {
@@ -987,11 +1030,12 @@ final class ChatViewController: UIViewController {
         }
         configure(host.content, line)
         var background = UIBackgroundConfiguration.clear()
-        background.backgroundColor = Palette.bgBase
+        background.backgroundColor = ground
         cell.backgroundConfiguration = background
       }
     }
-    let user = registration(UserMessageView.init) { [weak self] view, line in
+    let terminalReadOnly = model.isTerminalChat
+    let user = registration({ UserMessageView(allowsRewind: !terminalReadOnly) }) { [weak self] view, line in
       guard let self else { return }
       switch line {
       case .user(let id):
@@ -1018,7 +1062,7 @@ final class ChatViewController: UIViewController {
       let joins = self.threadJoins(line)
       view.connect(up: joins.up, down: joins.down)
     }
-    let answer = registration(AnswerView.init) { [weak self] view, line in
+    let answer = registration({ AnswerView(allowsFork: !terminalReadOnly) }) { [weak self] view, line in
       guard let self, case .answer(let id) = line, let item = self.projection.items[id],
         case .message(let message) = item.body
       else { return }
@@ -1048,7 +1092,7 @@ final class ChatViewController: UIViewController {
       view.onFork = { [weak self] in self?.onFork?(id) }
       view.onScrollToTop = { [weak self] in self?.scrollToTop(line) }
       view.onOpenPath = { [weak self] path in self?.onOpenPath?(path) }
-      view.onQuote = { [weak self] text in self?.quote(text) }
+      if !terminalReadOnly { view.onQuote = { [weak self] text in self?.quote(text) } }
     }
     let activity = registration(ActivityRowView.init) { [weak self] view, line in
       guard let self else { return }
@@ -1122,6 +1166,10 @@ final class ChatViewController: UIViewController {
       view.onShowFull = { [weak self] in
         guard let self else { return }
         let model = self.model
+        if model.isTerminalChat {
+          self.present(ToolOutputViewController.sheet(call: call, load: nil), animated: true)
+          return
+        }
         self.present(
           ToolOutputViewController.sheet(call: call) {
             guard let full = await model.fullItem(id), case .toolCall(let whole) = full.body else { return nil }
@@ -1161,7 +1209,7 @@ final class ChatViewController: UIViewController {
 
   /// A question that arrives while this chat is on screen opens its sheet once.
   private func presentNewPrompt() {
-    guard view.window != nil, presentedViewController == nil,
+    guard !model.isTerminalChat, view.window != nil, presentedViewController == nil,
       let id = projection.waiting.first(where: { !presentedPrompts.contains($0) }), let item = projection.items[id]
     else { return }
     presentedPrompts.insert(id)
@@ -1169,7 +1217,7 @@ final class ChatViewController: UIViewController {
   }
 
   private func presentPrompt(_ item: TranscriptItem) {
-    guard presentedViewController == nil,
+    guard !model.isTerminalChat, presentedViewController == nil,
       let sheet = PromptSheetController.sheet(item: item, onAnswer: { [weak self] response in
         switch response {
         case .option(let id): return await self?.model.respond(to: item, optionId: id)
@@ -1242,7 +1290,7 @@ final class ChatViewController: UIViewController {
     super.viewDidAppear(animated)
     model.watchWorkers()
     if followsBottom { scrollToBottom(animated: false) }
-    watchSendTip()
+    if !model.isTerminalChat { watchSendTip() }
     // What was there on opening just shows; what arrives after fades in.
     DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
       self?.fadesNewLines = true

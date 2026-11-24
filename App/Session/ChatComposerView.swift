@@ -31,6 +31,7 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
   private let placeholder = TextLabel(size: 16, color: Palette.textMuted, lines: 1)
   private static let placeholderText = String(
     localized: "chat.composer.placeholder", defaultValue: "Ask anything, @ to mention files, / for commands")
+  private var readOnlyPlaceholder: (title: String, color: UIColor)?
   private let container = UIVisualEffectView(effect: UIGlassContainerEffect())
   private let surface = UIVisualEffectView()
   private let attach = UIButton(configuration: .glass())
@@ -232,6 +233,20 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
 
   // MARK: Rest, card and full screen
 
+  func showReadOnly(_ title: String, color: UIColor) {
+    readOnlyPlaceholder = (title, color)
+    textView.isEditable = false
+    textView.isSelectable = false
+    attach.isEnabled = false
+    mic.isEnabled = false
+    sendButton.isEnabled = false
+    isUserInteractionEnabled = false
+    isAccessibilityElement = true
+    accessibilityLabel = title
+    accessibilityTraits = .staticText
+    refresh()
+  }
+
   func textViewDidBeginEditing(_ textView: UITextView) { updateCollapsed(animated: true) }
 
   func textViewDidEndEditing(_ textView: UITextView) { updateCollapsed(animated: true) }
@@ -399,14 +414,15 @@ final class ChatComposerView: UIView, UITextViewDelegate, UIDropInteractionDeleg
       placeholder.textColor = Palette.textPrimary
       placeholder.isHidden = false
     } else {
-      placeholder.text = Self.placeholderText
-      placeholder.textColor = Palette.textMuted
+      placeholder.text = readOnlyPlaceholder?.title ?? Self.placeholderText
+      placeholder.textColor = readOnlyPlaceholder?.color ?? Palette.textMuted
       placeholder.isHidden = !textView.text.isEmpty
     }
     let action: Action = !currentText.isEmpty || !attachments.isEmpty ? .send : working ? .stop : .dictate
     sendButton.set(action)
     // Held until every attachment is on the host.
-    sendButton.alpha = action == .send && (!uploading.isEmpty || reading > 0) ? 0.4 : 1
+    let waitingForUpload = action == .send && (!uploading.isEmpty || reading > 0)
+    sendButton.alpha = readOnlyPlaceholder != nil || waitingForUpload ? 0.4 : 1
     // Full screen holds its height; the drag owns it.
     guard fullScreenProgress == 0 else { return }
     if isCollapsed != !textView.isFirstResponder {

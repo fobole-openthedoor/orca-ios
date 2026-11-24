@@ -59,9 +59,23 @@ enum TerminalAppearance {
   }
 
   /// The theme's background for an appearance, painted around the terminal so the screen reads as one surface.
-  static func background(for traits: UITraitCollection) -> UIColor {
+  static func background(for traits: UITraitCollection, colors: [String: String]? = nil) -> UIColor {
+    if let background = colors?["background"].flatMap(UIColor.init(hex:)) { return background }
     let definition = traits.userInterfaceStyle == .dark ? dark : light
     return definition.flatMap { UIColor(hex: $0.background) } ?? .systemBackground
+  }
+
+  /// Pick the system contrast mode from the actual canvas, including custom desktop colors.
+  static func interfaceStyle(for background: UIColor) -> UIUserInterfaceStyle {
+    var red: CGFloat = 0
+    var green: CGFloat = 0
+    var blue: CGFloat = 0
+    guard background.getRed(&red, green: &green, blue: &blue, alpha: nil) else { return .unspecified }
+    func linear(_ component: CGFloat) -> CGFloat {
+      component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
+    }
+    let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    return luminance < 0.179 ? .dark : .light
   }
 
   /// One size for pinch and Settings › Terminal: Settings' value once the reader set one there, else the

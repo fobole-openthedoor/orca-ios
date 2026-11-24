@@ -216,6 +216,31 @@ public struct HostAPI: Sendable {
     return reply["ok"]?.boolValue == true ? reply["page"] : nil
   }
 
+  func terminalChat(_ source: TerminalChatSource) async -> RPCSubscription {
+    let subscriptionId = "\(source.agent):\(source.sessionId):\(UUID().uuidString)"
+    var params = terminalChatParams(source, limit: TerminalChatTranscript.initialLimit)
+    params["subscriptionId"] = .string(subscriptionId)
+    params["capabilities"] = ["transcriptPending": 1, "transcriptSourceOrder": 1]
+    return await connection.subscribe(
+      "nativeChat.subscribe", .object(params),
+      release: .requestKeyed(method: "nativeChat.unsubscribe") { _ in ["subscriptionId": .string(subscriptionId)] })
+  }
+
+  func terminalChatHistory(_ source: TerminalChatSource, page: TerminalChatTranscript.Page) async throws -> JSONValue {
+    var params = terminalChatParams(source, limit: page.limit)
+    params["capabilities"] = ["transcriptSourceOrder": 1]
+    if let before = page.before { params["beforeOffset"] = .number(Double(before)) }
+    return try await connection.request("nativeChat.readSession", .object(params), timeout: .seconds(15))
+  }
+
+  private func terminalChatParams(_ source: TerminalChatSource, limit: Int) -> [String: JSONValue] {
+    var params: [String: JSONValue] = [
+      "agent": .string(source.agent), "sessionId": .string(source.sessionId), "limit": .number(Double(limit)),
+    ]
+    if let path = source.transcriptPath { params["transcriptPath"] = .string(path) }
+    return params
+  }
+
   /// Sends one chat write. A thrown error means the outcome is unknown, not that it failed:
   /// replay the identical mutation or reconcile from the stream, never retry under a new id.
   public func perform(_ mutation: AgentSessionMutation) async throws -> AgentSessionMutationResult {

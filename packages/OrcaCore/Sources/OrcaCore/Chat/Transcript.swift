@@ -532,6 +532,14 @@ public struct ChatTranscript: Sendable, Equatable {
     merge(page: page, replacingWindow: false)
   }
 
+  mutating func replaceTerminalRows(_ rows: [TranscriptItem], before: TranscriptCursor?, working: Bool) {
+    byId = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { _, newer in newer })
+    oldestCursor = before
+    hasOlder = before != nil
+    hostWorking = working
+    rebuild()
+  }
+
   /// What a cache restored is history only: whether the agent works, its background tasks and queue, and
   /// the fence and cursor a write would cite are the host's to say again, so they are dropped until its
   /// snapshot arrives.

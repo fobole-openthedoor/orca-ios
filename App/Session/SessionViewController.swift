@@ -16,6 +16,13 @@ final class SessionViewController: UIViewController {
   private var current: UIViewController?
   private var resolvingPath = false
   private var shownTabKind: SessionTab.Kind?
+  private var shownTerminalChat: TerminalChatSource?
+  private var terminalChatChoices: [String: Bool] = [:]
+  private var terminalChatToggle: UIBarButtonItem?
+  private var terminalGround: UIColor?
+  private var shownTerminalColors: [String: String]?
+  private var originalNavigationStyle: UIUserInterfaceStyle?
+  private var workspaceVisible = false
   /// The host has answered with its tabs, so none means none rather than not yet.
   private var tabsLoaded = false
 
@@ -122,6 +129,9 @@ final class SessionViewController: UIViewController {
 
   override func updateProperties() {
     super.updateProperties()
+    if let active = tabs.tabs.first(where: { $0.id == shownTabId }), active.terminalHandle != nil {
+      show(active)
+    }
     let worktree = session.worktree(id: worktreeId)
     title = worktree?.displayName ?? fallbackTitle
     let status = HostConnectionPresentation(session.connectionState)
@@ -134,7 +144,8 @@ final class SessionViewController: UIViewController {
       default: String(localized: "bots.row.idle", defaultValue: "Idle")
       }
     let branch = (worktree?.branch ?? "").replacingOccurrences(of: "refs/heads/", with: "")
-    let line = status.connected ? ([word] + (branch.isEmpty ? [] : [branch])).joined(separator: " · ") : status.label
+    let line = ([status.connected ? word : status.label] + (status.connected && !branch.isEmpty ? [branch] : []))
+      .joined(separator: " · ")
     let subtitle = NSMutableAttributedString(
       string: "● ",
       attributes: [
@@ -154,8 +165,17 @@ final class SessionViewController: UIViewController {
   /// `cached`: the tabs from last time, shown until the desktop's own list arrives; an empty workspace isn't
   /// concluded from them.
   private func apply(_ next: SessionTabs, cached: Bool = false) {
+    var next = next
+    if tabsLoaded && !cached { next.retainTerminalChats(from: tabs) }
     tabs = next
     tabsLoaded = !cached
+    if !cached {
+      let terminalIDs = Set(next.tabs.compactMap { tab in
+        if case .terminal = tab.kind { return tab.id }
+        return nil
+      })
+      terminalChatChoices = terminalChatChoices.filter { terminalIDs.contains($0.key) }
+    }
     if next.removed {
       navigationController?.popViewController(animated: true)
       return
@@ -201,6 +221,16 @@ final class SessionViewController: UIViewController {
   }
 
   private func show(_ tab: SessionTab?) {
+    let readable = tab.flatMap(readableTerminalChat)
+    let useChat = tab.map { terminalChatChoices[$0.id] ?? $0.prefersTerminalChat } ?? false
+    let terminalChat = useChat ? readable : nil
+    let matchTerminal = readable != nil || (!tabsLoaded && tab?.terminalChat != nil)
+    let ground = matchTerminal ? TerminalAppearance.background(for: traitCollection, colors: tab?.terminalColors) : nil
+    let terminalColors = matchTerminal ? tab?.terminalColors : nil
+    let appearanceChanged = ground != terminalGround || (terminalChat == nil && terminalColors != shownTerminalColors)
+    setTerminalGround(ground)
+    shownTerminalColors = terminalColors
+    updateTerminalChatToggle(available: readable != nil, showingChat: terminalChat != nil)
     // A browser tab's address and back/forward change under the same page; the pane on screen takes them.
     if let tab, tab.id == shownTabId, let state = tab.browser {
       (current as? BrowserTabViewController)?.apply(state)
@@ -208,11 +238,12 @@ final class SessionViewController: UIViewController {
     // The same tab is shown again when what it holds changed: a new terminal tab gets its terminal a moment
     // after it appears.
     guard
-      tab?.id != shownTabId || tab?.kind != shownTabKind
+      tab?.id != shownTabId || tab?.kind != shownTabKind || terminalChat != shownTerminalChat || appearanceChanged
         || (tab == nil && tabsLoaded && !(current is NoTabsViewController))
     else { return }
     shownTabId = tab?.id
     shownTabKind = tab?.kind
+    shownTerminalChat = terminalChat
     let next: UIViewController
     switch tab?.kind {
     case .agentSession(let sessionId, _):
@@ -270,10 +301,19 @@ final class SessionViewController: UIViewController {
       // The desktop is still starting this tab's terminal; the tab shows it once it has a handle.
       next = PendingTerminalViewController()
     case .terminal(let handle?):
-      next = TerminalTabController(
-        api: session.api, handle: handle,
-        sendsQueryReplies: session.status?.supports(HostCapability.terminalQueryReply) ?? false,
-        colors: tab?.terminalColors)
+      if let terminalChat {
+        let chat = ChatViewController(model: ChatSessionModel(api: session.api, terminal: terminalChat), terminalGround: ground)
+        chat.readOnly = true
+        chat.imageLoader = ChatImageLoader(api: session.api, worktreeId: worktreeId)
+        chat.onOpenPath = { [weak self] in self?.openPath($0) }
+        chat.onActivity = { [weak self] _, _ in self?.setNeedsUpdateProperties() }
+        next = chat
+      } else {
+        next = TerminalTabController(
+          api: session.api, handle: handle,
+          sendsQueryReplies: session.status?.supports(HostCapability.terminalQueryReply) ?? false,
+          colors: tab?.terminalColors, matchesTranscript: matchTerminal)
+      }
     case .markdown(let path), .file(let path, _):
       // A note or file tab reads as its preview: Markdown rendered, code highlighted.
       next = FilePreviewViewController(session: session, worktreeId: worktreeId, path: path)
@@ -291,6 +331,7 @@ final class SessionViewController: UIViewController {
       next = UnsupportedTabViewController(tab: tab)
     }
     (current as? WorkspaceContent)?.close()
+    if let chat = current as? ChatViewController, chat.model.isTerminalChat { chat.model.stop() }
     if let current {
       current.willMove(toParent: nil)
       current.view.removeFromSuperview()
@@ -311,6 +352,65 @@ final class SessionViewController: UIViewController {
     stripEdge.scrollView = chat
     next.didMove(toParent: self)
     current = next
+    setNeedsUpdateProperties()
+  }
+
+  private func readableTerminalChat(_ tab: SessionTab) -> TerminalChatSource? {
+    guard tabsLoaded, let source = tab.terminalChat else { return nil }
+    let repo = session.worktree(id: worktreeId).flatMap { session.repo(id: $0.repoId) }
+    return source.isReadable(connectionId: repo?.connectionId, locationKnown: repo != nil) ? source : nil
+  }
+
+  private func updateTerminalChatToggle(available: Bool, showingChat: Bool) {
+    if available {
+      let toggle: UIBarButtonItem
+      if let existing = terminalChatToggle {
+        toggle = existing
+      } else {
+        toggle = UIBarButtonItem(primaryAction: UIAction { [weak self] _ in
+          guard let self, let active = self.tabs.tabs.first(where: { $0.id == self.shownTabId }) else { return }
+          self.terminalChatChoices[active.id] = self.shownTerminalChat == nil
+          self.show(active)
+          self.updateStrip()
+        })
+        terminalChatToggle = toggle
+        var items = navigationItem.rightBarButtonItems ?? []
+        items.insert(toggle, at: min(1, items.count))
+        navigationItem.rightBarButtonItems = items
+      }
+      let label = showingChat
+        ? String(localized: "orcaios.session.terminalChatBack", defaultValue: "Back to Terminal")
+        : String(localized: "orcaios.session.terminalChatOpen", defaultValue: "View as Chat")
+      if toggle.accessibilityLabel != label {
+        toggle.image = (showingChat ? Lucide.squareTerminal : Lucide.messageSquareText).image(size: 20)
+        toggle.accessibilityLabel = label
+      }
+    } else if let toggle = terminalChatToggle {
+      navigationItem.rightBarButtonItems?.removeAll { $0 === toggle }
+      terminalChatToggle = nil
+    }
+  }
+
+  private func setTerminalGround(_ ground: UIColor?) {
+    guard ground != terminalGround else { return }
+    terminalGround = ground
+    view.backgroundColor = ground ?? Palette.bgBase
+    let style = ground.map(TerminalAppearance.interfaceStyle(for:)) ?? .unspecified
+    overrideUserInterfaceStyle = style
+    strip.useTerminalAppearance(style)
+    updateNavigationAppearance()
+  }
+
+  private func updateNavigationAppearance() {
+    guard let navigation = navigationController else { return }
+    if workspaceVisible, overrideUserInterfaceStyle != .unspecified {
+      if originalNavigationStyle == nil { originalNavigationStyle = navigation.overrideUserInterfaceStyle }
+      navigation.overrideUserInterfaceStyle = overrideUserInterfaceStyle
+    } else if let originalNavigationStyle {
+      navigation.overrideUserInterfaceStyle = originalNavigationStyle
+      self.originalNavigationStyle = nil
+    }
+    navigation.setNeedsStatusBarAppearanceUpdate()
   }
 
   // MARK: Side questions
@@ -613,6 +713,12 @@ final class SessionViewController: UIViewController {
 
   // While this workspace is on screen, its own pushes don't alert (Settings › Notifications › Suppress while
   // focused).
+  override func viewWillAppear(_ animated: Bool) {
+    super.viewWillAppear(animated)
+    workspaceVisible = true
+    updateNavigationAppearance()
+  }
+
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     PushCenter.viewing = (hostKey: session.host.id.uuidString, worktreeId: worktreeId, executionHost: nil)
@@ -623,7 +729,7 @@ final class SessionViewController: UIViewController {
   private func pipFrame() -> PiPFrame? {
     let worktree = session.worktree(id: worktreeId)
     let name = bot?.name ?? worktree?.displayName ?? ""
-    // The chat reports active agent work; terminal tabs use the workspace status.
+    let workspaceWorking = worktree?.displayStatus == "working"
     let word = { (working: Bool) in
       working
         ? String(localized: "sidebar.cardSlot.working", defaultValue: "Working")
@@ -631,18 +737,22 @@ final class SessionViewController: UIViewController {
     }
     if let chat = current as? ChatViewController {
       let tail = chat.pipLines()
-      return PiPFrame(title: name, status: word(tail.working), working: tail.working, lines: tail.lines, terminal: false)
+      // A terminal's transcript can lag behind the workspace's live agent status.
+      let working = tail.working || (chat.model.isTerminalChat && workspaceWorking)
+      return PiPFrame(title: name, status: word(working), working: working, lines: tail.lines, terminal: false)
     }
-    let working = worktree?.displayStatus == "working"
     if let terminal = current as? TerminalTabController {
       return PiPFrame(
-        title: name, status: word(working), working: working, lines: terminal.pipLines().map { ($0, .terminal) }, terminal: true)
+        title: name, status: word(workspaceWorking), working: workspaceWorking,
+        lines: terminal.pipLines().map { ($0, .terminal) }, terminal: true)
     }
     return nil
   }
 
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
+    workspaceVisible = false
+    updateNavigationAppearance()
     if PushCenter.viewing?.worktreeId == worktreeId { PushCenter.viewing = nil }
     PiPCenter.shared.detachTranscript(from: view)
   }
