@@ -14,6 +14,46 @@ enum AgentMark {
     default: nil
     }
   }
+
+  static func overlayType(for agent: String?) -> String? {
+    guard let agent = agent?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else { return nil }
+    let type: String = switch agent {
+    case "claude-agent-teams": "claude"
+    case "opencode2": "opencode"
+    default: agent
+    }
+    return icon(for: type) != nil || UIImage(named: "AgentLogos/\(type)") != nil ? type : nil
+  }
+
+  enum OverlayBackdrop {
+    case transparent
+    case lightOpaque
+    case darkOpaque
+  }
+
+  private static let lightOpaqueTypes: Set<String> = [
+    "ante", "aug", "autohand", "codebuddy", "copilot", "crush", "grok", "prime-agent",
+  ]
+  private static let darkOpaqueTypes: Set<String> = [
+    "command-code", "droid", "hermes", "kilo", "kiro", "mimo-code", "opencode", "trae",
+  ]
+
+  static func overlayBackdrop(for type: String?) -> OverlayBackdrop {
+    guard let type else { return .transparent }
+    if lightOpaqueTypes.contains(type) { return .lightOpaque }
+    if darkOpaqueTypes.contains(type) { return .darkOpaque }
+    return .transparent
+  }
+
+  /// The overlay is always dark, even when the phone is in light appearance.
+  static func overlayImage(for type: String?, size: CGFloat) -> UIImage {
+    if let mark = icon(for: type) {
+      let image = mark.image(size: size)
+      return mark.color == nil ? image.withTintColor(.white, renderingMode: .alwaysOriginal) : image
+    }
+    if let type, let image = UIImage(named: "AgentLogos/\(type)") { return image }
+    return Lucide.bot.image(size: size).withTintColor(.white, renderingMode: .alwaysOriginal)
+  }
 }
 
 struct FilledIcon {

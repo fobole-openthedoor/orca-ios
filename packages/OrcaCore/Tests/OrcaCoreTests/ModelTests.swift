@@ -149,7 +149,7 @@ import Testing
       "agents": [
         ["paneKey": .string(sharedPane), "state": "working", "agentType": "codex", "displayName": "Review",
          "conversationName": "Private conversation title", "address": "orca_session_id:review"],
-        ["paneKey": "child-owner", "state": "working", "mainAgent": ["state": "done"],
+        ["paneKey": "child-owner", "state": "working", "agentType": "codex", "mainAgent": ["state": "done"],
          "address": "orca_session_id:owner",
          "children": [["id": "c1", "kind": "agent", "state": "working", "description": "Private task",
                        "lastMessage": "Private reply", "providerId": "provider-child"]]],
@@ -168,22 +168,79 @@ import Testing
     let hostB = UUID()
     let first = WorkingAgent.inCatalog([workspace, archived, workspace], host: hostA)
     let second = WorkingAgent.inCatalog([workspace], host: hostB)
-    #expect(first.map(\.id.pane) == ["child-owner", "legacy", sharedPane])
-    #expect(first.first?.isSubagent == true)
+    #expect(first.map(\.id.pane) == ["child-owner", "legacy", sharedPane, "waiting"])
+    #expect(first.first?.leadActivity == nil)
+    #expect(first.first?.children == [.init(agentType: nil, owningAgentType: "codex", activity: .working)])
     #expect(first.compactMap(\.name) == ["Review"])
-    #expect(first.map(\.structuredSessionId) == ["owner", nil, "review"])
-    #expect(first.map(\.journalAgentId) == ["provider-child", nil, nil])
-    #expect(Set((first + second).map(\.id)).count == 6)
+    #expect(first.map(\.structuredSessionId) == ["owner", nil, "review", nil])
+    #expect(first.map(\.activity) == [.working, .working, .working, .needsDecision])
+    #expect(Set((first + second).map(\.id)).count == 8)
+  }
+
+  @Test func distinguishesStructuredQuestionsAndUsesGenericAttentionForOtherWaits() throws {
+    let workspace = try #require(Worktree([
+      "worktreeId": "active", "repoId": "r",
+      "agents": [
+        ["paneKey": "answer", "state": "waiting", "mainAgent": ["state": "waiting"], "address": "orca_session_id:answer",
+         "activity": ["listed": true, "status": "permission"]],
+        ["paneKey": "approval", "state": "blocked", "mainAgent": ["state": "blocked"], "address": "orca_session_id:approval"],
+        ["paneKey": "old-host", "state": "working", "activity": ["listed": true, "status": "permission"]],
+        ["paneKey": "child-parent", "state": "waiting", "mainAgent": ["state": "done"], "children": [
+          ["id": "waiting-child", "kind": "agent", "state": "waiting"],
+          ["id": "blocked-child", "kind": "agent", "state": "blocked"],
+          ["id": "settled-child", "kind": "agent", "state": "waiting", "membership": "settled", "outcome": "failed"],
+        ]],
+        ["paneKey": "lost", "state": "waiting", "mainAgent": ["state": "waiting"],
+         "activity": ["listed": true, "status": "unverifiable"]],
+        ["paneKey": "restored", "state": "blocked", "restoredUnconfirmed": true],
+        ["paneKey": "failed", "state": "done", "mainAgent": ["state": "done"], "activity": ["status": "failed"]],
+      ],
+    ]))
+    let agents = WorkingAgent.inCatalog([workspace], host: UUID())
+    #expect(agents.map(\.id.pane) == ["answer", "approval", "child-parent", "old-host"])
+    #expect(agents.map(\.activity) == [.needsAnswer, .needsDecision, .needsDecision, .needsDecision])
+    #expect(agents.first { $0.id.pane == "child-parent" }?.children.map(\.activity) == [.needsDecision])
+  }
+
+  @Test func groupsWorkingAndWaitingDescendantsAcrossWorkspacesOnOneHost() throws {
+    let main = try #require(Worktree([
+      "worktreeId": "a", "repoId": "r", "displayName": "Release",
+      "agents": [["paneKey": "lead", "state": "done", "agentType": "codex", "displayName": "Release review",
+                  "children": [["id": "review", "kind": "agent", "state": "working", "agentType": "explorer"]]]],
+    ]))
+    let workers = try #require(Worktree([
+      "worktreeId": "b", "repoId": "r",
+      "agents": [
+        ["paneKey": "worker", "state": "working", "agentType": "gemini", "parentPaneKey": "lead",
+         "children": [["id": "local", "kind": "agent", "state": "working"]]],
+        ["paneKey": "nested", "state": "waiting", "agentType": "claude", "mainAgent": ["state": "waiting"],
+         "address": "orca_session_id:nested", "activity": ["listed": true, "childOf": "worker"]],
+        ["paneKey": "independent", "state": "working", "parentPaneKey": "missing"],
+      ],
+    ]))
+    let host = UUID()
+    let groups = WorkingAgent.inCatalog([workers, main], host: host)
+    #expect(groups.map(\.id.pane) == ["lead", "independent"])
+    let lead = try #require(groups.first)
+    #expect(lead.name == "Release review")
+    #expect(lead.leadActivity == nil)
+    #expect(lead.activity == .needsAnswer)
+    #expect(lead.children.map(\.agentType) == ["explorer", "gemini", nil, "claude"])
+    #expect(lead.children.map(\.owningAgentType) == ["codex", nil, "gemini", nil])
+    #expect(lead.children.map(\.activity) == [.working, .working, .working, .needsAnswer])
+    #expect(groups.last?.isWorker == true)
+    #expect(WorkingAgent.inCatalog([main], host: host).first?.id == lead.id)
+    #expect(WorkingAgent.inCatalog([workers], host: UUID()).map(\.id.pane) == ["independent", "worker"])
   }
 
   @Test func scrollsOneLineAtATimeAndWrapsWithTwoVisibleAgents() {
     let host = UUID()
-    let a = WorkingAgent.ID(host: host, pane: "a", child: nil)
-    let b = WorkingAgent.ID(host: host, pane: "b", child: nil)
+    let a = WorkingAgent.ID(host: host, pane: "a")
+    let b = WorkingAgent.ID(host: host, pane: "b")
     let other = UUID()
-    let c = WorkingAgent.ID(host: other, pane: "a", child: nil)
-    let d = WorkingAgent.ID(host: other, pane: "b", child: nil)
-    let e = WorkingAgent.ID(host: other, pane: "c", child: nil)
+    let c = WorkingAgent.ID(host: other, pane: "a")
+    let d = WorkingAgent.ID(host: other, pane: "b")
+    let e = WorkingAgent.ID(host: other, pane: "c")
     let agents = [a, b, c, d, e]
     var rotation = WorkingAgentRotation()
     #expect(rotation.page(in: agents, at: 0, rotating: true) == .init(indices: [0, 1], nextIndex: 2, didAdvance: false))
@@ -197,7 +254,7 @@ import Testing
 
   @Test func keepsTheVisibleAgentWhenTheRosterChangesAndStopsWithSmallLists() {
     let host = UUID()
-    let agents = ["a", "b", "c", "d"].map { WorkingAgent.ID(host: host, pane: $0, child: nil) }
+    let agents = ["a", "b", "c", "d"].map { WorkingAgent.ID(host: host, pane: $0) }
     let (a, b, c, d) = (agents[0], agents[1], agents[2], agents[3])
     var rotation = WorkingAgentRotation()
     #expect(rotation.page(in: agents, at: 0, rotating: true).indices == [0, 1])
@@ -213,6 +270,58 @@ import Testing
     #expect(rotation.page(in: [c, d], at: 21, rotating: true) == .init(indices: [0, 1], nextIndex: nil, didAdvance: false))
     #expect(rotation.page(in: [d], at: 30, rotating: true).indices == [0])
     #expect(rotation.page(in: [], at: 31, rotating: true).indices.isEmpty)
+  }
+
+  @Test func showsANewDecisionImmediatelyAndGivesItAFullInterval() {
+    let host = UUID()
+    let agents = ["a", "b", "c", "d"].map { WorkingAgent.ID(host: host, pane: $0) }
+    var rotation = WorkingAgentRotation()
+    #expect(rotation.page(in: agents, at: 0, rotating: true).indices == [0, 1])
+    #expect(rotation.page(in: agents, at: 1.5, rotating: true, preferring: agents[2])
+      == .init(indices: [2, 3], nextIndex: 0, didAdvance: false))
+    #expect(!rotation.page(in: agents, at: 4.4, rotating: true).didAdvance)
+    #expect(rotation.page(in: agents, at: 4.5, rotating: true) == .init(indices: [3, 0], nextIndex: 1, didAdvance: true))
+  }
+
+  @Test func pinsSingleAttentionInFirstRowAndRotatesSecondRow() {
+    let host = UUID()
+    let agents = ["attn", "w1", "w2", "w3"].map { WorkingAgent.ID(host: host, pane: $0) }
+    let attn = agents[0]
+    var rotation = WorkingAgentRotation()
+    #expect(rotation.page(in: agents, at: 0, rotating: true, pinned: attn)
+      == .init(indices: [0, 1], nextIndex: 2, didAdvance: false, scrollsOnlySecondRow: true))
+    #expect(rotation.page(in: agents, at: 2.9, rotating: true, pinned: attn)
+      == .init(indices: [0, 1], nextIndex: 2, didAdvance: false, scrollsOnlySecondRow: true))
+    #expect(rotation.page(in: agents, at: 3.0, rotating: true, pinned: attn)
+      == .init(indices: [0, 2], nextIndex: 3, didAdvance: true, scrollsOnlySecondRow: true))
+    #expect(rotation.page(in: agents, at: 6.0, rotating: true, pinned: attn)
+      == .init(indices: [0, 3], nextIndex: 1, didAdvance: true, scrollsOnlySecondRow: true))
+    #expect(rotation.page(in: agents, at: 9.0, rotating: true, pinned: attn)
+      == .init(indices: [0, 1], nextIndex: 2, didAdvance: true, scrollsOnlySecondRow: true))
+    // Dropping back to 2 agents stops rotation cleanly.
+    #expect(rotation.page(in: [attn, agents[1]], at: 12.0, rotating: true, pinned: attn)
+      == .init(indices: [0, 1], nextIndex: nil, didAdvance: false, scrollsOnlySecondRow: false))
+    // Unpinning (e.g. a second attention item arrives) restores full two-row rotation.
+    #expect(rotation.page(in: agents, at: 13.0, rotating: true, pinned: nil)
+      == .init(indices: [0, 1], nextIndex: 2, didAdvance: false, scrollsOnlySecondRow: false))
+    #expect(rotation.page(in: agents, at: 15.0, rotating: true, pinned: nil)
+      == .init(indices: [1, 2], nextIndex: 3, didAdvance: true, scrollsOnlySecondRow: false))
+  }
+
+  @Test func detectsCrossHostDuplicateTitlesOnlyAcrossDistinctHosts() {
+    let hostA = UUID()
+    let hostB = UUID()
+    let duplicates = WorkingAgent.crossHostDuplicateTitles(in: [
+      (host: hostA, title: "Release  review"),
+      (host: hostB, title: "release review"),
+      (host: hostA, title: "iOS build"),
+      (host: hostA, title: "iOS build"),
+      (host: hostB, title: "API Perf"),
+    ])
+    #expect(duplicates == ["release review"])
+    #expect(duplicates.contains(WorkingAgent.normalizedTitleKey("Release review")))
+    #expect(!duplicates.contains(WorkingAgent.normalizedTitleKey("iOS build")))
+    #expect(!duplicates.contains(WorkingAgent.normalizedTitleKey("API Perf")))
   }
 }
 

@@ -71,6 +71,10 @@ import Testing
     #expect(metrics.reading(agentId: "c").totalTokens == 42_000)
     #expect(metrics.reading(agentId: "d").totalTokens == nil)
     #expect(metrics.reading(agentId: nil).totalTokens == nil)
+    let group = metrics.reading(agentId: nil, includeChildTokenFloor: true)
+    #expect(group.totalTokens == 42_000)
+    #expect(group.tokenCountIsPartial)
+    #expect(!metrics.reading(agentId: "a", includeChildTokenFloor: true).tokenCountIsPartial)
   }
 
   @Test func suppressesPartialToolCountsDuringCatchUpAndAppliesRemovals() {
