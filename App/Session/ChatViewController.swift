@@ -308,8 +308,10 @@ final class ChatViewController: UIViewController {
     lastWorking = model.isWorking
     if !readOnly {
       dock.show(
-        tasks: model.transcript.backgroundTasks, subagents: model.transcript.subagents.map(currentSubagent),
-        workers: model.workers, stopsAll: model.transcript.stopsBackgroundTasks, goal: model.goal,
+        // Like background tasks, only what still runs: stopped ones stay in the transcript, not here.
+        tasks: model.transcript.backgroundTasks,
+        subagents: model.transcript.subagents.map(currentSubagent).filter { $0.state == "working" },
+        workers: model.workers.filter(\.isWorking), stopsAll: model.transcript.stopsBackgroundTasks, goal: model.goal,
         queued: model.transcript.queuedMessages)
     }
     if projection.lines.isEmpty, model.transcript.hasOlder, let cursor = model.transcript.oldestCursor,
