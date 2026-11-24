@@ -414,7 +414,30 @@ final class ChatViewController: UIViewController {
       children.append(effortMenu)
     }
     var toggles: [UIMenuElement] = []
-    if options.fastModeSupported, current?.supportsFastMode ?? true {
+    // Codex: a lone Fast tier is a toggle like Claude's; several tiers are picked from Speed.
+    if let current, !current.serviceTiers.isEmpty {
+      let tier = options.serviceTier ?? "default"
+      if let fast = current.loneFastTier {
+        let on = tier == fast.id
+        toggles.append(
+          UIAction(
+            title: String(localized: "chat.sessionOptionCopy.fastMode", defaultValue: "Fast mode"), image: UIImage(systemName: "hare"),
+            state: on ? .on : .off
+          ) { [weak self] _ in self?.setOption("serviceTier", on ? "default" : fast.id) })
+      } else {
+        let standard = (id: "default", label: String(localized: "chat.sessionOptionCopy.standard", defaultValue: "Standard"))
+        let speeds = [standard] + current.serviceTiers.map { (id: $0.id, label: $0.label) }
+        let speedMenu = UIMenu(
+          title: String(localized: "chat.sessionOptionCopy.speed", defaultValue: "Speed"), image: UIImage(systemName: "hare"),
+          children: speeds.map { speed in
+            UIAction(title: speed.label, state: speed.id == tier ? .on : .off) { [weak self] _ in
+              self?.setOption("serviceTier", speed.id)
+            }
+          })
+        speedMenu.subtitle = speeds.first { $0.id == tier }?.label
+        children.append(speedMenu)
+      }
+    } else if options.fastModeSupported, current?.supportsFastMode ?? true {
       let on = options.fastMode == true
       toggles.append(
         UIAction(

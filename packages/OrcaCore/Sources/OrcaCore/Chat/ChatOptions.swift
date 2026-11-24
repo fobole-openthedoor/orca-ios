@@ -16,12 +16,24 @@ public struct ChatOptions: Sendable, Equatable {
     public var efforts: [Choice]
     public var defaultEffort: String?
     public var supportsFastMode: Bool
+    /// Codex's speeds besides Standard (`default`); a model with them shows Speed in place of Fast mode.
+    public var serviceTiers: [Choice] = []
+
+    /// The lone tier Codex calls Fast, which toggles like Claude's Fast mode (native-chat-session-speed-tiers.ts).
+    public var loneFastTier: Choice? {
+      guard serviceTiers.count == 1, let tier = serviceTiers.first,
+        tier.label.lowercased() == "fast" || tier.id.lowercased() == "fast"
+      else { return nil }
+      return tier
+    }
   }
 
   public var models: [Model]
   public var model: String?
   public var effort: String?
   public var fastMode: Bool?
+  /// The chosen speed tier, `default` for Standard.
+  public var serviceTier: String?
   /// `default` or `plan`.
   public var interactionMode: String?
   public var acceptsImages: Bool
@@ -113,12 +125,14 @@ public struct ChatOptions: Sendable, Equatable {
         isDefault: model["isDefault"]?.boolValue ?? false,
         efforts: (model["efforts"]?.arrayValue ?? []).compactMap(choice),
         defaultEffort: model["defaultEffort"]?.stringValue,
-        supportsFastMode: model["supportsFastMode"]?.boolValue ?? false)
+        supportsFastMode: model["supportsFastMode"]?.boolValue ?? false,
+        serviceTiers: (model["serviceTiers"]?.arrayValue ?? []).compactMap(choice))
     }
     let current = json["current"]
     model = current?["model"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 } ?? current?["reportedModel"]?.stringValue
     effort = current?["effort"]?.stringValue ?? current?["reportedEffort"]?.stringValue
     fastMode = current?["fastMode"]?.boolValue
+    serviceTier = current?["serviceTier"]?.stringValue
     interactionMode = current?["interactionMode"]?.stringValue
     acceptsImages = json["acceptsImages"]?.boolValue ?? true
     fastModeSupported = json["fastModeSupport"]?["supported"]?.boolValue ?? false
