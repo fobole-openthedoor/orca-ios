@@ -1,9 +1,9 @@
 import Foundation
 
 /// The parent and its descendants, in catalog order.
-public struct AgentBranch<Value: Sendable>: Sendable {
+public struct LineageBranch<Value: Sendable>: Sendable {
   public let entry: Value
-  public let children: [AgentBranch<Value>]
+  public let children: [LineageBranch<Value>]
 
   static func build(_ rows: [Value], id: (Value) -> String, parent: (Value) -> String?) -> [Self] {
     var seen = Set<String>()
@@ -31,6 +31,8 @@ public struct AgentBranch<Value: Sendable>: Sendable {
     return result
   }
 }
+
+public typealias AgentBranch<Value: Sendable> = LineageBranch<Value>
 
 extension Worktree.Agent {
   /// A provider subagent lives in its owning pane and has no tab of its own.

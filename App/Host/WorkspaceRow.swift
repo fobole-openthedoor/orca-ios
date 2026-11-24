@@ -75,6 +75,10 @@ struct WorkspaceRowConfiguration: UIContentConfiguration {
   /// The project heading above the row, when the list groups by project: a main checkout named the same
   /// reads as its branch (or "Project folder") instead of repeating the heading.
   var projectName: String? = nil
+  var depth = 0
+  var childCount = 0
+  var childrenCollapsed = false
+  var onToggleChildren: (() -> Void)? = nil
 
   func makeContentView() -> UIView & UIContentView { WorkspaceRowView(configuration: self) }
   func updated(for state: UIConfigurationState) -> WorkspaceRowConfiguration { self }
@@ -96,12 +100,17 @@ enum WorkspaceAgentRole {
 final class WorkspaceRowView: UIView, UIContentView {
   /// accent 2 + lg 16 + indicator 20 + sm 8 (worktree-list-row-layout.ts).
   static let textInset: CGFloat = 2 + Spacing.lg + 20 + Spacing.sm
+  static func indent(depth: Int) -> CGFloat { CGFloat(min(depth, 4)) * 16 }
 
   private let indicator = AgentStatusDot()
+  private let branch = LucideView(.cornerDownRight, size: 12, strokeWidth: 1.7, color: Palette.textMuted)
   private let name = TextLabel(size: 14, weight: .semibold)
   private let glyphs = UIStackView()
   private let terminalCount = TextLabel(size: Typography.metaSize, color: Palette.textMuted, tabular: true)
+  private let disclosure = UIButton(type: .system)
   private let agents = UIStackView()
+  private var indicatorX: NSLayoutConstraint!
+  private var textLeading: NSLayoutConstraint!
 
   var configuration: UIContentConfiguration { didSet { apply() } }
 
@@ -113,7 +122,7 @@ final class WorkspaceRowView: UIView, UIContentView {
     glyphs.alignment = .center
     agents.axis = .vertical
     agents.spacing = 0
-    let nameRow = UIStackView(arrangedSubviews: [name, glyphs, UIView(), terminalCount])
+    let nameRow = UIStackView(arrangedSubviews: [name, glyphs, UIView(), terminalCount, disclosure])
     nameRow.axis = .horizontal
     nameRow.spacing = Spacing.sm
     nameRow.alignment = .center
@@ -121,14 +130,23 @@ final class WorkspaceRowView: UIView, UIContentView {
     main.axis = .vertical
     main.translatesAutoresizingMaskIntoConstraints = false
     addSubview(indicator)
+    addSubview(branch)
     addSubview(main)
     name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     terminalCount.setContentCompressionResistancePriority(.required, for: .horizontal)
+    disclosure.setContentCompressionResistancePriority(.required, for: .horizontal)
+    disclosure.addAction(UIAction { [weak self] _ in
+      (self?.configuration as? WorkspaceRowConfiguration)?.onToggleChildren?()
+    }, for: .primaryActionTriggered)
+    indicatorX = indicator.centerXAnchor.constraint(equalTo: leadingAnchor, constant: 2 + Spacing.lg + 10)
+    textLeading = main.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.textInset)
     NSLayoutConstraint.activate([
       // The 20 pt indicator column, its 12 pt dot centred, 6 pt from the top padding.
-      indicator.centerXAnchor.constraint(equalTo: leadingAnchor, constant: 2 + Spacing.lg + 10),
-      indicator.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.md + 6 - 2),
-      main.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.textInset),
+      indicatorX,
+      indicator.centerYAnchor.constraint(equalTo: name.centerYAnchor),
+      branch.trailingAnchor.constraint(equalTo: indicator.leadingAnchor, constant: -3),
+      branch.centerYAnchor.constraint(equalTo: name.centerYAnchor),
+      textLeading,
       main.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
       main.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.md),
       main.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.md),
@@ -139,10 +157,15 @@ final class WorkspaceRowView: UIView, UIContentView {
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
   private func apply() {
-    guard let worktree = (configuration as? WorkspaceRowConfiguration)?.worktree else { return }
+    guard let configuration = configuration as? WorkspaceRowConfiguration else { return }
+    let worktree = configuration.worktree
+    let indent = Self.indent(depth: configuration.depth)
+    indicatorX.constant = 2 + Spacing.lg + 10 + indent
+    textLeading.constant = Self.textInset + indent
+    branch.isHidden = configuration.depth == 0
     indicator.set(status: worktree.displayStatus)
     let title = worktree.displayName.isEmpty ? worktree.repo : worktree.displayName
-    let projectName = (configuration as? WorkspaceRowConfiguration)?.projectName
+    let projectName = configuration.projectName
     if worktree.isMainWorktree, let projectName, title == projectName {
       let branch = worktree.branch.replacingOccurrences(of: "refs/heads/", with: "")
       name.text = branch.isEmpty ? String(localized: "orcaios.host.projectFolder", defaultValue: "Project folder") : branch
@@ -184,8 +207,41 @@ final class WorkspaceRowView: UIView, UIContentView {
     // An empty stack has no height of its own; hidden, the row's height comes from the name alone.
     agents.isHidden = labels.isEmpty
     glyphs.isHidden = glyphs.arrangedSubviews.isEmpty
+    configureDisclosure(configuration)
     isAccessibilityElement = true
+    if configuration.depth > 0 {
+      labels.insert(String(localized: "components.worktreeListRow.child", defaultValue: "Child workspace"), at: 0)
+    }
     accessibilityLabel = ([name.text ?? ""] + labels).joined(separator: ", ")
+  }
+
+  private func configureDisclosure(_ row: WorkspaceRowConfiguration) {
+    disclosure.isHidden = row.onToggleChildren == nil
+    guard let toggle = row.onToggleChildren else {
+      accessibilityCustomActions = nil
+      return
+    }
+    let count = String.localizedStringWithFormat(String(localized: "components.worktreeListRow.children"), row.childCount)
+    let chevron = row.childrenCollapsed ? Lucide.chevronRight : Lucide.chevronDown
+    var button = UIButton.Configuration.tinted()
+    button.baseForegroundColor = Palette.textSecondary
+    button.baseBackgroundColor = Palette.textMuted
+    button.cornerStyle = .capsule
+    button.image = chevron.image(size: 11)
+    button.imagePlacement = .trailing
+    button.imagePadding = 4
+    button.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 7, bottom: 5, trailing: 7)
+    var attributes = AttributeContainer()
+    attributes.font = .systemFont(ofSize: 11, weight: .medium)
+    button.attributedTitle = AttributedString(count, attributes: attributes)
+    disclosure.configuration = button
+    let action = row.childrenCollapsed
+      ? String(localized: "orcaios.host.showChildWorkspaces", defaultValue: "Show child workspaces")
+      : String(localized: "orcaios.host.hideChildWorkspaces", defaultValue: "Hide child workspaces")
+    accessibilityCustomActions = [UIAccessibilityCustomAction(name: action) { _ in
+      toggle()
+      return true
+    }]
   }
 }
 

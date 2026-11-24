@@ -19,11 +19,19 @@ final class HostViewController: UIViewController {
     case worktree(String)
   }
 
+  private struct WorkspacePlacement {
+    let depth: Int
+    let childCount: Int
+  }
+
   private let session: HostSession
   private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
   private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
   private var collapsed: Set<String> = []
+  private var foldedWorktrees: Set<String> = []
   private var foldedBots: Set<String> = []
+  private var placements: [String: WorkspacePlacement] = [:]
+  private var sectionCounts: [Section: Int] = [:]
   private var query = ""
   private var workspaceView = WorkspaceView()
   private var workspaceViewLoaded = false
@@ -178,35 +186,53 @@ final class HostViewController: UIViewController {
         toSection: .bots)
     }
     contentUnavailableConfiguration = !needle.isEmpty && bots.isEmpty && sorted.isEmpty ? UIContentUnavailableConfiguration.search() : nil
-    // Pinned rows lead in their own lane rather than inside their group, as the official list's default.
-    let pinned = sorted.filter(\.isPinned)
-    let worktrees = sorted.filter { !$0.isPinned }
-    func lane(_ key: String, _ rows: [Worktree]) {
-      guard !rows.isEmpty else { return }
-      snapshot.appendSections([.lane(key)])
-      guard !collapsed.contains(key) else { return }
+    let roots = Worktree.lineage(sorted)
+    let pinned = roots.filter { $0.entry.isPinned }
+    let worktrees = roots.filter { !$0.entry.isPinned }
+    placements.removeAll(keepingCapacity: true)
+    sectionCounts.removeAll(keepingCapacity: true)
+    func append(_ branches: [LineageBranch<Worktree>], to section: Section, collapsed: Bool) {
+      snapshot.appendSections([section])
+      var items: [Item] = []
+      var count = 0
+      func visit(_ branch: LineageBranch<Worktree>, depth: Int, visible: Bool) {
+        let id = branch.entry.id
+        count += 1
+        if visible {
+          items.append(.worktree(id))
+          placements[id] = WorkspacePlacement(depth: depth, childCount: branch.children.count)
+        }
+        let showChildren = visible && (!needle.isEmpty || !foldedWorktrees.contains(id))
+        for child in branch.children { visit(child, depth: depth + 1, visible: showChildren) }
+      }
+      for root in branches { visit(root, depth: 0, visible: !collapsed) }
+      sectionCounts[section] = count
+      snapshot.appendItems(items, toSection: section)
+    }
+    func lane(_ key: String, _ branches: [LineageBranch<Worktree>]) {
+      guard !branches.isEmpty else { return }
       // Folder workspaces sit after the git ones.
-      let ordered = rows.filter { !$0.isFolderWorkspace } + rows.filter(\.isFolderWorkspace)
-      snapshot.appendItems(ordered.map { .worktree($0.id) }, toSection: .lane(key))
+      let ordered = branches.filter { !$0.entry.isFolderWorkspace } + branches.filter { $0.entry.isFolderWorkspace }
+      append(ordered, to: .lane(key), collapsed: collapsed.contains(key))
     }
     lane("pinned", pinned)
     switch workspaceView.groupBy {
     case "repo":
       for repoId in projectOrder(worktrees) {
-        snapshot.appendSections([.project(repoId)])
-        guard !collapsed.contains(repoId) else { continue }
-        var rows = worktrees.filter { $0.repoId == repoId }
+        var branches = worktrees.filter { $0.entry.repoId == repoId }
         // A project's own checkout leads its group unless the order is manual (section-order.ts).
-        if workspaceView.sortBy != "manual" { rows = rows.filter(\.isMainWorktree) + rows.filter { !$0.isMainWorktree } }
-        snapshot.appendItems(rows.map { .worktree($0.id) }, toSection: .project(repoId))
+        if workspaceView.sortBy != "manual" {
+          branches = branches.filter { $0.entry.isMainWorktree } + branches.filter { !$0.entry.isMainWorktree }
+        }
+        append(branches, to: .project(repoId), collapsed: collapsed.contains(repoId))
       }
     case "workspace-status":
       for status in workspaceView.statuses {
-        lane("status:\(status.id)", worktrees.filter { workspaceView.status(of: $0) == status.id })
+        lane("status:\(status.id)", worktrees.filter { workspaceView.status(of: $0.entry) == status.id })
       }
     case "pr-status":
       for state in ["done", "in-review", "in-progress", "closed"] {
-        lane("pr:\(state)", worktrees.filter { WorkspaceView.prLane(of: $0) == state })
+        lane("pr:\(state)", worktrees.filter { WorkspaceView.prLane(of: $0.entry) == state })
       }
     default:
       lane("all", worktrees)
@@ -229,14 +255,17 @@ final class HostViewController: UIViewController {
   }
 
   /// Projects in the host's order, or by their latest workspace activity.
-  private func projectOrder(_ rows: [Worktree]) -> [String] {
+  private func projectOrder(_ branches: [LineageBranch<Worktree>]) -> [String] {
     var order: [String] = []
-    for worktree in rows where !order.contains(worktree.repoId) { order.append(worktree.repoId) }
+    for branch in branches where !order.contains(branch.entry.repoId) { order.append(branch.entry.repoId) }
     guard workspaceView.projectOrderBy == "recent" else {
       let hostOrder = session.worktrees.map(\.repoId)
       return order.sorted { (hostOrder.firstIndex(of: $0) ?? 0) < (hostOrder.firstIndex(of: $1) ?? 0) }
     }
-    let latest = Dictionary(grouping: rows, by: \.repoId).mapValues { $0.compactMap(\.lastActivityAt).max() ?? 0 }
+    func newest(_ branch: LineageBranch<Worktree>) -> Double {
+      max(branch.entry.lastActivityAt ?? 0, branch.children.map(newest).max() ?? 0)
+    }
+    let latest = Dictionary(grouping: branches, by: \.entry.repoId).mapValues { $0.map(newest).max() ?? 0 }
     return order.sorted { (latest[$0] ?? 0) > (latest[$1] ?? 0) }
   }
 
@@ -252,6 +281,9 @@ final class HostViewController: UIViewController {
         configuration.color = Palette.borderSubtle
         // Separators start at the row's text (worktree-list-row-layout textInset).
         configuration.bottomSeparatorInsets.leading = WorkspaceRowView.textInset
+        if let self, case .worktree(let id) = self.dataSource.itemIdentifier(for: indexPath) {
+          configuration.bottomSeparatorInsets.leading += WorkspaceRowView.indent(depth: self.placements[id]?.depth ?? 0)
+        }
         configuration.bottomSeparatorInsets.trailing = 0
         let section = self?.dataSource.sectionIdentifier(for: indexPath.section)
         let rows = self?.collection.numberOfItems(inSection: indexPath.section) ?? 0
@@ -271,7 +303,14 @@ final class HostViewController: UIViewController {
       // Grouped by project, the heading already names the project.
       let projectName =
         self.workspaceView.groupBy == "repo" ? (self.session.repo(id: worktree.repoId)?.displayName ?? worktree.repo) : nil
-      cell.contentConfiguration = WorkspaceRowConfiguration(worktree: worktree, projectName: projectName)
+      let placement = self.placements[id]
+      var configuration = WorkspaceRowConfiguration(
+        worktree: worktree, projectName: projectName, depth: placement?.depth ?? 0,
+        childCount: placement?.childCount ?? 0, childrenCollapsed: self.foldedWorktrees.contains(id))
+      if configuration.childCount > 0, self.query.isEmpty {
+        configuration.onToggleChildren = { [weak self] in self?.toggleChildren(of: id) }
+      }
+      cell.contentConfiguration = configuration
       var background = UIBackgroundConfiguration.listCell()
       background.backgroundColor = Palette.bgBase
       cell.backgroundConfiguration = background
@@ -290,15 +329,12 @@ final class HostViewController: UIViewController {
       case .bots:
         header.configureBots(count: self.session.bots.bots.count) { [weak self] in self?.newBot() }
       case .project(let repoId):
-        let rows = self.visibleWorktrees.filter { $0.repoId == repoId && !$0.isPinned }
-        let name = self.session.repo(id: repoId)?.displayName ?? rows.first?.repo ?? repoId
-        header.configureProject(name: name, count: rows.count, collapsed: self.collapsed.contains(repoId)) {
+        let name = self.session.repo(id: repoId)?.displayName ?? self.session.worktrees.first { $0.repoId == repoId }?.repo ?? repoId
+        header.configureProject(name: name, count: self.sectionCounts[section] ?? 0, collapsed: self.collapsed.contains(repoId)) {
           [weak self] in self?.toggle(repoId)
         }
       case .lane(let key):
-        let rows = self.dataSource.snapshot().numberOfItems(inSection: section)
-        let count = self.collapsed.contains(key) ? self.laneCount(key) : rows
-        header.configureLane(title: self.laneTitle(key), count: count, pinned: key == "pinned", collapsed: self.collapsed.contains(key)) {
+        header.configureLane(title: self.laneTitle(key), count: self.sectionCounts[section] ?? 0, pinned: key == "pinned", collapsed: self.collapsed.contains(key)) {
           [weak self] in self?.toggleLane(key)
         }
       }
@@ -374,19 +410,6 @@ final class HostViewController: UIViewController {
     }
   }
 
-  /// How many rows a folded lane holds, for its heading.
-  private func laneCount(_ key: String) -> Int {
-    let rows = workspaceView.sorted(visibleWorktrees)
-    switch key {
-    case "pinned": return rows.filter(\.isPinned).count
-    case "all": return rows.filter { !$0.isPinned }.count
-    case _ where key.hasPrefix("pr:"):
-      return rows.filter { !$0.isPinned && "pr:\(WorkspaceView.prLane(of: $0))" == key }.count
-    default:
-      return rows.filter { !$0.isPinned && "status:\(workspaceView.status(of: $0))" == key }.count
-    }
-  }
-
   private func toggleLane(_ key: String) {
     UISelectionFeedbackGenerator().selectionChanged()
     if collapsed.contains(key) { collapsed.remove(key) } else { collapsed.insert(key) }
@@ -398,6 +421,12 @@ final class HostViewController: UIViewController {
 
   private func toggleBot(_ id: String) {
     if foldedBots.contains(id) { foldedBots.remove(id) } else { foldedBots.insert(id) }
+    applySnapshot()
+  }
+
+  private func toggleChildren(of id: String) {
+    UISelectionFeedbackGenerator().selectionChanged()
+    if foldedWorktrees.contains(id) { foldedWorktrees.remove(id) } else { foldedWorktrees.insert(id) }
     applySnapshot()
   }
 
