@@ -10,6 +10,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - A crash, and blank gaps in a chat, when a reply grew while its row was still being prepared.
+- The chat flickering while rows kept re-measuring each other.
+- Stopped subagents and workers stayed in the toolbar above the composer.
 
 ## [0.1.1] - 2026-11-24
 
