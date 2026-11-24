@@ -41,7 +41,7 @@ enum PiPLayout {
   var size: CGSize {
     switch self {
     case .transcript: CGSize(width: 400, height: 300)
-    case .compact: CGSize(width: 400, height: 104)
+    case .compact: CGSize(width: 400, height: 68)
     }
   }
 }
