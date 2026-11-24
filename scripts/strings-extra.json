@@ -192,8 +192,8 @@
   "zh": {
     "orcaios": {
       "agents": {
-        "subagent": "子代理",
-        "worker": "协作代理"
+        "subagent": "子智能体",
+        "worker": "协作智能体"
       },
       "push": {
         "gatewayFooter": "Orca 打开时，通知和实时活动会直接更新。关掉 Orca 后还想收到，需要桌面开启推送。",
@@ -208,7 +208,7 @@
         "uploading": "上传中…"
       },
       "chat": {
-        "workers": "Orca 协作代理",
+        "workers": "Orca 协作智能体",
         "awaitingApproval": "等待你的批准",
         "awaitingAnswer": "等待你的回答",
         "approvalTitle": "需要你批准",
@@ -288,7 +288,7 @@
         "tabUnsupported": "这个标签页暂时不能在手机上打开",
         "terminalChatBack": "返回终端",
         "terminalChatEmpty": "暂无消息",
-        "terminalChatLoading": "正在等待代理会话记录…",
+        "terminalChatLoading": "正在等待智能体会话记录…",
         "terminalChatOpen": "切换到聊天",
         "terminalChatReadOnly": "只读聊天",
         "terminalChatUnavailable": "暂时无法读取会话记录",
@@ -300,8 +300,8 @@
       },
       "pip": {
         "compact": "双行模式",
-        "noWorkingAgents": "没有代理在工作",
-        "statusUnavailable": "暂时无法获取代理状态",
+        "noWorkingAgents": "没有智能体在工作",
+        "statusUnavailable": "暂时无法获取智能体状态",
         "workingAgents_one": "{{count}} 个工作中",
         "workingAgents_other": "{{count}} 个工作中",
         "workingHosts_one": "{{count}} 台主机",
@@ -322,7 +322,7 @@
       "settings": {
         "title": "Orca iOS",
         "pipHeading": "画中画",
-        "pipFooter": "双行模式轮换显示各台已配对主机上正在工作的代理。可从会话的 ⋯ 菜单手动打开画中画。",
+        "pipFooter": "双行模式轮换显示各台已配对主机上正在工作的智能体。可从会话的 ⋯ 菜单手动打开画中画。",
         "activityHeading": "实时活动",
         "activityFooter": "智能体工作时显示在锁定屏幕和灵动岛上，停下后消失。",
         "activityToggle": "显示工作中的智能体",

@@ -89754,7 +89754,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "子代理"
+            "value": "子智能体"
           }
         },
         "zh-Hant": {
@@ -89777,7 +89777,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "协作代理"
+            "value": "协作智能体"
           }
         },
         "zh-Hant": {
@@ -90524,29 +90524,6 @@
         }
       }
     },
-    "orcaios.chat.workers": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Orca workers"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Orca 协作代理"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Orca 協作代理"
-          }
-        }
-      }
-    },
     "orcaios.chat.sendWhileWorking": {
       "extractionState": "manual",
       "localizations": {
@@ -90589,6 +90566,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "提交"
+          }
+        }
+      }
+    },
+    "orcaios.chat.workers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca workers"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca 协作智能体"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orca 協作代理"
           }
         }
       }
@@ -91020,29 +91020,6 @@
         }
       }
     },
-    "orcaios.pip.compact": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Two-line mode"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "双行模式"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "雙行模式"
-          }
-        }
-      }
-    },
     "orcaios.pip.commands": {
       "extractionState": "manual",
       "localizations": {
@@ -91066,6 +91043,29 @@
         }
       }
     },
+    "orcaios.pip.compact": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Two-line mode"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "双行模式"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "雙行模式"
+          }
+        }
+      }
+    },
     "orcaios.pip.noWorkingAgents": {
       "extractionState": "manual",
       "localizations": {
@@ -91078,7 +91078,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "没有代理在工作"
+            "value": "没有智能体在工作"
           }
         },
         "zh-Hant": {
@@ -91170,7 +91170,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "暂时无法获取代理状态"
+            "value": "暂时无法获取智能体状态"
           }
         },
         "zh-Hant": {
@@ -91205,6 +91205,12 @@
         "zh-Hans": {
           "variations": {
             "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 个工作中"
+                }
+              },
               "other": {
                 "stringUnit": {
                   "state": "translated",
@@ -91217,6 +91223,12 @@
         "zh-Hant": {
           "variations": {
             "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 個工作中"
+                }
+              },
               "other": {
                 "stringUnit": {
                   "state": "translated",
@@ -91252,6 +91264,12 @@
         "zh-Hans": {
           "variations": {
             "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 台主机"
+                }
+              },
               "other": {
                 "stringUnit": {
                   "state": "translated",
@@ -91264,6 +91282,12 @@
         "zh-Hant": {
           "variations": {
             "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld 台主機"
+                }
+              },
               "other": {
                 "stringUnit": {
                   "state": "translated",
@@ -91494,7 +91518,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "正在等待代理会话记录…"
+            "value": "正在等待智能体会话记录…"
           }
         },
         "zh-Hant": {
@@ -91678,7 +91702,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "双行模式轮换显示各台已配对主机上正在工作的代理。可从会话的 ⋯ 菜单手动打开画中画。"
+            "value": "双行模式轮换显示各台已配对主机上正在工作的智能体。可从会话的 ⋯ 菜单手动打开画中画。"
           }
         },
         "zh-Hant": {
