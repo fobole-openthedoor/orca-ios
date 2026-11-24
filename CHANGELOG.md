@@ -5,6 +5,18 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-25
+
+### Added
+
+- Codex's speeds in the model menu: Fast mode when Fast is its only tier, a Speed menu when there are more.
+- The two-line Picture in Picture shows one row per agent with its working subagents' marks, pins a
+  group that needs you at the top, and names the desktop when the same title runs on more than one.
+
+### Fixed
+
+- An image Codex viewed or made showed as the words "Viewed image" without the picture.
+
 ## [0.1.3] - 2026-11-24
 
 ### Added
