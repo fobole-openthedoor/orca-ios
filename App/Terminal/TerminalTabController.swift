@@ -47,8 +47,11 @@ final class TerminalTabController: UIViewController, WorkspaceContent, TerminalS
   /// The desktop's palette for this terminal, so its background also paints the area around the grid.
   private let colors: [String: String]?
 
-  init(api: HostAPI, handle: String, sendsQueryReplies: Bool, colors: [String: String]? = nil) {
+  private let matchesTranscript: Bool
+
+  init(api: HostAPI, handle: String, sendsQueryReplies: Bool, colors: [String: String]? = nil, matchesTranscript: Bool = false) {
     self.colors = colors
+    self.matchesTranscript = matchesTranscript
     self.api = api
     self.handle = handle
     self.sendsQueryReplies = sendsQueryReplies
@@ -88,10 +91,9 @@ final class TerminalTabController: UIViewController, WorkspaceContent, TerminalS
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    let desktopBackground = colors?["background"].flatMap { UIColor(hex: $0) }
-    view.backgroundColor = desktopBackground ?? TerminalAppearance.background(for: traitCollection)
+    updateBackground()
     registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: Self, _) in
-      self.view.backgroundColor = desktopBackground ?? TerminalAppearance.background(for: self.traitCollection)
+      self.updateBackground()
     }
 
     container.clipsToBounds = true
@@ -130,6 +132,12 @@ final class TerminalTabController: UIViewController, WorkspaceContent, TerminalS
     observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
       MainActor.assumeIsolated { self?.restart() }
     })
+  }
+
+  private func updateBackground() {
+    let ground = TerminalAppearance.background(for: traitCollection, colors: colors)
+    view.backgroundColor = ground
+    if matchesTranscript { dock.backgroundColor = ground }
   }
 
   deinit {

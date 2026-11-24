@@ -64,7 +64,7 @@ struct ChatProjection {
 
   init(
     rows: [ChatRow], expanded: Set<String>, openThoughts: Set<String> = [], openRuns: Set<String> = [],
-    transcript: ChatTranscript
+    transcript: ChatTranscript, showsQuestionCalls: Bool = false
   ) {
     // Split the stream into turns: each starts at the person's message (or a pending send).
     struct Turn {
@@ -103,7 +103,7 @@ struct ChatProjection {
       if let head = turn.head { lines.append(head) }
       let live = index == turns.count - 1 && transcript.isWorking
       let items = turn.items.filter(Self.draws).filter { item in
-        if case .toolCall(let call) = item.body { return !ToolCategory.isAsk(call) }
+        if case .toolCall(let call) = item.body { return showsQuestionCalls || !ToolCategory.isAsk(call) }
         return true
       }
       func agentLines(_ item: TranscriptItem) -> [ChatLine] {
@@ -415,7 +415,7 @@ final class UserMessageView: UIView {
   private let bubble = UIView()
   private let text = TextLabel(size: ChatProse.bodySize, lines: 0)
   private let quoted = ChatQuoteBlock()
-  private let meta = MessageMetaView(trailing: true, actions: [.copy, .reply])
+  private let meta: MessageMetaView
   private let images = ChatImageStack()
   private var raw = ""
   /// Opens the message's image at that index in the viewer.
@@ -427,7 +427,8 @@ final class UserMessageView: UIView {
     didSet { meta.onAction = { [weak self] _ in self?.onRewind?() } }
   }
 
-  init() {
+  init(allowsRewind: Bool = true) {
+    meta = MessageMetaView(trailing: true, actions: allowsRewind ? [.copy, .reply] : [.copy])
     super.init(frame: .zero)
     bubble.translatesAutoresizingMaskIntoConstraints = false
     bubble.backgroundColor = Palette.chatUserSurface
@@ -634,7 +635,7 @@ final class WorkItemView: UIView {
 /// The agent's answer, rendered by MarkdownView, then its time, Copy, Fork and Scroll-to-top.
 final class AnswerView: UIView {
   private let body = ChatAnswerMarkdownView()
-  private let meta = MessageMetaView(trailing: false, actions: [.copy, .gitFork, .arrowUp])
+  private let meta: MessageMetaView
   /// The time and actions row ends the view once the turn is over; mid-turn the words end it, so a hidden
   /// row leaves no gap before the next activity.
   private lazy var metaAtBottom = meta.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm)
@@ -668,13 +669,16 @@ final class AnswerView: UIView {
     didSet { body.onHeightChange = onHeightChange }
   }
 
-  init() {
+  init(allowsFork: Bool = true) {
+    meta = MessageMetaView(trailing: false, actions: allowsFork ? [.copy, .gitFork, .arrowUp] : [.copy, .arrowUp])
     super.init(frame: .zero)
     body.translatesAutoresizingMaskIntoConstraints = false
     addSubview(body)
     addSubview(meta)
     meta.onCopy = { [weak self] in ChatClipboard.copy(self?.raw ?? "") }
-    meta.onAction = { [weak self] index in index == 1 ? self?.onFork?() : self?.onScrollToTop?() }
+    meta.onAction = { [weak self] index in
+      if allowsFork && index == 1 { self?.onFork?() } else { self?.onScrollToTop?() }
+    }
     NSLayoutConstraint.activate([
       body.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.sm),
       body.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Spacing.lg),

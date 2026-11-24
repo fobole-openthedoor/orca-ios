@@ -65,14 +65,31 @@ public final class ChatSessionModel {
   @ObservationIgnored private let capabilities: Set<String>
   /// The SSH connection of the workspace's project, which image uploads name.
   @ObservationIgnored private let connectionId: String?
+  @ObservationIgnored private let terminalSource: TerminalChatSource?
+  @ObservationIgnored private var terminalTranscript = TerminalChatTranscript()
   @ObservationIgnored private var streamTask: Task<Void, Never>?
   @ObservationIgnored private var workersTask: Task<Void, Never>?
 
-  public init(api: HostAPI, sessionId: String, capabilities: Set<String>, connectionId: String?) {
+  private init(api: HostAPI, sessionId: String, capabilities: Set<String>, connectionId: String?, terminalSource: TerminalChatSource?) {
     self.api = api
     self.sessionId = sessionId
     self.capabilities = capabilities
     self.connectionId = connectionId
+    self.terminalSource = terminalSource
+  }
+
+  public convenience init(api: HostAPI, sessionId: String, capabilities: Set<String>, connectionId: String?) {
+    self.init(api: api, sessionId: sessionId, capabilities: capabilities, connectionId: connectionId, terminalSource: nil)
+  }
+
+  public convenience init(api: HostAPI, terminal source: TerminalChatSource) {
+    self.init(api: api, sessionId: source.sessionId, capabilities: [], connectionId: nil, terminalSource: source)
+  }
+
+  public var isTerminalChat: Bool { terminalSource != nil }
+
+  deinit {
+    if terminalSource != nil { streamTask?.cancel() }
   }
 
   /// The transcript rows worth drawing, then the sends still in flight.
@@ -126,6 +143,10 @@ public final class ChatSessionModel {
     guard streamTask == nil else {
       return
     }
+    if let terminalSource {
+      startTerminalChat(terminalSource)
+      return
+    }
     // What was here last time shows at once; the live snapshot replaces it when it arrives.
     if transcript.items.isEmpty {
       let cached = cache.load()
@@ -164,12 +185,13 @@ public final class ChatSessionModel {
   public func stop() {
     streamTask?.cancel()
     streamTask = nil
+    if isTerminalChat { applyTerminal(["type": "end"]) }
     stopWatchingWorkers()
   }
 
   /// Orca's dispatched workers have their own lifecycle outside the provider's journal.
   public func watchWorkers() {
-    guard workersTask == nil else { return }
+    guard !isTerminalChat, workersTask == nil else { return }
     let api = self.api
     let sessionId = self.sessionId
     workersTask = Task { [weak self] in
@@ -198,6 +220,7 @@ public final class ChatSessionModel {
   }
 
   public func workerReport(_ dispatchId: String) async -> String? {
+    guard !isTerminalChat else { return nil }
     let reply = try? await api.connection.request(
       "orchestration.workerDockResult",
       ["party": .string("orca_session_id:" + sessionId), "dispatch": .string(dispatchId)], timeout: .seconds(8))
@@ -206,6 +229,7 @@ public final class ChatSessionModel {
 
   /// Reads the model choices and the slash commands. Both are best effort: a chat works without them.
   public func loadOptions() async {
+    guard !isTerminalChat else { return }
     if let reply = try? await api.chatOptions(sessionId: sessionId) {
       options = ChatOptions(reply)
     }
@@ -220,7 +244,7 @@ public final class ChatSessionModel {
       method: "agentSession.setOption", sessionId: sessionId,
       fields: ["key": .string(key), "value": .string(value)], expectedRuntimeFence: transcript.fence)
     do {
-      switch try await api.perform(mutation) {
+      switch try await perform(mutation) {
       case .accepted(_, let fence, _):
         transcript.noteFence(fence)
         if let reply = try? await api.chatOptions(sessionId: sessionId) {
@@ -241,7 +265,7 @@ public final class ChatSessionModel {
       method: send ? "agentSession.queuedMessageSend" : "agentSession.queuedMessageDelete", sessionId: sessionId,
       fields: ["messageId": .string(id)], expectedRuntimeFence: transcript.fence)
     do {
-      switch try await api.perform(mutation) {
+      switch try await perform(mutation) {
       case .accepted(_, let fence, _):
         transcript.noteFence(fence)
         return nil
@@ -276,7 +300,7 @@ public final class ChatSessionModel {
       method: "agentSession.threadGoal", sessionId: sessionId, fields: ["change": wire],
       expectedRuntimeFence: transcript.fence)
     do {
-      switch try await api.perform(mutation) {
+      switch try await perform(mutation) {
       case .accepted(_, let fence, _):
         transcript.noteFence(fence)
         await refreshOptions()
@@ -298,7 +322,7 @@ public final class ChatSessionModel {
     let mutation = AgentSessionMutation(
       method: "agentSession.conversationCommand", sessionId: sessionId, fields: fields, expectedRuntimeFence: transcript.fence)
     do {
-      switch try await api.perform(mutation) {
+      switch try await perform(mutation) {
       case .accepted(_, let fence, _):
         transcript.noteFence(fence)
         return nil
@@ -333,8 +357,57 @@ public final class ChatSessionModel {
     defer {
       isLoadingOlder = false
     }
+    if let terminalSource {
+      guard let page = terminalTranscript.nextPage,
+        let reply = try? await api.terminalChatHistory(terminalSource, page: page) else { return }
+      terminalTranscript.prepend(reply, requested: page)
+      terminalTranscript.update(&transcript)
+      return
+    }
     if let page = try? await api.history(sessionId: sessionId, before: cursor) {
       transcript.prepend(page: page)
+    }
+  }
+
+  private func startTerminalChat(_ source: TerminalChatSource) {
+    let api = api
+    streamTask = Task { [weak self] in
+      var delay: Duration = .milliseconds(500)
+      while !Task.isCancelled {
+        let subscription = await api.terminalChat(source)
+        var refused = false
+        do {
+          for try await frame in subscription.events {
+            guard !Task.isCancelled, let self else { break }
+            self.applyTerminal(frame)
+            if frame["type"] == "end" { break }
+            delay = .milliseconds(500)
+          }
+        } catch {
+          if !Task.isCancelled {
+            self?.applyTerminal(["type": "end"])
+            self?.phase = .failed(HostSession.describe(error))
+            if let error = error as? RPCError {
+              refused = ["method_not_found", "forbidden", "invalid_argument"].contains(error.code)
+            }
+          }
+        }
+        await api.connection.unsubscribe(subscription.requestId)
+        guard !refused, !Task.isCancelled, (try? await Task.sleep(for: delay)) != nil else { return }
+        delay = min(delay * 2, .seconds(10))
+      }
+    }
+  }
+
+  private func applyTerminal(_ frame: JSONValue) {
+    terminalTranscript.apply(frame)
+    terminalTranscript.update(&transcript)
+    if let error = frame["error"]?.stringValue {
+      phase = .failed(error)
+    } else if frame["pending"] == true || frame["type"] == "end" {
+      phase = .loading
+    } else if frame["messages"]?.arrayValue != nil {
+      phase = .ready
     }
   }
 
@@ -395,8 +468,14 @@ public final class ChatSessionModel {
 
   // MARK: Writes
 
+  private func perform(_ mutation: AgentSessionMutation) async throws -> AgentSessionMutationResult {
+    guard !isTerminalChat else { return .refused(code: "read_only", message: "Read-only chat") }
+    return try await api.perform(mutation)
+  }
+
   /// Sends a message. The bubble appears at once and follows the upload, the write and the journal.
   public func send(text: String, attachments: [OutgoingAttachment], queue: Bool = false) async {
+    guard !isTerminalChat else { return }
     let operationId = AgentSessionMutation.newOperationId()
     let uploads = !attachments.isEmpty
     pending.append(PendingSend(id: operationId, text: text, attachments: attachments, state: uploads ? .uploading(progress: 0) : .sending))
@@ -436,6 +515,7 @@ public final class ChatSessionModel {
   /// Uploads one attachment to the host and returns where it put it. The composer calls this as soon as
   /// something is attached, so the send itself doesn't wait on it.
   public func upload(_ attachment: OutgoingAttachment, progress: @escaping @Sendable (Double) -> Void) async throws -> String {
+    guard !isTerminalChat else { throw AttachmentError.unsupportedByHost }
     switch attachment.kind {
     case .image:
       let path = try await api.uploadImage(attachment.data, fileName: attachment.name, connectionId: connectionId, progress: progress)
@@ -459,7 +539,7 @@ public final class ChatSessionModel {
       method: "agentSession.send", sessionId: sessionId, fields: fields,
       expectedRuntimeFence: transcript.fence, clientOperationId: operationId)
     do {
-      switch try await api.perform(mutation) {
+      switch try await perform(mutation) {
       case .accepted(let value, let fence, _):
         transcript.noteFence(fence)
         // Held for after the turn: it shows in the queue, not as a bubble.
@@ -504,7 +584,7 @@ public final class ChatSessionModel {
     isStopping = true
     let mutation = AgentSessionMutation(
       method: "agentSession.cancel", sessionId: sessionId, fields: fields, expectedRuntimeFence: transcript.fence)
-    if case .refused? = try? await api.perform(mutation) {
+    if case .refused? = try? await perform(mutation) {
       isStopping = false
     }
   }
@@ -514,6 +594,7 @@ public final class ChatSessionModel {
   /// One item as the host keeps it, when the transcript carried only its head (agentSession.item).
   /// Nil when it is gone or the host predates the call.
   public func fullItem(_ itemId: String) async -> TranscriptItem? {
+    guard !isTerminalChat else { return nil }
     let result = try? await api.connection.request(
       "agentSession.item", ["sessionId": .string(sessionId), "itemId": .string(itemId)])
     return result?["item"].flatMap(TranscriptItem.init)
@@ -525,7 +606,7 @@ public final class ChatSessionModel {
       method: "agentSession.rewind", sessionId: sessionId,
       fields: ["itemId": .string(item.id), "expectedEpoch": .string(epoch)], expectedRuntimeFence: transcript.fence)
     do {
-      switch try await api.perform(mutation) {
+      switch try await perform(mutation) {
       case .accepted(_, let fence, _):
         transcript.noteFence(fence)
         return nil
@@ -543,7 +624,7 @@ public final class ChatSessionModel {
     if let taskId { fields["taskId"] = .string(taskId) }
     let mutation = AgentSessionMutation(method: "agentSession.cancel", sessionId: sessionId, fields: fields, expectedRuntimeFence: transcript.fence)
     do {
-      switch try await api.perform(mutation) {
+      switch try await perform(mutation) {
       case .accepted(_, let fence, _):
         transcript.noteFence(fence)
         return nil
@@ -557,6 +638,7 @@ public final class ChatSessionModel {
 
   /// Re-reads the options, for the goal's time and status between turns.
   public func refreshOptions() async {
+    guard !isTerminalChat else { return }
     if let reply = try? await api.chatOptions(sessionId: sessionId) { options = ChatOptions(reply) }
   }
 
@@ -570,7 +652,7 @@ public final class ChatSessionModel {
       ],
       expectedRuntimeFence: transcript.fence)
     do {
-      switch try await api.perform(mutation) {
+      switch try await perform(mutation) {
       case .accepted(_, let fence, _):
         transcript.noteFence(fence)
         return nil
@@ -597,7 +679,7 @@ public final class ChatSessionModel {
       fields: ["itemId": .string(item.id), "expectedRevision": .number(Double(item.revision)), "optionId": .string(optionId)],
       expectedRuntimeFence: transcript.fence)
     do {
-      switch try await api.perform(mutation) {
+      switch try await perform(mutation) {
       case .accepted(_, let fence, _):
         transcript.noteFence(fence)
         return nil

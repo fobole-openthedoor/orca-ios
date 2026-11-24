@@ -11,20 +11,29 @@ final class SessionTabStrip: UIView {
   var onSelect: ((SessionTab) -> Void)?
   var onClose: ((SessionTab) -> Void)?
 
-  private let capsule = UIVisualEffectView(effect: SessionTabStrip.darkGlass())
-  private let addGlass = UIVisualEffectView(effect: SessionTabStrip.darkGlass())
+  private let capsule = UIVisualEffectView(effect: SessionTabStrip.tabGlass())
+  private let addGlass = UIVisualEffectView(effect: SessionTabStrip.tabGlass())
   private let scroll = UIScrollView()
   private let chips = UIStackView()
   private let addButton = UIButton(configuration: .plain())
+  private var terminalAppearance: UIUserInterfaceStyle = .unspecified
 
   /// Glass with a light dark tint: the chat scrolling under the strip reads muted rather than as words
   /// behind the tabs, while the glass still shows. A device renders the tint much stronger than the
   /// simulator; past a quarter it turns solid black.
-  private static func darkGlass() -> UIGlassEffect {
+  private static func tabGlass(tint: UIColor? = UIColor.black.withAlphaComponent(0.22)) -> UIGlassEffect {
     let glass = UIGlassEffect(style: .regular)
-    glass.tintColor = UIColor.black.withAlphaComponent(0.22)
+    glass.tintColor = tint
     glass.isInteractive = true
     return glass
+  }
+
+  func useTerminalAppearance(_ style: UIUserInterfaceStyle) {
+    guard style != terminalAppearance else { return }
+    terminalAppearance = style
+    capsule.effect = style == .unspecified ? Self.tabGlass() : Self.tabGlass(tint: nil)
+    addGlass.effect = style == .unspecified ? Self.tabGlass() : Self.tabGlass(tint: nil)
+    for (chip, tab) in zip(chips.arrangedSubviews.compactMap { $0 as? TabChip }, tabs) { configure(chip, tab) }
   }
   private var tabs: [SessionTab] = []
   private var shownId: String?
@@ -152,7 +161,7 @@ final class SessionTabStrip: UIView {
     // The workspace's agent state belongs to the tab on screen; the others stay quiet.
     chip.show(
       id: tab.id, title: title, mark: AgentMark.icon(for: agent), icon: icon, shown: shown,
-      filled: shown && tabs.count > 1, state: shown ? agentState : nil)
+      filled: shown && tabs.count > 1, state: shown ? agentState : nil, terminalAppearance: terminalAppearance)
   }
 
   override func layoutSubviews() {
@@ -254,11 +263,17 @@ private final class TabChip: UIControl {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  func show(id: String, title text: String, mark agentMark: FilledIcon?, icon kind: Lucide, shown: Bool, filled: Bool, state: String?) {
+  func show(
+    id: String, title text: String, mark agentMark: FilledIcon?, icon kind: Lucide, shown: Bool, filled: Bool, state: String?,
+    terminalAppearance: UIUserInterfaceStyle
+  ) {
     tabId = id
     title.text = text
     title.font = .systemFont(ofSize: 14, weight: shown ? .semibold : .regular)
-    title.textColor = shown ? Palette.textPrimary : Palette.textSecondary
+    let titleColor = shown ? Palette.textPrimary : Palette.textSecondary
+    // The tab can be created before the new workspace traits propagate through the glass.
+    title.textColor = terminalAppearance == .unspecified
+      ? titleColor : titleColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: terminalAppearance))
     fill.backgroundColor = filled ? Palette.textPrimary.withAlphaComponent(0.12) : .clear
     let working = state == "working" || state == "monitoring"
     if working { spinner.startAnimating() } else { spinner.stopAnimating() }

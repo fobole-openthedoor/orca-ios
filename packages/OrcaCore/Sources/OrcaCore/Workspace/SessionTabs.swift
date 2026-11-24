@@ -21,6 +21,9 @@ public struct SessionTab: Sendable, Equatable, Identifiable {
   public var isPinned: Bool
   /// For terminal tabs running an agent CLI.
   public var launchAgent: String?
+  public private(set) var terminalChat: TerminalChatSource?
+  public private(set) var prefersTerminalChat = false
+  private var terminalAgentReported = false
   /// The desktop's terminal palette (xterm theme keys: background, foreground, cursor, black … brightWhite).
   public var terminalColors: [String: String]?
   /// For browser tabs: the page's address and navigation state, which change without changing the tab.
@@ -41,6 +44,9 @@ public struct SessionTab: Sendable, Equatable, Identifiable {
     switch type {
     case "terminal":
       kind = .terminal(handle: json["terminal"]?.stringValue)
+      terminalChat = TerminalChatSource(tab: json)
+      prefersTerminalChat = json["viewMode"]?.stringValue == "chat"
+      terminalAgentReported = json["agentStatus"]?.objectValue != nil
       // The user's own name wins, then the host's generated one.
       title = [json["customTitle"]?.stringValue, json["generatedTitle"]?.stringValue, json["quickCommandLabel"]?.stringValue]
         .compactMap { $0 }.first { !$0.isEmpty } ?? fallbackTitle
@@ -72,6 +78,11 @@ public struct SessionTab: Sendable, Equatable, Identifiable {
       return handle
     }
     return nil
+  }
+
+  fileprivate mutating func retainTerminalChat(from previous: Self) {
+    guard !terminalAgentReported, let handle = terminalHandle, handle == previous.terminalHandle else { return }
+    terminalChat = previous.terminalChat
   }
 }
 
@@ -105,6 +116,14 @@ public struct SessionTabs: Sendable, Equatable {
     tabs = sorted
     activeTabId = json["activeTabId"]?.stringValue
     removed = json["removed"]?.boolValue ?? false
+  }
+
+  /// Some reconnect frames omit status. Keep the known transcript only for the same terminal handle.
+  public mutating func retainTerminalChats(from previous: SessionTabs) {
+    let previousById = Dictionary(previous.tabs.map { ($0.id, $0) }, uniquingKeysWith: { _, newer in newer })
+    for index in tabs.indices {
+      if let prior = previousById[tabs[index].id] { tabs[index].retainTerminalChat(from: prior) }
+    }
   }
 
   /// Structured chats have a stable session ID. A terminal pane identifies the tab before its leaf ID.
