@@ -22,6 +22,7 @@ enum PiPRenderer {
 
   private struct DynamicSpinnerSlot {
     let center: CGPoint
+    let scale: CGFloat
     let isChildStack: Bool
   }
 
@@ -157,7 +158,8 @@ enum PiPRenderer {
           drawSpinner(
             in: context, center: slot.center,
             angle: slot.isChildStack ? childSpinnerAngle : spinnerAngle,
-            isChildStack: slot.isChildStack)
+            scale: slot.scale,
+            backed: slot.isChildStack)
         }
         for slot in cached.toolSlots {
           drawCrossfadingToolIcon(
@@ -222,6 +224,9 @@ enum PiPRenderer {
   private static let coinOverflow = UIColor(red: 38 / 255, green: 38 / 255, blue: 46 / 255, alpha: 1)
   private static let decisionCutout = UIColor(red: 24 / 255, green: 14 / 255, blue: 16 / 255, alpha: 1)
   private static let answerCutout = UIColor(red: 24 / 255, green: 19 / 255, blue: 12 / 255, alpha: 1)
+  private static let heroCutout = UIColor(red: 18 / 255, green: 18 / 255, blue: 22 / 255, alpha: 1)
+  private static let heroDecisionSub = UIColor(red: 255 / 255, green: 138 / 255, blue: 128 / 255, alpha: 1)
+  private static let heroAnswerSub = UIColor(red: 255 / 255, green: 194 / 255, blue: 102 / 255, alpha: 1)
 
   private static let spinnerStroke: (path: CGPath, gradient: CGGradient?, tail: CGPoint, head: CGPoint) = {
     let radius: CGFloat = 2.85
@@ -251,18 +256,20 @@ enum PiPRenderer {
     return (path, gradient, tail, head)
   }()
 
-  private static func drawSpinner(in context: CGContext, center: CGPoint, angle: CGFloat, isChildStack: Bool = false) {
+  private static func drawSpinner(
+    in context: CGContext, center: CGPoint, angle: CGFloat, scale: CGFloat = 1.0, backed: Bool = false
+  ) {
     let stroke = spinnerStroke
     guard let gradient = stroke.gradient else { return }
     context.saveGState()
-    if isChildStack {
+    if backed {
+      let haloRadius: CGFloat = 4.0 * scale
       compactGround.withAlphaComponent(0.76).setFill()
-      UIBezierPath(ovalIn: CGRect(x: center.x - 3.3, y: center.y - 3.3, width: 6.6, height: 6.6)).fill()
+      UIBezierPath(ovalIn: CGRect(x: center.x - haloRadius, y: center.y - haloRadius, width: haloRadius * 2, height: haloRadius * 2)).fill()
     }
     context.translateBy(x: center.x, y: center.y)
-    if isChildStack {
-      let factor: CGFloat = 2.35 / 2.85
-      context.scaleBy(x: factor, y: factor)
+    if abs(scale - 1.0) > 0.001 {
+      context.scaleBy(x: scale, y: scale)
     }
     context.rotate(by: angle - .pi / 2)
     context.addPath(stroke.path)
@@ -528,33 +535,68 @@ enum PiPRenderer {
     let rowHeight: CGFloat = 29
     let rowGap: CGFloat = 2
     let rowStride: CGFloat = rowHeight + rowGap // 31
-    let accentBarX: CGFloat = 8.5
-    let accentBarW: CGFloat = 2.5
-    let accentBarH: CGFloat = 15
-    let leadLogoX: CGFloat = 15.5
-    let leadLogoSize: CGFloat = 18
     let nameX: CGFloat = 41
     let cardRight: CGFloat = hasRail ? 389.0 : 395.5
     // Keep balanced right breathing room both with and without the 2pt scroll rail.
     let contentRight: CGFloat = hasRail ? 383.5 : 389.0
-    let rightBlockWidth: CGFloat = 58
-    let stackRight: CGFloat = contentRight - rightBlockWidth - 11
     let scrollRailX: CGFloat = 393.5
     let scrollRailW: CGFloat = 2.0
-    let coinSize: CGFloat = 15
-    let coinStep: CGFloat = 10.5
 
-    let nameSingleFont = UIFont.systemFont(ofSize: 13.5, weight: .semibold)
-    let nameStackedFont = UIFont.systemFont(ofSize: 12.5, weight: .semibold)
-    let hostSubFont = UIFont.systemFont(ofSize: 10.0, weight: .medium)
-    let tokFont = UIFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
-    let toolFont = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
-    let prominentToolFont = UIFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
-    let elapsedSingleFont = UIFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
-    let elapsedAttnFont = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
-    let overflowFont = UIFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .semibold)
+    func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
 
-    func tokenAttributed(_ row: PiPFrame.StatusLine, dimmed: Bool) -> NSAttributedString? {
+    func heroStatusPhase(for row: PiPFrame.StatusLine) -> (text: String, color: UIColor) {
+      switch row.activity {
+      case .needsDecision:
+        return (String(localized: "orcaios.chat.approvalTitle", defaultValue: "Needs your approval"), heroDecisionSub)
+      case .needsAnswer:
+        return (String(localized: "bots.chats.waiting", defaultValue: "Waiting for you"), heroAnswerSub)
+      case .working:
+        if row.toolRunning, let kind = row.activeToolKind {
+          let text: String
+          switch kind {
+          case .command:
+            text = String.localizedStringWithFormat(
+              String(localized: "chat.toolRun.liveUnknown", defaultValue: "Running %lld command"), 1)
+          case .fileChange:
+            text = String.localizedStringWithFormat(
+              String(localized: "chat.toolRun.liveFileChange", defaultValue: "Editing %lld file"), 1)
+          case .read:
+            text = String.localizedStringWithFormat(
+              String(localized: "chat.toolRun.liveRead", defaultValue: "Reading %lld file"), 1)
+          case .search:
+            text = String.localizedStringWithFormat(
+              String(localized: "chat.toolRun.liveSearch", defaultValue: "Searching %lld time"), 1)
+          case .webSearch:
+            text = String.localizedStringWithFormat(
+              String(localized: "chat.toolRun.liveWebSearch", defaultValue: "Searching the web %lld time"), 1)
+          case .browser:
+            text = String(localized: "chat.toolRun.liveBrowserOnce", defaultValue: "Using the browser")
+          case .plan:
+            text = String(localized: "chat.toolRun.liveTodoListOnce", defaultValue: "Updating the plan")
+          case .integration:
+            text = String.localizedStringWithFormat(
+              String(localized: "chat.toolRun.liveMcpToolCall", defaultValue: "Using %lld integration"), 1)
+          case .subagent:
+            text = String.localizedStringWithFormat(
+              String(localized: "chat.toolRun.liveSubAgentActivity", defaultValue: "Running %lld agent"),
+              max(1, row.childTypes.count))
+          case .other:
+            text = String.localizedStringWithFormat(
+              String(localized: "chat.toolRun.liveOther", defaultValue: "Using %lld tool"), 1)
+          }
+          return (text, compactAmber.withAlphaComponent(0.88))
+        }
+        if !row.leadWorking, !row.childTypes.isEmpty {
+          let text = String.localizedStringWithFormat(
+            String(localized: "chat.toolRun.liveSubAgentActivity", defaultValue: "Running %lld agent"),
+            row.childTypes.count)
+          return (text, UIColor(white: 1, alpha: 0.62))
+        }
+        return (String(localized: "agents.sections.working", defaultValue: "Working"), UIColor(white: 1, alpha: 0.60))
+      }
+    }
+
+    func tokenAttributed(_ row: PiPFrame.StatusLine, font: UIFont, dimmed: Bool) -> NSAttributedString? {
       guard let total = row.totalTokens else { return nil }
       let formatted: String
       if row.tokenCountIsPartial {
@@ -565,9 +607,9 @@ enum PiPRenderer {
       }
       let result = NSMutableAttributedString()
       if row.tokenCountIsPartial {
-        result.append(makeAttr("≥", font: tokFont, color: UIColor(white: 1, alpha: dimmed ? 0.32 : 0.45)))
+        result.append(makeAttr("≥", font: font, color: UIColor(white: 1, alpha: dimmed ? 0.32 : 0.45)))
       }
-      result.append(makeAttr(formatted, font: tokFont, color: UIColor(white: 1, alpha: dimmed ? 0.60 : 0.84)))
+      result.append(makeAttr(formatted, font: font, color: UIColor(white: 1, alpha: dimmed ? 0.60 : 0.86)))
       return result
     }
 
@@ -587,9 +629,14 @@ enum PiPRenderer {
     }
 
     /// Draws the tool count and active Lucide category/web-search icon, returning the leftmost x drawn.
-    func drawToolCount(_ count: String, for row: PiPFrame.StatusLine, prominent: Bool, midY: CGFloat) -> CGFloat {
-      let font = prominent ? prominentToolFont : toolFont
-      let iconSize: CGFloat = prominent ? 11.8 : 9.0
+    func drawToolCount(
+      _ count: String, for row: PiPFrame.StatusLine, prominent: Bool, midY: CGFloat,
+      heroFactor h: CGFloat, rightBlockWidth: CGFloat
+    ) -> CGFloat {
+      let font = UIFont.monospacedDigitSystemFont(
+        ofSize: prominent ? lerp(15.0, 17.0, h) : lerp(10.5, 12.5, h),
+        weight: prominent ? .semibold : .medium)
+      let iconSize: CGFloat = prominent ? lerp(11.8, 13.4, h) : lerp(9.0, 11.0, h)
       let strokeWidth: CGFloat = prominent ? 2.15 : 2.25
       let running = row.toolRunning
       let textColor = running ? compactAmber.withAlphaComponent(0.92) : UIColor(white: 1, alpha: prominent ? 0.84 : 0.56)
@@ -604,7 +651,7 @@ enum PiPRenderer {
         ? nil
         : cachedLucide(.globe, size: iconSize, strokeWidth: strokeWidth, color: iconColor)
       let iconWidth = max(baseIcon.size.width, globeIcon?.size.width ?? 0)
-      let gap: CGFloat = 2.5
+      let gap: CGFloat = lerp(2.5, 3.0, h)
       let width = drawMetric(attr, font: font, midY: midY, maxWidth: rightBlockWidth - iconWidth - gap)
       let centerX = contentRight - width - gap - iconWidth / 2
 
@@ -629,35 +676,49 @@ enum PiPRenderer {
       let totalWidth: CGFloat
       let overflowWidth: CGFloat
     }
-    func computeStack(_ types: [String?], maxVisible: Int) -> StackLayout {
+    func computeStack(_ types: [String?], maxVisible: Int, coinSize: CGFloat, coinStep: CGFloat, heroFactor h: CGFloat) -> StackLayout {
       if types.isEmpty { return StackLayout(visible: [], extra: 0, totalWidth: 0, overflowWidth: 0) }
       let vis = Array(types.prefix(maxVisible))
       let extra = max(0, types.count - vis.count)
       if extra > 0 {
-        let ovW: CGFloat = extra >= 10 ? 23.0 : 18.5
+        let ovW: CGFloat = extra >= 10 ? lerp(23.0, 26.0, h) : lerp(18.5, 21.5, h)
         return StackLayout(visible: vis, extra: extra, totalWidth: CGFloat(vis.count) * coinStep + ovW, overflowWidth: ovW)
       }
       return StackLayout(visible: vis, extra: 0, totalWidth: coinSize + CGFloat(vis.count - 1) * coinStep, overflowWidth: 0)
     }
 
-    func drawRow(_ row: PiPFrame.StatusLine, at y: CGFloat, alpha: CGFloat = 1) {
+    /// Draws either a compact 29pt row (`heroFactor = 0`), a full 60pt single-agent hero (`heroFactor = 1`),
+    /// or any intermediate morphed state during `1 ↔ 2` transitions.
+    func drawRow(_ row: PiPFrame.StatusLine, at y: CGFloat, heroFactor h: CGFloat = 0, alpha: CGFloat = 1) {
       context.saveGState()
       context.setAlpha(alpha)
-      let midY = y + rowHeight / 2
+      let currentHeight = lerp(rowHeight, 60, h)
+      let midY = y + currentHeight / 2
       let isAttention = row.activity != .working
       var cutoutBg = compactGround
 
-      // 1. Attention Row (Style 3): Left-to-right directional spotlight gradient + crisp left beacon bar
+      let rightBlockWidth = lerp(58, 66, h)
+      let stackRight = contentRight - rightBlockWidth - 11
+      let coinSize = lerp(15, 17.5, h)
+      let coinStep = lerp(10.5, 12.2, h)
+      let rowNameX = lerp(nameX, 55, h)
+
+      let tokFont = UIFont.monospacedDigitSystemFont(ofSize: lerp(11.5, 13.5, h), weight: .semibold)
+      let elapsedSingleFont = UIFont.monospacedDigitSystemFont(ofSize: lerp(11.5, 13.5, h), weight: .medium)
+      let elapsedAttnFont = UIFont.monospacedDigitSystemFont(ofSize: lerp(10.5, 12.5, h), weight: .medium)
+      let overflowFont = UIFont.monospacedDigitSystemFont(ofSize: lerp(9.5, 10.5, h), weight: .semibold)
+
+      // 1. Attention Row (Style 3) or Subtle Single-Agent Hero Surface
       if isAttention {
         let isDecision = row.activity == .needsDecision
         let accent = isDecision ? decisionRed : answerOrange
-        let cardRect = CGRect(x: 4.5, y: y, width: cardRight - 4.5, height: rowHeight)
-        let cardPath = UIBezierPath(roundedRect: cardRect, cornerRadius: 11)
+        let cardRect = CGRect(x: 4.5, y: y, width: cardRight - 4.5, height: currentHeight)
+        let cardPath = UIBezierPath(roundedRect: cardRect, cornerRadius: lerp(11, 12.5, h))
         context.saveGState()
         cardPath.addClip()
         let colors = [
-          accent.withAlphaComponent(0.22).cgColor,
-          accent.withAlphaComponent(0.09).cgColor,
+          accent.withAlphaComponent(lerp(0.22, 0.24, h)).cgColor,
+          accent.withAlphaComponent(lerp(0.09, 0.10, h)).cgColor,
           accent.withAlphaComponent(0.04).cgColor,
         ] as CFArray
         if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.45, 1]) {
@@ -667,69 +728,88 @@ enum PiPRenderer {
         context.restoreGState()
         cutoutBg = isDecision ? decisionCutout : answerCutout
 
-        let barRect = CGRect(x: accentBarX, y: midY - accentBarH / 2, width: accentBarW, height: accentBarH)
+        let barW = lerp(2.5, 3.0, h)
+        let barH = lerp(15, 32, h)
+        let barRect = CGRect(x: lerp(8.5, 9.5, h), y: midY - barH / 2, width: barW, height: barH)
         accent.setFill()
-        UIBezierPath(roundedRect: barRect, cornerRadius: accentBarW / 2).fill()
+        UIBezierPath(roundedRect: barRect, cornerRadius: barW / 2).fill()
+      } else if h > 0.01 {
+        let cardRect = CGRect(x: 4.5, y: y, width: cardRight - 4.5, height: currentHeight)
+        UIColor(white: 1, alpha: 0.032 * h).setFill()
+        UIBezierPath(roundedRect: cardRect, cornerRadius: lerp(11, 12.5, h)).fill()
+        if h > 0.5 { cutoutBg = heroCutout }
       }
 
       // 2. Lead logo with a work indicator overlapping its lower-right corner.
-      let leadRect = CGRect(x: leadLogoX, y: midY - leadLogoSize / 2, width: leadLogoSize, height: leadLogoSize)
+      let leadSize = lerp(18, 28, h)
+      let leadX = lerp(15.5, 17.5, h)
+      let leadRect = CGRect(x: leadX, y: midY - leadSize / 2, width: leadSize, height: leadSize)
       let leadBackdrop = AgentMark.overlayBackdrop(for: row.agentType)
       context.saveGState()
       if leadBackdrop != .transparent {
-        UIBezierPath(roundedRect: leadRect, cornerRadius: 4).addClip()
+        UIBezierPath(roundedRect: leadRect, cornerRadius: lerp(4, 6.5, h)).addClip()
       }
-      AgentMark.overlayImage(for: row.agentType, size: leadLogoSize).draw(in: leadRect)
+      AgentMark.overlayImage(for: row.agentType, size: leadSize).draw(in: leadRect)
       context.restoreGState()
 
       if !isAttention {
-        let center = CGPoint(x: leadRect.maxX + 0.7, y: leadRect.maxY - 2)
+        let center = CGPoint(x: leadRect.maxX + lerp(0.7, 0.4, h), y: leadRect.maxY - lerp(2.0, 2.6, h))
         if row.leadWorking {
+          let spinnerScale = lerp(1.0, 3.4 / 2.85, h)
           if capture != nil {
-            capture?.spinners.append(DynamicSpinnerSlot(center: center, isChildStack: false))
+            capture?.spinners.append(DynamicSpinnerSlot(center: center, scale: spinnerScale, isChildStack: false))
           } else {
-            drawSpinner(in: context, center: center, angle: spinnerAngle)
+            drawSpinner(in: context, center: center, angle: spinnerAngle, scale: spinnerScale)
           }
         } else {
+          let ringR = lerp(2.2, 2.7, h)
           compactAmber.withAlphaComponent(0.78).setStroke()
-          let ring = UIBezierPath(ovalIn: CGRect(x: center.x - 2.2, y: center.y - 2.2, width: 4.4, height: 4.4))
-          ring.lineWidth = 1.2
+          let ring = UIBezierPath(ovalIn: CGRect(x: center.x - ringR, y: center.y - ringR, width: ringR * 2, height: ringR * 2))
+          ring.lineWidth = lerp(1.2, 1.4, h)
           ring.stroke()
         }
       }
 
       // 3. Right telemetry / status column (tracks exact leftmost x drawn so coinless rows can widen titles).
-      let topMidY = midY - 6.0
-      let botMidY = midY + 6.9
+      let topMidY = midY - lerp(6.0, 9.8, h)
+      let botMidY = midY + lerp(6.9, 10.6, h)
       var rightMetricMinX = contentRight
       if isAttention {
         let isDecision = row.activity == .needsDecision
         let glyphName = isDecision ? "hand.raised.fill" : "questionmark.bubble.fill"
         let glyphColor = isDecision ? decisionGlyph : answerGlyph
-        if let tokenAttr = tokenAttributed(row, dimmed: true) {
+        let pairedGlyphSize = lerp(10.5, 13.5, h)
+        let pairedGlyphCenterX = contentRight - lerp(6.5, 7.5, h)
+        if let tokenAttr = tokenAttributed(row, font: tokFont, dimmed: true) {
           let tokW = drawMetric(tokenAttr, font: tokFont, midY: topMidY, maxWidth: rightBlockWidth)
-          let glyphCenterX = contentRight - 6.5
-          let glyphW = drawSymbol(glyphName, pointSize: 10.5, weight: .semibold, color: glyphColor, centerX: glyphCenterX, centerY: botMidY)
-          rightMetricMinX = min(contentRight - tokW, glyphCenterX - glyphW / 2)
+          let glyphW = drawSymbol(
+            glyphName, pointSize: pairedGlyphSize, weight: .semibold, color: glyphColor,
+            centerX: pairedGlyphCenterX, centerY: botMidY)
+          rightMetricMinX = min(contentRight - tokW, pairedGlyphCenterX - glyphW / 2)
         } else if let elapsed = row.elapsedText {
-          let elapsedAttr = makeAttr(elapsed, font: elapsedAttnFont, color: UIColor(white: 1, alpha: 0.52))
+          let elapsedAttr = makeAttr(elapsed, font: elapsedAttnFont, color: UIColor(white: 1, alpha: 0.54))
           let elW = drawMetric(elapsedAttr, font: elapsedAttnFont, midY: topMidY, maxWidth: rightBlockWidth)
-          let glyphCenterX = contentRight - 6.5
-          let glyphW = drawSymbol(glyphName, pointSize: 10.5, weight: .semibold, color: glyphColor, centerX: glyphCenterX, centerY: botMidY)
-          rightMetricMinX = min(contentRight - elW, glyphCenterX - glyphW / 2)
+          let glyphW = drawSymbol(
+            glyphName, pointSize: pairedGlyphSize, weight: .semibold, color: glyphColor,
+            centerX: pairedGlyphCenterX, centerY: botMidY)
+          rightMetricMinX = min(contentRight - elW, pairedGlyphCenterX - glyphW / 2)
         } else {
-          let glyphCenterX = contentRight - 8.0
-          let glyphW = drawSymbol(glyphName, pointSize: 14.0, weight: .semibold, color: glyphColor, centerX: glyphCenterX, centerY: midY)
-          rightMetricMinX = glyphCenterX - glyphW / 2
+          let soloGlyphCenterX = contentRight - lerp(8.0, 9.5, h)
+          let glyphW = drawSymbol(
+            glyphName, pointSize: lerp(14.0, 18.0, h), weight: .semibold, color: glyphColor,
+            centerX: soloGlyphCenterX, centerY: midY)
+          rightMetricMinX = soloGlyphCenterX - glyphW / 2
         }
       } else {
-        let tokenAttr = tokenAttributed(row, dimmed: false)
+        let tokenAttr = tokenAttributed(row, font: tokFont, dimmed: false)
         if let tokenAttr {
           let tokW = drawMetric(tokenAttr, font: tokFont, midY: row.toolCount == nil ? midY : topMidY, maxWidth: rightBlockWidth)
           rightMetricMinX = min(rightMetricMinX, contentRight - tokW)
         }
         if let toolCount = row.toolCount {
-          let toolMinX = drawToolCount(toolCount, for: row, prominent: tokenAttr == nil, midY: tokenAttr == nil ? midY : botMidY)
+          let toolMinX = drawToolCount(
+            toolCount, for: row, prominent: tokenAttr == nil, midY: tokenAttr == nil ? midY : botMidY,
+            heroFactor: h, rightBlockWidth: rightBlockWidth)
           rightMetricMinX = min(rightMetricMinX, toolMinX)
         } else if tokenAttr == nil, let elapsed = row.elapsedText {
           let elapsedAttr = makeAttr(elapsed, font: elapsedSingleFont, color: UIColor(white: 1, alpha: 0.58))
@@ -739,31 +819,35 @@ enum PiPRenderer {
       }
 
       // 4. Optional inline Worker glyph
-      var effectiveNameX = nameX
+      let compactTitleY = row.showsHostSubtitle ? (midY - 5.8) : midY
+      let titleMidY = lerp(compactTitleY, midY - 9.8, h)
+      let compactTitleSize: CGFloat = row.showsHostSubtitle ? 12.5 : 13.5
+      let activeTitleFont = UIFont.systemFont(ofSize: lerp(compactTitleSize, 15.0, h), weight: .semibold)
+
+      var effectiveNameX = rowNameX
       if row.isWorker {
-        let iconMidY = row.showsHostSubtitle ? (midY - 5.8) : midY
         drawSymbol(
-          "arrow.triangle.branch", pointSize: 8.8, weight: .semibold,
-          color: UIColor(white: 1, alpha: 0.44), centerX: effectiveNameX + 4.5, centerY: iconMidY)
-        effectiveNameX += 12.5
+          "arrow.triangle.branch", pointSize: lerp(8.8, 10.0, h), weight: .semibold,
+          color: UIColor(white: 1, alpha: 0.44), centerX: effectiveNameX + lerp(4.5, 5.0, h), centerY: titleMidY)
+        effectiveNameX += lerp(12.5, 14.0, h)
       }
 
       // 5. Right-Aligned Subagent Brand Stack (spine locked at stackRight so multi-row stacks stay aligned)
-      let activeNameFont = row.showsHostSubtitle ? nameStackedFont : nameSingleFont
-      let fullNameW = measureAttr(makeAttr(row.agent, font: activeNameFont, color: .white, kern: -0.15))
-      var stack = computeStack(row.childTypes, maxVisible: 3)
+      let fullNameW = measureAttr(makeAttr(row.agent, font: activeTitleFont, color: .white, kern: -0.15))
+      var stack = computeStack(row.childTypes, maxVisible: 3, coinSize: coinSize, coinStep: coinStep, heroFactor: h)
       let stackGap: CGFloat = stack.visible.isEmpty ? 0 : 12
       let availForName3 = stackRight - stack.totalWidth - stackGap - effectiveNameX
       if row.childTypes.count >= 4 && ((fullNameW - availForName3) > 20 || availForName3 < 115) {
-        stack = computeStack(row.childTypes, maxVisible: 2)
+        stack = computeStack(row.childTypes, maxVisible: 2, coinSize: coinSize, coinStep: coinStep, heroFactor: h)
       }
       let stackStartX = stackRight - stack.totalWidth
       if !stack.visible.isEmpty {
         let coinY = midY - coinSize / 2
+        let haloInset = lerp(1.15, 1.25, h)
         for (index, type) in stack.visible.enumerated() {
           let coinRect = CGRect(x: stackStartX + CGFloat(index) * coinStep, y: coinY, width: coinSize, height: coinSize)
           cutoutBg.setFill()
-          UIBezierPath(ovalIn: coinRect.insetBy(dx: -1.15, dy: -1.15)).fill()
+          UIBezierPath(ovalIn: coinRect.insetBy(dx: -haloInset, dy: -haloInset)).fill()
           let backdrop = AgentMark.overlayBackdrop(for: type)
           switch backdrop {
           case .lightOpaque:
@@ -771,7 +855,8 @@ enum PiPRenderer {
             UIBezierPath(ovalIn: coinRect).fill()
             context.saveGState()
             UIBezierPath(ovalIn: coinRect).addClip()
-            AgentMark.overlayImage(for: type, size: coinSize - 4.2).draw(in: coinRect.insetBy(dx: 2.1, dy: 2.1))
+            let pad = coinSize * 0.14
+            AgentMark.overlayImage(for: type, size: coinSize - pad * 2).draw(in: coinRect.insetBy(dx: pad, dy: pad))
             context.restoreGState()
           case .darkOpaque:
             coinDark.setFill()
@@ -783,12 +868,13 @@ enum PiPRenderer {
           case .transparent:
             coinDark.setFill()
             UIBezierPath(ovalIn: coinRect).fill()
-            AgentMark.overlayImage(for: type, size: coinSize - 4.6).draw(in: coinRect.insetBy(dx: 2.3, dy: 2.3))
+            let pad = coinSize * 0.153
+            AgentMark.overlayImage(for: type, size: coinSize - pad * 2).draw(in: coinRect.insetBy(dx: pad, dy: pad))
           }
         }
         if stack.extra > 0 {
           let pillRect = CGRect(x: stackStartX + CGFloat(stack.visible.count) * coinStep, y: coinY, width: stack.overflowWidth, height: coinSize)
-          let cutRect = pillRect.insetBy(dx: -1.15, dy: -1.15)
+          let cutRect = pillRect.insetBy(dx: -haloInset, dy: -haloInset)
           cutoutBg.setFill()
           UIBezierPath(roundedRect: cutRect, cornerRadius: cutRect.height / 2).fill()
           coinOverflow.setFill()
@@ -800,16 +886,17 @@ enum PiPRenderer {
         // B2: when the lead agent is idle/monitoring and only subagents are working, show one shared
         // micro-spinner at the lower-right edge of the stack so the row stays visually alive.
         if row.showsChildStackSpinner {
-          let stackSpinnerCenter = CGPoint(x: stackRight + 0.6, y: midY + 5.8)
+          let stackSpinnerCenter = CGPoint(x: stackRight + 0.6, y: midY + coinSize * 0.38)
+          let childScale = lerp(2.35 / 2.85, 2.7 / 2.85, h)
           if capture != nil {
-            capture?.spinners.append(DynamicSpinnerSlot(center: stackSpinnerCenter, isChildStack: true))
+            capture?.spinners.append(DynamicSpinnerSlot(center: stackSpinnerCenter, scale: childScale, isChildStack: true))
           } else {
-            drawSpinner(in: context, center: stackSpinnerCenter, angle: childSpinnerAngle, isChildStack: true)
+            drawSpinner(in: context, center: stackSpinnerCenter, angle: childSpinnerAngle, scale: childScale, backed: true)
           }
         }
       }
 
-      // 6. Primary Identity (extends elastically into unused right space when no subagent stack is shown)
+      // 6. Primary Identity + Progressive Hero Status Subtitle
       let nameRightLimit: CGFloat
       if !stack.visible.isEmpty {
         nameRightLimit = stackStartX - 12
@@ -819,19 +906,30 @@ enum PiPRenderer {
         nameRightLimit = contentRight - 4
       }
       let nameMaxW = max(68, nameRightLimit - effectiveNameX)
-      let nameColor = UIColor(white: 1, alpha: isAttention ? 1.0 : 0.95)
-      if row.showsHostSubtitle {
+      let nameColor = UIColor(white: 1, alpha: isAttention ? 1.0 : 0.96)
+      drawText(
+        makeAttr(row.agent, font: activeTitleFont, color: nameColor, kern: lerp(-0.15, -0.18, h)),
+        font: activeTitleFont, atX: effectiveNameX, midY: titleMidY, maxWidth: nameMaxW, truncate: .middle)
+
+      let subMaxW = max(68, nameRightLimit - rowNameX)
+      if h > 0.15 {
+        // Progressive single-agent second line: localized privacy-safe phase + quiet host
+        let subAlpha = min(1, (h - 0.15) / 0.85)
+        let subFont = UIFont.systemFont(ofSize: 11.5, weight: .medium)
+        let phase = heroStatusPhase(for: row)
+        let subAttr = NSMutableAttributedString(
+          attributedString: makeAttr(phase.text, font: subFont, color: phase.color.withAlphaComponent(phase.color.cgColor.alpha * subAlpha)))
+        if !row.host.isEmpty {
+          subAttr.append(makeAttr(" · ", font: subFont, color: UIColor(white: 1, alpha: 0.26 * subAlpha)))
+          subAttr.append(makeAttr(row.host, font: subFont, color: UIColor(white: 1, alpha: 0.46 * subAlpha)))
+        }
+        drawText(subAttr, font: subFont, atX: rowNameX, midY: midY + 10.6, maxWidth: subMaxW, truncate: .end)
+      } else if row.showsHostSubtitle {
+        let hostSubFont = UIFont.systemFont(ofSize: 10.0, weight: .medium)
+        let compactHostAlpha = 0.48 * max(0, 1 - h / 0.15)
         drawText(
-          makeAttr(row.agent, font: nameStackedFont, color: nameColor, kern: -0.15),
-          font: nameStackedFont, atX: effectiveNameX, midY: midY - 5.8, maxWidth: nameMaxW, truncate: .middle)
-        let hostMaxW = max(68, nameRightLimit - nameX)
-        drawText(
-          makeAttr(row.host, font: hostSubFont, color: UIColor(white: 1, alpha: 0.48)),
-          font: hostSubFont, atX: nameX, midY: midY + 6.8, maxWidth: hostMaxW, truncate: .middle)
-      } else {
-        drawText(
-          makeAttr(row.agent, font: nameSingleFont, color: nameColor, kern: -0.15),
-          font: nameSingleFont, atX: effectiveNameX, midY: midY, maxWidth: nameMaxW, truncate: .middle)
+          makeAttr(row.host, font: hostSubFont, color: UIColor(white: 1, alpha: compactHostAlpha)),
+          font: hostSubFont, atX: rowNameX, midY: midY + 6.8, maxWidth: subMaxW, truncate: .middle)
       }
       context.restoreGState()
     }
@@ -851,11 +949,40 @@ enum PiPRenderer {
       }
     }
 
-    // MARK: Row Rendering + Scrolling Transitions
+    // MARK: Row Rendering + Scrolling & 1↔2 Progressive Morph Transitions
     let eased = progress * progress * (3 - 2 * progress)
     let clipWidth: CGFloat = hasRail ? 389 : bounds.width
     if let transition, progress < 1 {
       switch transition.kind {
+      case .expandToTwo(let wasRowIndex) where frame.statusRows.count == 2:
+        let fullClip = CGRect(x: 0, y: rowTop, width: clipWidth, height: 2 * rowHeight + rowGap)
+        context.saveGState()
+        context.clip(to: fullClip)
+        let otherIndex = wasRowIndex == 0 ? 1 : 0
+        let enterAlpha = max(0, (eased - 0.15) / 0.85)
+        let enterY = otherIndex == 1 ? lerp(56, rowTop + rowStride, eased) : lerp(-12, rowTop, eased)
+        if enterAlpha > 0.01 {
+          drawRow(frame.statusRows[otherIndex].line, at: enterY, heroFactor: 0, alpha: enterAlpha)
+        }
+        let targetY = wasRowIndex == 0 ? rowTop : (rowTop + rowStride)
+        drawRow(frame.statusRows[wasRowIndex].line, at: lerp(rowTop, targetY, eased), heroFactor: 1 - eased, alpha: 1)
+        if frame.statusRows[0].line.activity == .working, frame.statusRows[1].line.activity == .working, enterAlpha > 0.01 {
+          UIColor(white: 1, alpha: 0.065 * enterAlpha).setFill()
+          UIBezierPath(rect: CGRect(x: nameX, y: 33.75, width: contentRight - nameX, height: 0.5)).fill()
+        }
+        context.restoreGState()
+      case .collapseToOne(let departing, let departingRowIndex) where frame.statusRows.count == 1:
+        let fullClip = CGRect(x: 0, y: rowTop, width: clipWidth, height: 2 * rowHeight + rowGap)
+        context.saveGState()
+        context.clip(to: fullClip)
+        let departAlpha = max(0, 1 - eased * 2.0)
+        if departAlpha > 0.01 {
+          let departY = departingRowIndex == 1 ? (rowTop + rowStride + 6 * eased) : (rowTop - 6 * eased)
+          drawRow(departing, at: departY, heroFactor: 0, alpha: departAlpha)
+        }
+        let startY = departingRowIndex == 0 ? (rowTop + rowStride) : rowTop
+        drawRow(frame.statusRows[0].line, at: lerp(startY, rowTop, eased), heroFactor: eased, alpha: 1)
+        context.restoreGState()
       case .perRow(let leavingFirst, let leavingSecond) where frame.statusRows.count == 2:
         // Row 1: independent scroll (split-zone) or static pin (Pin-1)
         if let leavingFirst {
@@ -896,15 +1023,19 @@ enum PiPRenderer {
         drawEdgeFeather(in: clipRect)
         context.restoreGState()
       default:
-        let startY = rowTop + (frame.statusRows.count == 1 ? rowStride / 2 : 0)
-        for (offset, row) in frame.statusRows.enumerated() {
-          drawRow(row.line, at: startY + CGFloat(offset) * rowStride)
+        if frame.statusRows.count == 1 {
+          drawRow(frame.statusRows[0].line, at: rowTop, heroFactor: 1)
+        } else {
+          for (offset, row) in frame.statusRows.enumerated() {
+            drawRow(row.line, at: rowTop + CGFloat(offset) * rowStride)
+          }
         }
       }
+    } else if frame.statusRows.count == 1 {
+      drawRow(frame.statusRows[0].line, at: rowTop, heroFactor: 1)
     } else {
-      let startY = rowTop + (frame.statusRows.count == 1 ? rowStride / 2 : 0)
       for (offset, row) in frame.statusRows.enumerated() {
-        drawRow(row.line, at: startY + CGFloat(offset) * rowStride)
+        drawRow(row.line, at: rowTop + CGFloat(offset) * rowStride)
       }
       if frame.statusRows.count == 2,
         frame.statusRows[0].line.activity == .working, frame.statusRows[1].line.activity == .working {

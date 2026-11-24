@@ -61,6 +61,10 @@ struct PiPScrollTransition: Equatable {
   enum Kind: Equatable {
     case full(leaving: PiPFrame.StatusLine)
     case perRow(leavingFirst: PiPFrame.StatusLine?, leavingSecond: PiPFrame.StatusLine?)
+    /// 1 -> 2: single expanded hero contracts smoothly into its target compact row while the second enters.
+    case expandToTwo(wasRowIndex: Int)
+    /// 2 -> 1: the departing compact row fades away while the surviving row expands into the 60pt hero card.
+    case collapseToOne(departing: PiPFrame.StatusLine, departingRowIndex: Int)
   }
   let kind: Kind
   let fromScroll: PiPFrame.ScrollState?
@@ -397,6 +401,23 @@ final class PiPCenter: NSObject {
     // Update telemetry during the animation without interrupting the rows that are already moving.
     if animate, transition != nil, previous?.map(\.id) == frame.statusRows.map(\.id) { return }
     cancelTransition()
+    if animate, let previous {
+      if previous.count == 1, frame.statusRows.count == 2,
+        let survivedIndex = frame.statusRows.firstIndex(where: { $0.id == previous[0].id }) {
+        scroll(.init(kind: .expandToTwo(wasRowIndex: survivedIndex), fromScroll: previousScroll), duration: 0.28)
+        return
+      }
+      if previous.count == 2, frame.statusRows.count == 1,
+        let survivedIndex = previous.firstIndex(where: { $0.id == frame.statusRows[0].id }) {
+        let departingIndex = survivedIndex == 0 ? 1 : 0
+        scroll(
+          .init(
+            kind: .collapseToOne(departing: previous[departingIndex].line, departingRowIndex: departingIndex),
+            fromScroll: previousScroll),
+          duration: 0.28)
+        return
+      }
+    }
     if animate, didAdvance, let previous, previous.count == 2, frame.statusRows.count == 2 {
       if scrollsOnlySecondRow, previous[0].id == frame.statusRows[0].id, previous[1].id != frame.statusRows[1].id {
         scroll(.init(kind: .perRow(leavingFirst: nil, leavingSecond: previous[1].line), fromScroll: previousScroll))
@@ -423,10 +444,9 @@ final class PiPCenter: NSObject {
     transition = nil
   }
 
-  private func scroll(_ scrollTransition: PiPScrollTransition) {
+  private func scroll(_ scrollTransition: PiPScrollTransition, duration: TimeInterval = 0.3) {
     transition = Task { [weak self] in
       let start = ProcessInfo.processInfo.systemUptime
-      let duration: TimeInterval = 0.3
       while !Task.isCancelled, let self, let frame = last {
         let elapsed = ProcessInfo.processInfo.systemUptime - start
         let progress = min(CGFloat(elapsed / duration), 1)
