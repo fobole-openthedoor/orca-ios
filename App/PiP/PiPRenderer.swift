@@ -135,8 +135,8 @@ enum PiPRenderer {
   }
 
   private static func drawCompact(_ frame: PiPFrame, in bounds: CGRect, previous: [PiPFrame.StatusLine]?, progress: CGFloat) {
-    let padding: CGFloat = 17
-    let labelX = padding + 15
+    let padding: CGFloat = 9
+    let labelX = padding + 12
     let right = bounds.maxX - padding
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
@@ -161,9 +161,9 @@ enum PiPRenderer {
 
     let muted = UIColor(white: 1, alpha: 0.58)
     let summaryWidth: CGFloat = 38
-    let dividerX = right - summaryWidth - 11
-    let firstY: CGFloat = 21
-    let rowHeight: CGFloat = 37
+    let dividerX = right - summaryWidth - 5
+    let rowHeight: CGFloat = 27
+    let firstY = (bounds.height - 2 * rowHeight) / 2
     let metricsFont = UIFont.monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
     func metric(_ text: String, color: UIColor, width: CGFloat) -> NSAttributedString {
       let normal = label(text, font: metricsFont, color: color)
@@ -186,17 +186,17 @@ enum PiPRenderer {
       }
     }
     UIColor(white: 1, alpha: 0.15).setFill()
-    UIBezierPath(rect: CGRect(x: dividerX, y: firstY, width: 1, height: 62)).fill()
+    UIBezierPath(rect: CGRect(x: dividerX, y: firstY + 1, width: 1, height: 2 * rowHeight - 2)).fill()
 
     // Fade the page together. The summary stays readable throughout.
     let rows = progress < 0.5 ? previous ?? frame.statusRows : frame.statusRows
     let alpha = previous == nil ? 1 : abs(progress * 2 - 1)
-    let agentsRight = dividerX - 10
+    let agentsRight = dividerX - 7
     let toolWidth: CGFloat = 42
     let rateWidth: CGFloat = 60
     let namesRight = agentsRight - toolWidth - rateWidth - 8
     for (offset, row) in rows.enumerated() {
-      let y = firstY + CGFloat(offset) * rowHeight
+      let y = firstY + (rows.count == 1 ? rowHeight / 2 : CGFloat(offset) * rowHeight)
       dot(at: y + 9, color: amber.withAlphaComponent(alpha))
       let host = label(row.host, font: .systemFont(ofSize: 13, weight: .medium),
         color: muted.withAlphaComponent(0.7 * alpha), truncation: middle)
