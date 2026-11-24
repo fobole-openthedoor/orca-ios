@@ -127,16 +127,12 @@ final class ChatAnswerMarkdownView: UIView {
     invalidateIntrinsicContentSize()
   }
 
-  /// The height the row last heard about. `intrinsicContentSize` is measured fresh each time, so it can't
-  /// stand in for the height before a change.
-  private var reportedHeight: CGFloat = 0
-
+  /// The row is told only when the words need a height the row doesn't have now. Comparing with the laid-out
+  /// height, not the last measure, keeps a reused row from re-measuring on every pass.
   private func contentChanged() {
     invalidateIntrinsicContentSize()
-    let height = intrinsicContentSize.height
-    guard abs(height - reportedHeight) > 0.5 else { return }
-    reportedHeight = height
-    onHeightChange?()
+    guard window != nil, bounds.height > 0 else { return }
+    if abs(intrinsicContentSize.height - bounds.height) > 0.5 { onHeightChange?() }
   }
 
   override var intrinsicContentSize: CGSize {

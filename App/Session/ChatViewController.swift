@@ -77,8 +77,6 @@ final class ChatViewController: UIViewController {
     super.viewDidLoad()
     view.backgroundColor = transcriptGround
     collection.backgroundColor = transcriptGround
-    // A row whose text grows in place (a reply typing out) re-measures itself without waiting for new data.
-    collection.selfSizingInvalidation = .enabledIncludingConstraints
     collection.keyboardDismissMode = .interactive
     collection.delegate = self
     collection.alwaysBounceVertical = true
