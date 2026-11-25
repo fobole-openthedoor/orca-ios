@@ -134,7 +134,11 @@ extension WorkspaceView {
   /// Rows in Sort by order (workspace-list-ordering.ts). A host that stamps its rows decides Agent activity;
   /// an older one is ranked by its saved order, then attention, then Recent.
   public func sorted(_ rows: [Worktree], now: Double = Date().timeIntervalSince1970 * 1000) -> [Worktree] {
-    let byStamps = rows.contains(where: \.sortedByStamps)
+    sorted(rows, worktree: { $0 }, now: now)
+  }
+
+  public func sorted<Row>(_ rows: [Row], worktree: (Row) -> Worktree, now: Double = Date().timeIntervalSince1970 * 1000) -> [Row] {
+    let byStamps = rows.contains { worktree($0).sortedByStamps }
     func label(_ a: Worktree, _ b: Worktree) -> Bool {
       let order = a.displayName.localizedStandardCompare(b.displayName)
       return order == .orderedSame ? a.id < b.id : order == .orderedAscending
@@ -173,7 +177,8 @@ extension WorkspaceView {
       return recent(b) - recent(a)
     }
     func manual(_ row: Worktree) -> Double? { row.manualOrder ?? row.sortOrder }
-    return rows.sorted { a, b in
+    return rows.sorted { lhs, rhs in
+      let a = worktree(lhs), b = worktree(rhs)
       switch sortBy {
       case "name":
         return label(a, b)

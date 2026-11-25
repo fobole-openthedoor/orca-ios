@@ -7,6 +7,7 @@ final class WorkspaceOptionsViewController: UITableViewController {
   struct Project {
     let id: String
     let name: String
+    let repoIds: Set<String>
   }
 
   private enum Row {
@@ -158,11 +159,16 @@ final class WorkspaceOptionsViewController: UITableViewController {
   }
 
   private var projectsValue: String {
-    let listed = projects.filter { workspaceView.filterRepoIds.contains($0.id) }
+    let listed = listedProjects
     if listed.isEmpty || listed.count == projects.count {
       return String(localized: "hostScreen.workspaceOptionControls.allProjects", defaultValue: "All projects")
     }
     return listed.count == 1 ? listed[0].name : "\(listed.count)/\(projects.count)"
+  }
+
+  private var listedProjects: [Project] {
+    let filter = Set(workspaceView.filterRepoIds)
+    return projects.filter { !$0.repoIds.isDisjoint(with: filter) }
   }
 
   // MARK: Table
@@ -265,7 +271,7 @@ final class WorkspaceOptionsViewController: UITableViewController {
       }
     case .projects:
       // No project listed means all of them; the page shows that as every row checked.
-      let listed = workspaceView.filterRepoIds.filter { id in projects.contains { $0.id == id } }
+      let listed = listedProjects.map(\.id)
       page = OptionChoiceViewController(
         title: String(localized: "hostScreen.workspaceOptionsSheet.projects", defaultValue: "Projects"),
         choices: projects.map { OptionChoice(id: $0.id, title: $0.name) },
@@ -273,7 +279,8 @@ final class WorkspaceOptionsViewController: UITableViewController {
       ) { [weak self] picked in
         guard let self else { return }
         var view = self.workspaceView
-        view.filterRepoIds = picked.count == self.projects.count ? [] : self.projects.map(\.id).filter(picked.contains)
+        view.filterRepoIds = picked.count == self.projects.count ? []
+          : Set(self.projects.filter { picked.contains($0.id) }.flatMap(\.repoIds)).sorted()
         self.update(view)
       }
     default:

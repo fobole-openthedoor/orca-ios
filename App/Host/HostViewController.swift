@@ -1,24 +1,36 @@
 import OrcaCore
 import UIKit
 
-/// One desktop's workspaces (host-screen/HostScreen.tsx): Bots, then each project's workspaces.
+/// A paired desktop's projects and workspaces, including its connected servers.
 /// System chrome: large title with a connection subtitle, ⋯ menu, and a bottom toolbar with filter, search and +.
 final class HostViewController: UIViewController {
   private enum Section: Hashable {
     case bots
-    case remoteServers
     case project(String)
     /// A lane that isn't a project: `pinned`, `all`, `status:<id>` or `pr:<state>`.
     case lane(String)
   }
 
   private enum Item: Hashable {
-    case bot(String)
+    case bot(RowID)
     /// The bot's Home Chat, under its row while unfolded.
-    case botHome(String)
+    case botHome(RowID)
     case botsEmpty
-    case remoteServer(String)
-    case worktree(String)
+    case worktree(RowID)
+  }
+
+  private struct RowID: Hashable, Sendable {
+    let scope: String
+    let hostId: String
+    let id: String
+  }
+
+  private struct WorkspaceEntry: Sendable {
+    let id: RowID
+    let session: HostSession
+    let worktree: Worktree
+    let repoName: String
+    let project: WorkspaceProjectCatalog.Project
   }
 
   private struct WorkspacePlacement {
@@ -30,14 +42,16 @@ final class HostViewController: UIViewController {
   private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
   private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
   private var collapsed: Set<String> = []
-  private var foldedWorktrees: Set<String> = []
-  private var foldedBots: Set<String> = []
-  private var placements: [String: WorkspacePlacement] = [:]
+  private var foldedWorktrees: Set<RowID> = []
+  private var foldedBots: Set<RowID> = []
+  private var placements: [RowID: WorkspacePlacement] = [:]
+  private var workspacesByID: [RowID: WorkspaceEntry] = [:]
+  private var botsByID: [RowID: (Bot, HostSession)] = [:]
+  private var projectNames: [String: String] = [:]
   private var sectionCounts: [Section: Int] = [:]
   private var query = ""
   private var workspaceView = WorkspaceView()
   private var workspaceViewLoaded = false
-  private var serversCollapsed = false
   private let search = UISearchController(searchResultsController: nil)
 
   init(session: HostSession) {
@@ -52,12 +66,10 @@ final class HostViewController: UIViewController {
     super.viewDidLoad()
     view.backgroundColor = Palette.bgBase
     navigationItem.largeTitleDisplayMode = .always
-    if session.remoteServer == nil {
-      navigationItem.rightBarButtonItem = UIBarButtonItem(
-        image: Lucide.ellipsis.image(size: 20, strokeWidth: 2), menu: hostMenu())
-      navigationItem.rightBarButtonItem?.accessibilityLabel = String(
-        localized: "hostScreen.hostScreenHeader.moreActions", defaultValue: "More actions")
-    }
+    navigationItem.rightBarButtonItem = UIBarButtonItem(
+      image: Lucide.ellipsis.image(size: 20, strokeWidth: 2), menu: hostMenu())
+    navigationItem.rightBarButtonItem?.accessibilityLabel = String(
+      localized: "hostScreen.hostScreenHeader.moreActions", defaultValue: "More actions")
 
     search.searchBar.placeholder = String(
       localized: "hostScreen.hostBottomBar.searchWorkspaces", defaultValue: "Search workspaces")
@@ -77,7 +89,7 @@ final class HostViewController: UIViewController {
     }
     create.tintColor = Palette.createActionFill
     create.accessibilityLabel = String(localized: "hostScreen.hostBottomBar.newWorkspace", defaultValue: "New workspace")
-    toolbarItems = [filter, navigationItem.searchBarPlacementBarButtonItem] + (session.remoteServer == nil ? [create] : [])
+    toolbarItems = [filter, navigationItem.searchBarPlacementBarButtonItem, create]
 
     collection.backgroundColor = Palette.bgBase
     collection.delegate = self
@@ -101,7 +113,7 @@ final class HostViewController: UIViewController {
   override func updateProperties() {
     super.updateProperties()
     title = session.name
-    let status = HostConnectionPresentation(session.connectionState, server: session.remoteServer)
+    let status = HostConnectionPresentation(session.connectionState)
     let subtitle = NSMutableAttributedString(
       string: "● ", attributes: [.foregroundColor: status.dot, .font: UIFont.systemFont(ofSize: 11)])
     let line = status.connected ? (session.status?.machineLine ?? status.label) : status.label
@@ -110,12 +122,13 @@ final class HostViewController: UIViewController {
         string: line, attributes: [.foregroundColor: status.connected ? Palette.textSecondary : status.labelColor]))
     navigationItem.attributedSubtitle = AttributedString(subtitle)
     // The menu follows the connection, the host's bots and its Floating Workspace setting.
-    if let item = navigationItem.rightBarButtonItem { item.menu = hostMenu() }
+    navigationItem.rightBarButtonItem?.menu = hostMenu()
     if status.connected, !workspaceViewLoaded { loadWorkspaceView() }
     applySnapshot()
   }
 
   private func reload() {
+    if session.connectionState == .connected { loadWorkspaceView() }
     Task {
       await session.refresh()
       collection.refreshControl?.endRefreshing()
@@ -137,11 +150,12 @@ final class HostViewController: UIViewController {
   }
 
   private func showOptions() {
-    let botHomes = Set(session.bots.bots.map(\.homeWorktreeId))
-    var projects: [WorkspaceOptionsViewController.Project] = []
-    for worktree in session.worktrees where !worktree.isArchived && !botHomes.contains(worktree.id) {
-      guard !worktree.isFolderWorkspace, !projects.contains(where: { $0.id == worktree.repoId }) else { continue }
-      projects.append(.init(id: worktree.repoId, name: session.repo(id: worktree.repoId)?.displayName ?? worktree.repo))
+    let rows = workspaceEntries.filter { !$0.worktree.isFolderWorkspace }
+    let byProject = Dictionary(grouping: rows, by: \.project.id)
+    var seen = Set<String>()
+    let projects = rows.compactMap { entry -> WorkspaceOptionsViewController.Project? in
+      guard seen.insert(entry.project.id).inserted, let group = byProject[entry.project.id] else { return nil }
+      return .init(id: entry.project.id, name: entry.project.name, repoIds: Set(group.map(\.worktree.repoId)))
     }
     let api = session.api
     present(
@@ -162,27 +176,30 @@ final class HostViewController: UIViewController {
       }, animated: true)
   }
 
-  private var visibleWorktrees: [Worktree] {
-    let botHomes = Set(session.bots.bots.map(\.homeWorktreeId))
-    let repoIds = Set(session.worktrees.map(\.repoId))
-    let all = session.worktrees.filter {
-      !botHomes.contains($0.id) && workspaceView.keeps($0, knownRepoIds: repoIds)
-    }
-    guard !query.isEmpty else { return all }
-    let needle = query.lowercased()
-    return all.filter {
-      $0.displayName.lowercased().contains(needle) || $0.branch.lowercased().contains(needle)
-        || $0.repo.lowercased().contains(needle)
+  private var listingSessions: [HostSession] {
+    [session] + session.remoteServers.filter { source in
+      guard let id = source.remoteServer?.id else { return false }
+      return workspaceView.visibleHostIds?.contains(id) != false
     }
   }
 
-  private var visibleServers: [HostSession] {
-    let needle = query.lowercased()
-    return session.remoteServers.filter { server in
-      guard let id = server.remoteServer?.id, workspaceView.visibleHostIds?.contains(id) != false else { return false }
-      return needle.isEmpty || server.name.lowercased().contains(needle) || server.worktrees.contains {
-        !$0.isArchived && ($0.displayName.lowercased().contains(needle) || $0.repo.lowercased().contains(needle)
-          || $0.branch.lowercased().contains(needle))
+  private var workspaceEntries: [WorkspaceEntry] {
+    let projects = session.workspaceProjects
+    return listingSessions.flatMap { source -> [WorkspaceEntry] in
+      let botHomes = Set(source.bots.bots.map(\.homeWorktreeId))
+      let repos = Dictionary(source.repos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+      let serverId = source.remoteServer?.id
+      return source.worktrees.compactMap { worktree -> WorkspaceEntry? in
+        guard !worktree.isArchived, !botHomes.contains(worktree.id) else { return nil }
+        let repo = repos[worktree.repoId]
+        let hostId = serverId ?? worktree.executionHostId ?? repo?.workspaceHostId ?? "local"
+        guard workspaceView.visibleHostIds?.contains(hostId) != false else { return nil }
+        let repoName = repo?.displayName ?? worktree.repo
+        let project = projects.project(hostId: hostId, repoId: worktree.repoId, fallbackName: repoName)
+        guard !project.isHidden else { return nil }
+        return WorkspaceEntry(
+          id: RowID(scope: source.cacheNamespace, hostId: hostId, id: worktree.id), session: source,
+          worktree: worktree, repoName: repoName, project: project)
       }
     }
   }
@@ -191,38 +208,44 @@ final class HostViewController: UIViewController {
     var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
     // A search narrows the bots to the ones it names, and drops the section when none match.
     let needle = query.lowercased()
-    let bots = session.bots.bots.filter { needle.isEmpty || $0.name.lowercased().contains(needle) }
-    let servers = visibleServers
-    // These reads let UIKit reconfigure a server row when its background catalog or connection changes.
-    for server in servers {
-      _ = (server.connectionState, server.worktrees, server.bots, server.isLoading, server.hasLiveWorktrees)
+    var seenBots = Set<RowID>()
+    let bots = listingSessions.flatMap { source in
+      // Read connection changes here so the row updates even if the catalog did not change.
+      _ = (source.connectionState, source.name)
+      return source.bots.bots.filter { needle.isEmpty || $0.name.lowercased().contains(needle) }.map { bot in
+        (RowID(scope: source.cacheNamespace, hostId: source.remoteServer?.id ?? "local", id: bot.id), (bot, source))
+      }
+    }.filter { seenBots.insert($0.0).inserted }
+    botsByID = Dictionary(bots, uniquingKeysWith: { first, _ in first })
+    let entries = workspaceEntries
+    let knownRepoIds = Set(entries.map(\.worktree.repoId))
+    let filtered = entries.filter { entry in
+      guard workspaceView.keeps(entry.worktree, knownRepoIds: knownRepoIds) else { return false }
+      return needle.isEmpty || [entry.worktree.displayName, entry.worktree.branch, entry.repoName, entry.project.name,
+                               entry.session.remoteServer?.label ?? ""].contains { $0.lowercased().contains(needle) }
     }
-    let sorted = workspaceView.sorted(visibleWorktrees)
-    if session.remoteServer == nil ? (needle.isEmpty || !bots.isEmpty) : !bots.isEmpty {
+    workspacesByID = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    let sorted = workspaceView.sorted(filtered, worktree: \.worktree)
+    if needle.isEmpty || !bots.isEmpty {
       snapshot.appendSections([.bots])
       snapshot.appendItems(
         bots.isEmpty
           ? [.botsEmpty]
-          : bots.flatMap { foldedBots.contains($0.id) ? [Item.bot($0.id)] : [.bot($0.id), .botHome($0.id)] },
+          : bots.flatMap { entry in foldedBots.contains(entry.0) ? [.bot(entry.0)] : [.bot(entry.0), .botHome(entry.0)] },
         toSection: .bots)
     }
-    if !servers.isEmpty {
-      snapshot.appendSections([.remoteServers])
-      if !serversCollapsed || !needle.isEmpty {
-        snapshot.appendItems(servers.compactMap { $0.remoteServer.map { Item.remoteServer($0.id) } }, toSection: .remoteServers)
-      }
-    }
-    contentUnavailableConfiguration = emptyConfiguration(hasItems: !bots.isEmpty || !sorted.isEmpty || !servers.isEmpty)
-    let roots = Worktree.lineage(sorted)
-    let pinned = roots.filter { $0.entry.isPinned }
-    let worktrees = roots.filter { !$0.entry.isPinned }
+    contentUnavailableConfiguration = !needle.isEmpty && bots.isEmpty && sorted.isEmpty ? UIContentUnavailableConfiguration.search() : nil
+    let roots = Worktree.lineage(sorted, worktree: \.worktree, scope: \.id.scope)
+    let pinned = roots.filter { $0.entry.worktree.isPinned }
+    let worktrees = roots.filter { !$0.entry.worktree.isPinned }
     placements.removeAll(keepingCapacity: true)
     sectionCounts.removeAll(keepingCapacity: true)
-    func append(_ branches: [LineageBranch<Worktree>], to section: Section, collapsed: Bool) {
+    projectNames.removeAll(keepingCapacity: true)
+    func append(_ branches: [LineageBranch<WorkspaceEntry>], to section: Section, collapsed: Bool) {
       snapshot.appendSections([section])
       var items: [Item] = []
       var count = 0
-      func visit(_ branch: LineageBranch<Worktree>, depth: Int, visible: Bool) {
+      func visit(_ branch: LineageBranch<WorkspaceEntry>, depth: Int, visible: Bool) {
         let id = branch.entry.id
         count += 1
         if visible {
@@ -236,52 +259,38 @@ final class HostViewController: UIViewController {
       sectionCounts[section] = count
       snapshot.appendItems(items, toSection: section)
     }
-    func lane(_ key: String, _ branches: [LineageBranch<Worktree>]) {
+    func lane(_ key: String, _ branches: [LineageBranch<WorkspaceEntry>]) {
       guard !branches.isEmpty else { return }
       // Folder workspaces sit after the git ones.
-      let ordered = branches.filter { !$0.entry.isFolderWorkspace } + branches.filter { $0.entry.isFolderWorkspace }
-      append(ordered, to: .lane(key), collapsed: collapsed.contains(key))
+      let ordered = branches.filter { !$0.entry.worktree.isFolderWorkspace } + branches.filter { $0.entry.worktree.isFolderWorkspace }
+      append(ordered, to: .lane(key), collapsed: collapsed.contains(key) && needle.isEmpty)
     }
     lane("pinned", pinned)
     switch workspaceView.groupBy {
     case "repo":
-      for repoId in projectOrder(worktrees) {
-        var branches = worktrees.filter { $0.entry.repoId == repoId }
+      let groups = Dictionary(grouping: worktrees, by: \.entry.project.id)
+      for projectId in projectOrder(worktrees, entries: entries) {
+        guard var branches = groups[projectId], let project = branches.first?.entry.project else { continue }
+        projectNames[projectId] = project.name
         // A project's own checkout leads its group unless the order is manual (section-order.ts).
         if workspaceView.sortBy != "manual" {
-          branches = branches.filter { $0.entry.isMainWorktree } + branches.filter { !$0.entry.isMainWorktree }
+          branches = branches.filter { $0.entry.worktree.isMainWorktree } + branches.filter { !$0.entry.worktree.isMainWorktree }
         }
-        append(branches, to: .project(repoId), collapsed: collapsed.contains(repoId))
+        append(branches, to: .project(projectId), collapsed: collapsed.contains(projectId) && needle.isEmpty)
       }
     case "workspace-status":
       for status in workspaceView.statuses {
-        lane("status:\(status.id)", worktrees.filter { workspaceView.status(of: $0.entry) == status.id })
+        lane("status:\(status.id)", worktrees.filter { workspaceView.status(of: $0.entry.worktree) == status.id })
       }
     case "pr-status":
       for state in ["done", "in-review", "in-progress", "closed"] {
-        lane("pr:\(state)", worktrees.filter { WorkspaceView.prLane(of: $0.entry) == state })
+        lane("pr:\(state)", worktrees.filter { WorkspaceView.prLane(of: $0.entry.worktree) == state })
       }
     default:
       lane("all", worktrees)
     }
     snapshot.reconfigureItems(snapshot.itemIdentifiers)
     dataSource.apply(snapshot, animatingDifferences: view.window != nil) { [weak self] in self?.refreshHeaders() }
-  }
-
-  private func emptyConfiguration(hasItems: Bool) -> UIContentUnavailableConfiguration? {
-    guard !hasItems else { return nil }
-    if !query.isEmpty { return .search() }
-    guard session.remoteServer != nil else { return nil }
-    var configuration = session.isLoading && session.connectionState == .connected
-      ? UIContentUnavailableConfiguration.loading() : .empty()
-    if session.connectionState != .connected {
-      configuration.text = HostConnectionPresentation(session.connectionState, server: session.remoteServer).label
-    } else if !session.isLoading {
-      configuration.text = session.hasLiveWorktrees
-        ? String(localized: "worktree.hostWorkspaceListStates.empty", defaultValue: "No workspaces")
-        : String(localized: "worktree.hostWorkspaceListStates.loadFailed", defaultValue: "Could not load workspaces from this host")
-    }
-    return configuration
   }
 
   /// Headers count their rows when made; a section that stays while its rows change keeps its header, so
@@ -298,17 +307,22 @@ final class HostViewController: UIViewController {
   }
 
   /// Projects in the host's order, or by their latest workspace activity.
-  private func projectOrder(_ branches: [LineageBranch<Worktree>]) -> [String] {
-    var order: [String] = []
-    for branch in branches where !order.contains(branch.entry.repoId) { order.append(branch.entry.repoId) }
+  private func projectOrder(_ branches: [LineageBranch<WorkspaceEntry>], entries: [WorkspaceEntry]) -> [String] {
+    var seen = Set<String>()
+    let order = branches.map(\.entry.project.id).filter { seen.insert($0).inserted }
     guard workspaceView.projectOrderBy == "recent" else {
-      let hostOrder = session.worktrees.map(\.repoId)
-      return order.sorted { (hostOrder.firstIndex(of: $0) ?? 0) < (hostOrder.firstIndex(of: $1) ?? 0) }
+      let catalogRanks = Dictionary(entries.compactMap { entry in
+        entry.project.order.map { (entry.project.id, $0) }
+      }, uniquingKeysWith: min)
+      let rowRanks = Dictionary(entries.enumerated().map { ($0.element.project.id, $0.offset) }, uniquingKeysWith: min)
+      return order.sorted { left, right in
+        (catalogRanks[left] ?? Int.max, rowRanks[left] ?? Int.max) < (catalogRanks[right] ?? Int.max, rowRanks[right] ?? Int.max)
+      }
     }
-    func newest(_ branch: LineageBranch<Worktree>) -> Double {
-      max(branch.entry.lastActivityAt ?? 0, branch.children.map(newest).max() ?? 0)
+    func newest(_ branch: LineageBranch<WorkspaceEntry>) -> Double {
+      max(branch.entry.worktree.lastActivityAt ?? 0, branch.children.map(newest).max() ?? 0)
     }
-    let latest = Dictionary(grouping: branches, by: \.entry.repoId).mapValues { $0.map(newest).max() ?? 0 }
+    let latest = Dictionary(grouping: branches, by: \.entry.project.id).mapValues { $0.map(newest).max() ?? 0 }
     return order.sorted { (latest[$0] ?? 0) > (latest[$1] ?? 0) }
   }
 
@@ -341,15 +355,19 @@ final class HostViewController: UIViewController {
   }
 
   private func configureDataSource() {
-    let worktreeCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
-      guard let self, let worktree = self.session.worktree(id: id) else { return }
+    let worktreeCell = UICollectionView.CellRegistration<UICollectionViewListCell, RowID> { [weak self] cell, _, id in
+      guard let self, let entry = self.workspacesByID[id] else { return }
       // Grouped by project, the heading already names the project.
-      let projectName =
-        self.workspaceView.groupBy == "repo" ? (self.session.repo(id: worktree.repoId)?.displayName ?? worktree.repo) : nil
+      let projectName = self.workspaceView.groupBy == "repo" ? entry.repoName : nil
       let placement = self.placements[id]
       var configuration = WorkspaceRowConfiguration(
-        worktree: worktree, projectName: projectName, depth: placement?.depth ?? 0,
+        worktree: entry.worktree, projectName: projectName, depth: placement?.depth ?? 0,
         childCount: placement?.childCount ?? 0, childrenCollapsed: self.foldedWorktrees.contains(id))
+      if let server = entry.session.remoteServer {
+        let status = HostConnectionPresentation(entry.session.connectionState, server: server)
+        configuration.hostLabel = server.label
+        if !status.connected { configuration.hostStatus = status }
+      }
       if configuration.childCount > 0, self.query.isEmpty {
         configuration.onToggleChildren = { [weak self] in self?.toggleChildren(of: id) }
       }
@@ -366,38 +384,18 @@ final class HostViewController: UIViewController {
       background.backgroundColor = Palette.bgBase
       cell.backgroundConfiguration = background
     }
-    let remoteServerCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
-      guard let server = self?.remoteSession(id: id) else { return }
-      let status = HostConnectionPresentation(server.connectionState, server: server.remoteServer)
-      let summary = status.connected && server.hasLiveWorktrees ? HostWorktreeSummary.text(for: server) : nil
-      cell.contentConfiguration = TileRowConfiguration(
-        icon: .server, title: server.name, subtitle: [(summary ?? status.label, status.labelColor)], dot: status.dot)
-      cell.accessories = [.disclosureIndicator(options: .init(tintColor: Palette.textMuted))]
-      var background = UIBackgroundConfiguration.listCell()
-      background.backgroundColor = Palette.bgBase
-      cell.backgroundConfiguration = background
-    }
     let configureHeader = { [weak self] (header: WorkspaceSectionHeader, indexPath: IndexPath) in
       guard let self, let section = self.dataSource.sectionIdentifier(for: indexPath.section) else { return }
       switch section {
       case .bots:
-        header.configureBots(count: self.session.bots.bots.count) { [weak self] in self?.newBot() }
-      case .remoteServers:
-        header.configureLane(
-          title: String(localized: "orcaios.host.remoteServers", defaultValue: "Remote Servers"),
-          count: self.visibleServers.count, pinned: false, collapsed: self.serversCollapsed && self.query.isEmpty
-        ) { [weak self] in
-          guard let self, self.query.isEmpty else { return }
-          self.serversCollapsed.toggle()
-          self.applySnapshot()
-        }
-      case .project(let repoId):
-        let name = self.session.repo(id: repoId)?.displayName ?? self.session.worktrees.first { $0.repoId == repoId }?.repo ?? repoId
-        header.configureProject(name: name, count: self.sectionCounts[section] ?? 0, collapsed: self.collapsed.contains(repoId)) {
-          [weak self] in self?.toggle(repoId)
-        }
+        header.configureBots(count: self.botsByID.count) { [weak self] in self?.newBot() }
+      case .project(let projectId):
+        header.configureProject(
+          name: self.projectNames[projectId] ?? projectId, count: self.sectionCounts[section] ?? 0,
+          collapsed: self.collapsed.contains(projectId) && self.query.isEmpty
+        ) { [weak self] in self?.toggle(projectId) }
       case .lane(let key):
-        header.configureLane(title: self.laneTitle(key), count: self.sectionCounts[section] ?? 0, pinned: key == "pinned", collapsed: self.collapsed.contains(key)) {
+        header.configureLane(title: self.laneTitle(key), count: self.sectionCounts[section] ?? 0, pinned: key == "pinned", collapsed: self.collapsed.contains(key) && self.query.isEmpty) {
           [weak self] in self?.toggleLane(key)
         }
       }
@@ -406,9 +404,9 @@ final class HostViewController: UIViewController {
     let header = UICollectionView.SupplementaryRegistration<WorkspaceSectionHeader>(
       elementKind: UICollectionView.elementKindSectionHeader
     ) { header, _, indexPath in configureHeader(header, indexPath) }
-    let botCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
-      guard let self, let bot = self.session.bots.bots.first(where: { $0.id == id }) else { return }
-      var configuration = BotRowConfiguration.make(bot: bot, session: self.session, showHost: false)
+    let botCell = UICollectionView.CellRegistration<UICollectionViewListCell, RowID> { [weak self] cell, _, id in
+      guard let self, let (bot, source) = self.botsByID[id] else { return }
+      var configuration = BotRowConfiguration.make(bot: bot, session: source, showHost: source.remoteServer != nil)
       configuration.unfolded = !self.foldedBots.contains(id)
       configuration.onToggle = { [weak self] in self?.toggleBot(id) }
       cell.contentConfiguration = configuration
@@ -416,10 +414,10 @@ final class HostViewController: UIViewController {
       background.backgroundColor = Palette.bgBase
       cell.backgroundConfiguration = background
     }
-    let homeCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
-      guard let self, let bot = self.session.bots.bots.first(where: { $0.id == id }) else { return }
+    let homeCell = UICollectionView.CellRegistration<UICollectionViewListCell, RowID> { [weak self] cell, _, id in
+      guard let (bot, source) = self?.botsByID[id] else { return }
       cell.contentConfiguration = BotHomeChatRowConfiguration(
-        updatedAt: BotRowConfiguration.make(bot: bot, session: self.session, showHost: false).updatedAt)
+        updatedAt: BotRowConfiguration.make(bot: bot, session: source, showHost: false).updatedAt)
       var background = UIBackgroundConfiguration.listCell()
       background.backgroundColor = Palette.bgBase
       cell.backgroundConfiguration = background
@@ -430,7 +428,6 @@ final class HostViewController: UIViewController {
       case .bot(let id): collection.dequeueConfiguredReusableCell(using: botCell, for: indexPath, item: id)
       case .worktree(let id): collection.dequeueConfiguredReusableCell(using: worktreeCell, for: indexPath, item: id)
       case .botsEmpty: collection.dequeueConfiguredReusableCell(using: botsEmptyCell, for: indexPath, item: item)
-      case .remoteServer(let id): collection.dequeueConfiguredReusableCell(using: remoteServerCell, for: indexPath, item: id)
       }
     }
     dataSource.supplementaryViewProvider = { collection, _, indexPath in
@@ -475,6 +472,7 @@ final class HostViewController: UIViewController {
   }
 
   private func toggleLane(_ key: String) {
+    guard query.isEmpty else { return }
     UISelectionFeedbackGenerator().selectionChanged()
     if collapsed.contains(key) { collapsed.remove(key) } else { collapsed.insert(key) }
     applySnapshot()
@@ -483,24 +481,22 @@ final class HostViewController: UIViewController {
     dataSource.apply(snapshot, animatingDifferences: true)
   }
 
-  private func toggleBot(_ id: String) {
+  private func toggleBot(_ id: RowID) {
     if foldedBots.contains(id) { foldedBots.remove(id) } else { foldedBots.insert(id) }
     applySnapshot()
   }
 
-  private func toggleChildren(of id: String) {
+  private func toggleChildren(of id: RowID) {
     UISelectionFeedbackGenerator().selectionChanged()
     if foldedWorktrees.contains(id) { foldedWorktrees.remove(id) } else { foldedWorktrees.insert(id) }
     applySnapshot()
   }
 
-  private func toggle(_ repoId: String) {
+  private func toggle(_ projectId: String) {
+    guard query.isEmpty else { return }
     UISelectionFeedbackGenerator().selectionChanged()
-    if collapsed.contains(repoId) { collapsed.remove(repoId) } else { collapsed.insert(repoId) }
+    if collapsed.contains(projectId) { collapsed.remove(projectId) } else { collapsed.insert(projectId) }
     applySnapshot()
-    var snapshot = dataSource.snapshot()
-    snapshot.reloadSections([.project(repoId)])
-    dataSource.apply(snapshot, animatingDifferences: true)
   }
 
   // MARK: Menus
@@ -583,13 +579,6 @@ final class HostViewController: UIViewController {
     push(floating)
   }
 
-  private func open(_ worktree: Worktree) {
-    navigationController?.pushViewController(SessionViewController(session: session, worktreeId: worktree.id), animated: true)
-  }
-
-  private func remoteSession(id: String) -> HostSession? {
-    session.remoteServers.first { $0.remoteServer?.id == id }
-  }
 }
 
 extension HostViewController: UICollectionViewDelegate, UISearchResultsUpdating {
@@ -602,13 +591,13 @@ extension HostViewController: UICollectionViewDelegate, UISearchResultsUpdating 
     Haptics.select()
     collectionView.deselectItem(at: indexPath, animated: true)
     switch dataSource.itemIdentifier(for: indexPath) {
-    case .remoteServer(let id):
-      if let server = remoteSession(id: id) { push(HostViewController(session: server)) }
     case .worktree(let id):
-      if let worktree = session.worktree(id: id) { open(worktree) }
+      if let entry = workspacesByID[id] {
+        push(SessionViewController(session: entry.session, worktreeId: entry.worktree.id))
+      }
     case .bot(let id), .botHome(let id):
-      if let bot = session.bots.bots.first(where: { $0.id == id }) {
-        BotDirectory.open(bot, in: session, from: navigationController)
+      if let (bot, source) = botsByID[id] {
+        BotDirectory.open(bot, in: source, from: navigationController)
       }
     default:
       break
@@ -617,7 +606,7 @@ extension HostViewController: UICollectionViewDelegate, UISearchResultsUpdating 
 
   func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
     switch dataSource.itemIdentifier(for: indexPath) {
-    case .remoteServer, .worktree, .bot, .botHome: return true
+    case .worktree, .bot, .botHome: return true
     default: return false
     }
   }
@@ -626,16 +615,23 @@ extension HostViewController: UICollectionViewDelegate, UISearchResultsUpdating 
     _ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point: CGPoint
   ) -> UIContextMenuConfiguration? {
     guard let indexPath = indexPaths.first, case .worktree(let id) = dataSource.itemIdentifier(for: indexPath),
-      let worktree = session.worktree(id: id)
+      let entry = workspacesByID[id]
     else { return nil }
-    let api = session.api
+    let worktree = entry.worktree
+    let source = entry.session
+    let api = source.api
     return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
       let pin = UIAction(
         title: worktree.isPinned
           ? String(localized: "hostScreen.hostScreenOverlays.unpin", defaultValue: "Unpin")
           : String(localized: "hostScreen.hostScreenOverlays.pin", defaultValue: "Pin"),
         image: (worktree.isPinned ? Lucide.pinOff : Lucide.pin).image(size: 18)
-      ) { _ in Task { try? await api.setPinned(!worktree.isPinned, worktree: worktree.selector) } }
+      ) { _ in
+        Task {
+          try? await api.setPinned(!worktree.isPinned, worktree: worktree.selector)
+          await source.refresh()
+        }
+      }
       let copyBranch = UIAction(
         title: String(localized: "common.copy", defaultValue: "Copy"), subtitle: worktree.branch,
         image: Lucide.copy.image(size: 18)

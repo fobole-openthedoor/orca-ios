@@ -5,12 +5,12 @@ public struct LineageBranch<Value: Sendable>: Sendable {
   public let entry: Value
   public let children: [LineageBranch<Value>]
 
-  static func build(_ rows: [Value], id: (Value) -> String, parent: (Value) -> String?) -> [Self] {
-    var seen = Set<String>()
+  static func build<Key: Hashable>(_ rows: [Value], id: (Value) -> Key, parent: (Value) -> Key?) -> [Self] {
+    var seen = Set<Key>()
     let unique = rows.filter { seen.insert(id($0)).inserted }
     let parentIDs = seen
     var roots: [Value] = []
-    var children: [String: [Value]] = [:]
+    var children: [Key: [Value]] = [:]
     for row in unique {
       if let owner = parent(row), owner != id(row), parentIDs.contains(owner) {
         children[owner, default: []].append(row)

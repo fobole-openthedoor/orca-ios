@@ -90859,29 +90859,6 @@
         }
       }
     },
-    "orcaios.host.remoteServers": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Remote Servers"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "远程服务器"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "遠端伺服器"
-          }
-        }
-      }
-    },
     "orcaios.host.showChildWorkspaces": {
       "extractionState": "manual",
       "localizations": {

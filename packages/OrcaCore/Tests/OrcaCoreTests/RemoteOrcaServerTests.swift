@@ -29,6 +29,13 @@ import Testing
           ["hostId": Self.serverId, "worktreeId": "same-id", "repoId": "remote", "displayName": "Remote workspace"],
           ["hostId": "runtime:other", "worktreeId": "foreign", "repoId": "foreign"],
         ] : .null])
+      case "mobileRelay.projectSections":
+        socket.succeed(request, ["catalog": [
+          "repos": [["id": "local", "displayName": "Desktop"], ["id": "remote", "displayName": "Server", "executionHostId": Self.serverId]],
+          "projects": [["id": "shared", "displayName": "Shared"]],
+          "setups": [["repoId": "local", "hostId": "local", "projectId": "shared"],
+                     ["repoId": "remote", "hostId": Self.serverId, "projectId": "shared"]],
+        ]])
       case "session.tabs.subscribe":
         socket.stream(request, ["type": "snapshot", "tabs": []])
       case "terminal.subscribe":
@@ -56,6 +63,9 @@ import Testing
     #expect(desktop.path == (useCloudRelay ? .relay : .direct))
     #expect(desktop.worktree(id: "same-id")?.displayName == "Local workspace")
     #expect(server.worktree(id: "same-id")?.displayName == "Remote workspace")
+    await eventually("the desktop project catalog") {
+      desktop.workspaceProjects.project(hostId: "runtime:server", repoId: "remote", fallbackName: "Server").id == "project:shared"
+    }
     #expect(server.cacheNamespace != desktop.cacheNamespace)
     #expect(try await server.api.status().machineName == "Server runtime")
 

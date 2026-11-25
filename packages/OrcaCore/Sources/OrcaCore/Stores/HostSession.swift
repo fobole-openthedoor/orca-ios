@@ -11,6 +11,7 @@ public final class HostSession {
   public let api: HostAPI
   public let cacheNamespace: String
   public private(set) var remoteServers: [HostSession] = []
+  public private(set) var workspaceProjects = WorkspaceProjectCatalog()
   public private(set) var remoteServer: RemoteOrcaServer?
   @ObservationIgnored private weak var desktop: HostSession?
 
@@ -312,6 +313,7 @@ public final class HostSession {
     }
     guard status?.supports(HostCapability.desktopRelay) == true else {
       remoteServers = []
+      workspaceProjects = WorkspaceProjectCatalog()
       return
     }
     guard let listed = try? await api.remoteServers(), isCurrent(connectedAt) else { return }
@@ -330,6 +332,8 @@ public final class HostSession {
     for (route, session) in previous where !routes.contains(route) { session.applyRemoteConnection(.disconnected) }
     if remoteServers.map(\.remoteServer?.route) != next.map(\.remoteServer?.route) { remoteServers = next }
 
+    async let projects = listed.isEmpty ? WorkspaceProjectCatalog() : (try? api.workspaceProjects())
+
     // The desktop can return its last catalog even while a server is offline.
     let api = api
     await withTaskGroup(of: (Int, [Worktree]?).self) { group in
@@ -342,6 +346,9 @@ public final class HostSession {
         if let rows, session.worktrees != rows { session.worktrees = rows }
         session.hasLiveWorktrees = rows != nil && session.connectionState == .connected
       }
+    }
+    if let projects = await projects, isCurrent(connectedAt), projects != workspaceProjects {
+      workspaceProjects = projects
     }
   }
 

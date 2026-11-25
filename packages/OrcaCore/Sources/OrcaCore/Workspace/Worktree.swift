@@ -147,7 +147,7 @@ public struct Worktree: Sendable, Equatable, Identifiable {
   public var createdAt: Double?
   /// The workspace's board status id (`todo`, `in-progress`…), from the host's own list.
   public var workspaceStatus: String?
-  private let lineageHostId: String
+  public let executionHostId: String?
   private let worktreeInstanceId: String?
   private let parentWorktreeId: String?
   private let lineageWorktreeInstanceId: String?
@@ -231,7 +231,7 @@ public struct Worktree: Sendable, Equatable, Identifiable {
     manualOrder = json["manualOrder"]?.doubleValue
     createdAt = json["createdAt"]?.doubleValue
     workspaceStatus = json["workspaceStatus"]?.stringValue
-    lineageHostId = json["hostId"]?.stringValue ?? "local"
+    executionHostId = json["hostId"]?.stringValue
     worktreeInstanceId = json["worktreeInstanceId"]?.stringValue
     parentWorktreeId = json["parentWorktreeId"]?.stringValue
     lineageWorktreeInstanceId = json["lineageWorktreeInstanceId"]?.stringValue
@@ -250,11 +250,30 @@ public struct Worktree: Sendable, Equatable, Identifiable {
   /// Build over the visible rows of one desktop. Descendants follow their parent into its section,
   /// while an explicitly pinned row can start its own branch in Pinned.
   public static func lineage(_ rows: [Self]) -> [LineageBranch<Self>] {
-    let rows = rows.filter { !$0.isArchived }
-    let byId = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    return LineageBranch.build(rows, id: \.id) { child in
-      guard let parentId = child.parentWorktreeId, let parent = byId[parentId],
-        child.lineageHostId == parent.lineageHostId, !child.isPinned || parent.isPinned
+    lineage(rows, worktree: { $0 }, scope: { _ in "" })
+  }
+
+  private struct LineageID: Hashable {
+    let scope: String
+    let host: String
+    let worktree: String
+  }
+
+  /// Merged lists can contain the same worktree id in more than one runtime.
+  public static func lineage<Row: Sendable>(
+    _ rows: [Row], worktree: (Row) -> Self, scope: (Row) -> String
+  ) -> [LineageBranch<Row>] {
+    let rows = rows.filter { !worktree($0).isArchived }
+    func key(_ row: Row) -> LineageID {
+      let tree = worktree(row)
+      return LineageID(scope: scope(row), host: tree.executionHostId ?? "local", worktree: tree.id)
+    }
+    let byId = Dictionary(rows.map { (key($0), worktree($0)) }, uniquingKeysWith: { first, _ in first })
+    return LineageBranch.build(rows, id: key) { row in
+      let child = worktree(row)
+      guard let parentId = child.parentWorktreeId else { return nil }
+      let parentKey = LineageID(scope: scope(row), host: child.executionHostId ?? "local", worktree: parentId)
+      guard let parent = byId[parentKey], !child.isPinned || parent.isPinned
       else { return nil }
       // A legacy host sends only an id. With instance ids, reject an edge left by a replaced checkout.
       if child.lineageWorktreeInstanceId != nil || child.parentWorktreeInstanceId != nil {
@@ -262,7 +281,7 @@ public struct Worktree: Sendable, Equatable, Identifiable {
           parent.worktreeInstanceId == child.parentWorktreeInstanceId
         else { return nil }
       }
-      return parentId
+      return parentKey
     }
   }
 }
@@ -275,6 +294,8 @@ public struct Repo: Sendable, Equatable, Identifiable {
   public var badgeColor: String?
   /// The SSH connection of a remote project; nil for a local one.
   public var connectionId: String?
+  public var executionHostId: String?
+  public var workspaceHostId: String? { executionHostId ?? WorkspaceProjectCatalog.sshHostId(connectionId) }
   /// A plain folder rather than a git repository: it makes workspaces, not worktrees.
   public var isFolder: Bool
   /// The same project on another host (an SSH twin) shares this key.
@@ -289,6 +310,7 @@ public struct Repo: Sendable, Equatable, Identifiable {
     path = json["path"]?.stringValue
     badgeColor = json["badgeColor"]?.stringValue
     connectionId = json["connectionId"]?.stringValue
+    executionHostId = json["executionHostId"]?.stringValue
     isFolder = json["kind"]?.stringValue == "folder"
     projectKey = json["gitRemoteIdentity"]?["canonicalKey"]?.stringValue.map { "remote:\($0)" } ?? "repo:\(id)"
   }

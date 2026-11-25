@@ -123,7 +123,6 @@
       },
       "host": {
         "projectFolder": "Project folder",
-        "remoteServers": "Remote Servers",
         "remoteServerUpdateNeeded": "Update Orca on the server",
         "hideChildWorkspaces": "Hide child workspaces",
         "showChildWorkspaces": "Show child workspaces"
@@ -317,7 +316,6 @@
       },
       "host": {
         "projectFolder": "项目目录",
-        "remoteServers": "远程服务器",
         "remoteServerUpdateNeeded": "请更新服务器上的 Orca",
         "hideChildWorkspaces": "折叠子工作区",
         "showChildWorkspaces": "展开子工作区"
@@ -532,7 +530,6 @@
       },
       "host": {
         "projectFolder": "專案目錄",
-        "remoteServers": "遠端伺服器",
         "remoteServerUpdateNeeded": "請更新伺服器上的 Orca",
         "hideChildWorkspaces": "收合子工作區",
         "showChildWorkspaces": "展開子工作區"

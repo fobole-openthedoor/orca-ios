@@ -79,6 +79,8 @@ struct WorkspaceRowConfiguration: UIContentConfiguration {
   var childCount = 0
   var childrenCollapsed = false
   var onToggleChildren: (() -> Void)? = nil
+  var hostLabel: String? = nil
+  var hostStatus: HostConnectionPresentation? = nil
 
   func makeContentView() -> UIView & UIContentView { WorkspaceRowView(configuration: self) }
   func updated(for state: UIConfigurationState) -> WorkspaceRowConfiguration { self }
@@ -105,6 +107,9 @@ final class WorkspaceRowView: UIView, UIContentView {
   private let indicator = AgentStatusDot()
   private let branch = LucideView(.cornerDownRight, size: 12, strokeWidth: 1.7, color: Palette.textMuted)
   private let name = TextLabel(size: 14, weight: .semibold)
+  private let hostLabel = TextLabel(size: 11, color: Palette.textMuted)
+  private let hostHealth = TextLabel(size: 11, color: Palette.textMuted)
+  private let hostMetadata = UIStackView()
   private let glyphs = UIStackView()
   private let terminalCount = TextLabel(size: Typography.metaSize, color: Palette.textMuted, tabular: true)
   private let disclosure = UIButton(type: .system)
@@ -126,7 +131,15 @@ final class WorkspaceRowView: UIView, UIContentView {
     nameRow.axis = .horizontal
     nameRow.spacing = Spacing.sm
     nameRow.alignment = .center
-    let main = UIStackView(arrangedSubviews: [nameRow, agents])
+    hostMetadata.axis = .horizontal
+    hostMetadata.alignment = .center
+    hostMetadata.spacing = 4
+    hostMetadata.addArrangedSubview(LucideView(.server, size: 11, strokeWidth: 1.7, color: Palette.textMuted))
+    hostMetadata.addArrangedSubview(hostLabel)
+    hostMetadata.addArrangedSubview(hostHealth)
+    hostMetadata.addArrangedSubview(UIView())
+    hostLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    let main = UIStackView(arrangedSubviews: [nameRow, hostMetadata, agents])
     main.axis = .vertical
     main.translatesAutoresizingMaskIntoConstraints = false
     addSubview(indicator)
@@ -173,6 +186,11 @@ final class WorkspaceRowView: UIView, UIContentView {
       name.text = title
     }
     name.font = .systemFont(ofSize: 14, weight: worktree.unread ? .bold : .semibold)
+    hostMetadata.isHidden = configuration.hostLabel == nil
+    hostLabel.text = configuration.hostLabel
+    hostHealth.isHidden = configuration.hostStatus == nil
+    hostHealth.textColor = configuration.hostStatus?.labelColor ?? Palette.textMuted
+    hostHealth.text = configuration.hostStatus.map { "· \($0.label)" }
 
     glyphs.arrangedSubviews.forEach { $0.removeFromSuperview() }
     if !worktree.comment.isEmpty { glyphs.addArrangedSubview(LucideView(.stickyNote, size: 13, strokeWidth: 2, color: Palette.textMuted)) }
@@ -212,7 +230,8 @@ final class WorkspaceRowView: UIView, UIContentView {
     if configuration.depth > 0 {
       labels.insert(String(localized: "components.worktreeListRow.child", defaultValue: "Child workspace"), at: 0)
     }
-    accessibilityLabel = ([name.text ?? ""] + labels).joined(separator: ", ")
+    let hostDetails = [configuration.hostLabel, configuration.hostStatus?.label].compactMap { $0 }
+    accessibilityLabel = ([name.text ?? ""] + hostDetails + labels).joined(separator: ", ")
   }
 
   private func configureDisclosure(_ row: WorkspaceRowConfiguration) {

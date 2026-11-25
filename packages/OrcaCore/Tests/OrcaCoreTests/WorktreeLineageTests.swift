@@ -46,6 +46,21 @@ import Testing
     #expect(roots.allSatisfy { $0.children.isEmpty })
   }
 
+  @Test func keepsSameIDRowsAndTheirChildrenInTheirOwnRuntime() throws {
+    struct Row: Sendable {
+      let scope: String
+      let tree: Worktree
+    }
+    let paths = ["desktop", "server"]
+    let rows = try paths.flatMap { scope in
+      [Row(scope: scope, tree: try workspace("parent")), Row(scope: scope, tree: try workspace("child", parent: "parent"))]
+    }
+    let roots = Worktree.lineage(rows, worktree: \.tree, scope: \.scope)
+    #expect(roots.map(\.entry.scope) == paths)
+    #expect(roots.allSatisfy { branch in branch.children.map(\.entry.scope) == [branch.entry.scope] })
+    #expect(WorkspaceView().sorted(rows, worktree: \.tree).count == 4)
+  }
+
   private func workspace(_ id: String, parent: String? = nil, fields: [String: JSONValue] = [:]) throws -> Worktree {
     var row = fields
     row["worktreeId"] = .string(id)

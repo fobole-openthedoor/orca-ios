@@ -137,7 +137,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     guard let navigation = tabs.selectedViewController as? UINavigationController else { return }
     navigation.popToRootViewController(animated: false)
     navigation.pushViewController(HostViewController(session: desktop), animated: false)
-    if session !== desktop { navigation.pushViewController(HostViewController(session: session), animated: false) }
     navigation.pushViewController(SessionViewController(session: session, worktreeId: worktreeId), animated: true)
   }
 }
