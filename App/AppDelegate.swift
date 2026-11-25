@@ -120,7 +120,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     else { return }
     let executionHost = items.first(where: { $0.name == "executionHost" && $0.value?.hasPrefix("runtime:") == true })?.value
     let desktop = AppModel.shared.session(for: hostId)
-    let session = if let executionHost { desktop?.remoteServers.first { $0.remoteServer?.id == executionHost } } else { desktop }
+    let session = AppModel.shared.workspaceSession(on: WorkspaceRoute(host: hostId, executionHost: executionHost))
     // At launch the paired desktop and its server catalog may still be loading.
     guard let desktop, let session else {
       if attempt < (executionHost == nil ? 20 : 48) {

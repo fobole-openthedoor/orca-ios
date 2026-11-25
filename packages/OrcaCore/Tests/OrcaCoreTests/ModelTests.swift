@@ -142,6 +142,28 @@ import Testing
 }
 
 @Suite struct WorkingAgentTests {
+  @Test func keepsLocalAndRelayedPanesDistinctAndReopensTheRelayedWorkspace() throws {
+    let desktop = UUID()
+    let workspace = try #require(Worktree([
+      "worktreeId": "repo::/demo path", "repoId": "repo",
+      "agents": [["paneKey": "pane:leaf", "state": "working", "displayName": "Review",
+                  "address": "orca_session_id:shared-session"]],
+    ]))
+    let local = try #require(WorkingAgent.inCatalog([workspace], host: desktop).first)
+    let remote = try #require(WorkingAgent.inCatalog([workspace], host: desktop, executionHost: "runtime:server").first)
+    #expect(local.id != remote.id)
+    #expect(local.structuredSessionId == remote.structuredSessionId)
+    #expect(WorkingAgent.crossHostDuplicateTitles(in: [
+      (host: local.id.route, title: "Review"), (host: remote.id.route, title: "Review"),
+    ]) == ["review"])
+
+    let url = try #require(remote.id.route.openURL(worktreeId: remote.worktreeId))
+    let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+    #expect(items.first { $0.name == "host" }?.value == desktop.uuidString)
+    #expect(items.first { $0.name == "executionHost" }?.value == "runtime:server")
+    #expect(items.first { $0.name == "worktree" }?.value == workspace.id)
+  }
+
   @Test func collectsOnlyConfirmedActiveIdentitiesAcrossHosts() throws {
     let sharedPane = "tab:leaf"
     let workspace = try #require(Worktree([

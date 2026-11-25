@@ -145,8 +145,8 @@ final class PiPCenter: NSObject {
   private var rotation = WorkingAgentRotation()
   private var waitingAgents: Set<WorkingAgent.ID> = []
   private var activitySince: [WorkingAgent.ID: (activity: WorkingAgent.Activity, uptime: TimeInterval)] = [:]
-  private var lastPresentedAttention: (host: UUID, worktreeId: String)?
-  private var lastPresentedRow: (host: UUID, worktreeId: String)?
+  private var lastPresentedAttention: PiPFrame.StatusRow?
+  private var lastPresentedRow: PiPFrame.StatusRow?
   private let telemetry = PiPAgentTelemetry()
   private var controller: AVPictureInPictureController?
   private var timer: Timer?
@@ -239,7 +239,7 @@ final class PiPCenter: NSObject {
       status = workStatus
     } else {
       status = withObservationTracking {
-        PiPWorkStatus(model: AppModel.shared)
+        PiPWorkStatus(sessions: AppModel.shared.workspaceSessions)
       } onChange: { [weak self] in
         Task { @MainActor in
           self?.workStatus = nil
@@ -409,16 +409,8 @@ final class PiPCenter: NSObject {
     }
     let layout = Self.layout
     if isActive, layout == .compact {
-      if let attention = frame.statusRows.first(where: { $0.line.activity != .working }) {
-        lastPresentedAttention = (attention.id.host, attention.worktreeId)
-      } else {
-        lastPresentedAttention = nil
-      }
-      if let first = frame.statusRows.first {
-        lastPresentedRow = (first.id.host, first.worktreeId)
-      } else {
-        lastPresentedRow = nil
-      }
+      lastPresentedAttention = frame.statusRows.first { $0.line.activity != .working }
+      lastPresentedRow = frame.statusRows.first
     }
     let animate = isActive && !UIAccessibility.isReduceMotionEnabled && layout == .compact
     let shouldAnimateFrames = animate && frame.statusRows.contains { row in
@@ -570,17 +562,10 @@ extension PiPCenter: AVPictureInPictureControllerDelegate {
     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completion: @escaping (Bool) -> Void
   ) {
     MainActor.assumeIsolated {
-      if Self.usesCompactLayout, let target = lastPresentedAttention ?? lastPresentedRow {
-        var components = URLComponents()
-        components.scheme = "orca"
-        components.host = "open"
-        components.queryItems = [
-          URLQueryItem(name: "host", value: target.host.uuidString),
-          URLQueryItem(name: "worktree", value: target.worktreeId),
-        ]
-        if let url = components.url {
-          NotificationCenter.default.post(name: .orcaOpenURL, object: url)
-        }
+      if Self.usesCompactLayout, let target = lastPresentedAttention ?? lastPresentedRow,
+        let url = target.id.route.openURL(worktreeId: target.worktreeId)
+      {
+        NotificationCenter.default.post(name: .orcaOpenURL, object: url)
       }
       completion(true)
     }

@@ -18,8 +18,15 @@ public struct WorkingAgent: Equatable, Sendable, Identifiable {
   }
 
   public struct ID: Hashable, Sendable {
-    public let host: UUID
+    public let route: WorkspaceRoute
     public let pane: String
+
+    init(host: UUID, pane: String, executionHost: String? = nil) {
+      self.route = WorkspaceRoute(host: host, executionHost: executionHost)
+      self.pane = pane
+    }
+
+    public var host: UUID { route.host }
   }
 
   public struct Child: Equatable, Sendable {
@@ -76,7 +83,7 @@ public struct WorkingAgent: Equatable, Sendable, Identifiable {
     }
   }
 
-  public static func inCatalog(_ worktrees: [Worktree], host: UUID) -> [Self] {
+  public static func inCatalog(_ worktrees: [Worktree], host: UUID, executionHost: String? = nil) -> [Self] {
     let panes = worktrees.filter { !$0.isArchived }.sorted(by: { $0.id < $1.id }).flatMap { worktree in
       // A nameless workspace can keep its path private on an overlay.
       let workspace = worktree.displayName.isEmpty ? worktree.repo : worktree.displayName
@@ -105,7 +112,7 @@ public struct WorkingAgent: Equatable, Sendable, Identifiable {
       let children = pane.providerChildren + descendants(group)
       let leadActivity = pane.leadActivity
       guard leadActivity != nil || !children.isEmpty else { return nil }
-      return Self(id: ID(host: host, pane: agent.paneKey), worktreeId: pane.worktreeId, workspace: pane.workspace,
+      return Self(id: ID(host: host, pane: agent.paneKey, executionHost: executionHost), worktreeId: pane.worktreeId, workspace: pane.workspace,
         name: agent.displayName.flatMap { $0.isEmpty ? nil : $0 }, agentType: agent.agentType,
         isWorker: pane.parent != nil, leadActivity: leadActivity,
         structuredSessionId: agent.structuredSessionId,
@@ -116,8 +123,8 @@ public struct WorkingAgent: Equatable, Sendable, Identifiable {
 
   /// Returns normalized titles that appear on two or more distinct hosts across the active roster,
   /// so compact status displays can show a host subtitle only when disambiguation is needed.
-  public static func crossHostDuplicateTitles(in items: [(host: UUID, title: String)]) -> Set<String> {
-    var hostsByTitle: [String: Set<UUID>] = [:]
+  public static func crossHostDuplicateTitles<Host: Hashable>(in items: [(host: Host, title: String)]) -> Set<String> {
+    var hostsByTitle: [String: Set<Host>] = [:]
     for item in items {
       let key = normalizedTitleKey(item.title)
       guard !key.isEmpty else { continue }

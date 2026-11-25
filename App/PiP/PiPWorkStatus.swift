@@ -19,18 +19,17 @@ struct PiPWorkStatus {
   let allHostsObserved: Bool
 
   @MainActor
-  init(model: AppModel) {
+  init(sessions: [HostSession]) {
     var entries: [Entry] = []
     var hostCount = 0
     var observed = 0
-    for host in model.orderedHosts {
-      guard let session = model.session(for: host.id), session.hasLiveWorktrees else { continue }
+    for session in sessions where session.hasLiveWorktrees {
       observed += 1
-      let agents = WorkingAgent.inCatalog(session.worktrees, host: host.id)
+      let agents = WorkingAgent.inCatalog(session.worktrees, host: session.host.id, executionHost: session.remoteServer?.id)
       if !agents.isEmpty { hostCount += 1 }
       for agent in agents {
         // Keep following telemetry on waiting agents too so cumulative tokens remain visible.
-        let key = agent.structuredSessionId.map { PiPAgentTelemetry.Key(host: host.id, sessionId: $0) }
+        let key = agent.structuredSessionId.map { PiPAgentTelemetry.Key(route: agent.id.route, sessionId: $0) }
         let childTypes = agent.children.filter { $0.activity == .working }.map { child in
           AgentMark.overlayType(for: child.agentType) ?? AgentMark.overlayType(for: child.owningAgentType)
         }
@@ -42,7 +41,7 @@ struct PiPWorkStatus {
     }
     // Disambiguate host subtitles across the full active roster only when the same title spans ≥ 2 hosts.
     let ambiguousTitles = WorkingAgent.crossHostDuplicateTitles(
-      in: entries.map { (host: $0.agent.id.host, title: $0.line.agent) })
+      in: entries.map { (host: $0.agent.id.route, title: $0.line.agent) })
     let counts = Dictionary(grouping: entries, by: \.line).mapValues(\.count)
     var ordinals: [PiPFrame.StatusLine: Int] = [:]
     let labeled = entries.map { entry in
@@ -59,7 +58,7 @@ struct PiPWorkStatus {
       + labeled.filter { $0.activity == .needsAnswer }
       + labeled.filter { $0.activity == .working }
     self.hostCount = hostCount
-    allHostsObserved = observed > 0 && observed == model.hosts.count
+    allHostsObserved = observed > 0 && observed == sessions.count
   }
 
   func frame(
@@ -192,19 +191,19 @@ struct PiPWebSearchIndicator {
 @MainActor
 final class PiPAgentTelemetry {
   struct Key: Hashable {
-    let host: UUID
+    let route: WorkspaceRoute
     let sessionId: String
   }
 
   private final class Stream {
-    let connection: OrcaConnection
+    weak var source: HostSession?
     var metrics = AgentActivityMetrics()
     var webSearch = PiPWebSearchIndicator()
     var task: Task<Void, Never>?
     private var catchingUp = false
     private var hadSnapshot = false
 
-    init(connection: OrcaConnection) { self.connection = connection }
+    init(source: HostSession) { self.source = source }
 
     func apply(_ frame: JSONValue) -> Bool {
       let before = metrics.reading(agentId: nil, includeChildTokenFloor: true)
@@ -247,12 +246,18 @@ final class PiPAgentTelemetry {
   var onUpdate: (() -> Void)?
 
   func follow(_ targets: Set<Key>, model: AppModel) {
-    for key in Array(streams.keys) where !targets.contains(key) || model.session(for: key.host)?.api.connection.transport !== streams[key]?.connection {
+    for key in Array(streams.keys) where !targets.contains(key) {
       streams.removeValue(forKey: key)?.task?.cancel()
     }
-    for key in targets where streams[key] == nil {
-      guard let api = model.session(for: key.host)?.api else { continue }
-      let stream = Stream(connection: api.connection.transport)
+    for key in targets {
+      guard let source = model.workspaceSession(on: key.route), source.hasLiveWorktrees else {
+        streams.removeValue(forKey: key)?.task?.cancel()
+        continue
+      }
+      if streams[key]?.source === source { continue }
+      streams.removeValue(forKey: key)?.task?.cancel()
+      let api = source.api
+      let stream = Stream(source: source)
       streams[key] = stream
       stream.task = Task { [weak self, weak stream] in
         var delay = Duration.seconds(1)

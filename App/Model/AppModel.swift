@@ -63,6 +63,12 @@ final class AppModel {
     workspaceSessions.first { $0.cacheNamespace == scope }
   }
 
+  func workspaceSession(on route: WorkspaceRoute) -> HostSession? {
+    guard let desktop = sessions[route.host] else { return nil }
+    guard let executionHost = route.executionHost else { return desktop }
+    return desktop.remoteServers.first { $0.remoteServer?.id == executionHost }
+  }
+
   /// Pairs with the desktop that showed `offer`; re-pairing the same desktop replaces its old entry.
   func pair(_ offer: PairingOffer) async throws -> PairedHost {
     let host = try await PairingFlow.pair(offer, name: String(localized: "Desktop"))
