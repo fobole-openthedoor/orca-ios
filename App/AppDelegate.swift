@@ -118,22 +118,26 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       let worktreeId = items.first(where: { $0.name == "worktree" })?.value,
       let tabs = window?.rootViewController as? HomeTabController
     else { return }
-    // Opened from a notification at launch, the paired desktops are still loading: try again shortly.
-    guard let session = AppModel.shared.session(for: hostId) else {
-      if attempt < 20 {
+    let executionHost = items.first(where: { $0.name == "executionHost" && $0.value?.hasPrefix("runtime:") == true })?.value
+    let desktop = AppModel.shared.session(for: hostId)
+    let session = if let executionHost { desktop?.remoteServers.first { $0.remoteServer?.id == executionHost } } else { desktop }
+    // At launch the paired desktop and its server catalog may still be loading.
+    guard let desktop, let session else {
+      if attempt < (executionHost == nil ? 20 : 48) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.openWorkspace(url, attempt: attempt + 1) }
       }
       return
     }
     // Already looking at it (the banner came while it was open, or the app was left on it): stay.
-    if PushCenter.isViewing(hostId: hostId, worktreeId: worktreeId) { return }
+    if PushCenter.isViewing(hostId: hostId, worktreeId: worktreeId, executionHost: executionHost) { return }
     // The first-launch welcome page closes first.
     if let welcome = tabs.presentedViewController as? WelcomeViewController { WelcomeViewController.seen = true; welcome.dismiss(animated: false) }
     tabs.presentedViewController?.dismiss(animated: false)
     tabs.selectedTab = tabs.tabs.first
     guard let navigation = tabs.selectedViewController as? UINavigationController else { return }
     navigation.popToRootViewController(animated: false)
-    navigation.pushViewController(HostViewController(session: session), animated: false)
+    navigation.pushViewController(HostViewController(session: desktop), animated: false)
+    if session !== desktop { navigation.pushViewController(HostViewController(session: session), animated: false) }
     navigation.pushViewController(SessionViewController(session: session, worktreeId: worktreeId), animated: true)
   }
 }

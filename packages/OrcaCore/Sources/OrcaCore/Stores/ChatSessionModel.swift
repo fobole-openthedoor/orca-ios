@@ -48,6 +48,7 @@ public final class ChatSessionModel {
   }
 
   public let sessionId: String
+  public var storageKey: String { (api.remoteCacheNamespace.map { $0 + "-" } ?? "") + sessionId }
   public private(set) var transcript = ChatTranscript()
   public private(set) var pending: [PendingSend] = []
   public private(set) var phase: Phase = .loading
@@ -137,7 +138,7 @@ public final class ChatSessionModel {
   // MARK: Stream
 
   /// The last frames this session showed, kept across launches (`FrameCache`).
-  @ObservationIgnored private lazy var cache = FrameCache(name: "chat-" + sessionId)
+  @ObservationIgnored private lazy var cache = FrameCache(name: "chat-" + storageKey)
 
   public func start() {
     guard streamTask == nil else {

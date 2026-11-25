@@ -111,7 +111,7 @@ final class SessionViewController: UIViewController {
     let selector = selector
     Task { await api.activate(worktree: selector) }
     // The tabs this workspace had last time show at once, so its chat opens without waiting for the desktop.
-    let tabsCache = FrameCache(name: "tabs-" + session.host.id.uuidString + "-" + worktreeId)
+    let tabsCache = FrameCache(name: "tabs-" + session.cacheNamespace + "-" + worktreeId)
     if let cached = tabsCache.load().last {
       let restored = SessionTabs(cached)
       if !restored.tabs.isEmpty, !restored.removed { apply(restored, cached: true) }
@@ -134,7 +134,7 @@ final class SessionViewController: UIViewController {
     }
     let worktree = session.worktree(id: worktreeId)
     title = worktree?.displayName ?? fallbackTitle
-    let status = HostConnectionPresentation(session.connectionState)
+    let status = HostConnectionPresentation(session.connectionState, server: session.remoteServer)
     // "● 正在工作 · main": what the agent is doing in words, then the branch; offline, the connection's state.
     let state = shownState(worktree)
     let word: String =
@@ -266,9 +266,11 @@ final class SessionViewController: UIViewController {
           // The header and tab follow the chat's own turn.
           self.updateStrip()
           self.setNeedsUpdateProperties()
-          AgentActivityCenter.shared.reportChat(
-            hostId: self.session.host.id, hostName: self.session.name, worktree: worktree, agentType: agentType,
-            working: working, detail: detail)
+          if self.session.remoteServer == nil {
+            AgentActivityCenter.shared.reportChat(
+              hostId: self.session.host.id, hostName: self.session.name, worktree: worktree, agentType: agentType,
+              working: working, detail: detail)
+          }
         }
         chat.onOpenPath = { [weak self] path in self?.openPath(path) }
         // Fork from a response: a new chat with the same agent, holding this one through that answer.
@@ -721,7 +723,7 @@ final class SessionViewController: UIViewController {
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
-    PushCenter.viewing = (hostKey: session.host.id.uuidString, worktreeId: worktreeId, executionHost: nil)
+    PushCenter.viewing = (hostKey: session.host.id.uuidString, worktreeId: worktreeId, executionHost: session.remoteServer?.id)
     PiPCenter.shared.attachTranscript(to: view) { [weak self] in self?.pipFrame() }
   }
 
@@ -753,7 +755,9 @@ final class SessionViewController: UIViewController {
     super.viewWillDisappear(animated)
     workspaceVisible = false
     updateNavigationAppearance()
-    if PushCenter.viewing?.worktreeId == worktreeId { PushCenter.viewing = nil }
+    if PushCenter.isViewing(hostId: session.host.id, worktreeId: worktreeId, executionHost: session.remoteServer?.id) {
+      PushCenter.viewing = nil
+    }
     PiPCenter.shared.detachTranscript(from: view)
   }
 

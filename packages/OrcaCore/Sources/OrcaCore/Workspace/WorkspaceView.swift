@@ -16,6 +16,7 @@ public struct WorkspaceView: Sendable, Equatable {
   public var hideCliCreated = false
   public var hideDetachedHead = false
   public var filterRepoIds: [String] = []
+  public private(set) var visibleHostIds: Set<String>?
   /// The host's workspace statuses in board order, as named there (workspace-status-defaults.ts).
   public var statuses: [(id: String, label: String)] = WorkspaceView.defaultStatuses
 
@@ -30,7 +31,7 @@ public struct WorkspaceView: Sendable, Equatable {
       && a.hideSleeping == b.hideSleeping && a.alwaysShowDefaultBranch == b.alwaysShowDefaultBranch
       && a.hideDefaultBranch == b.hideDefaultBranch && a.hideAutomationCreated == b.hideAutomationCreated
       && a.hideCliCreated == b.hideCliCreated && a.hideDetachedHead == b.hideDetachedHead
-      && a.filterRepoIds == b.filterRepoIds && a.statuses.map(\.id) == b.statuses.map(\.id)
+      && a.filterRepoIds == b.filterRepoIds && a.visibleHostIds == b.visibleHostIds && a.statuses.map(\.id) == b.statuses.map(\.id)
       && a.statuses.map(\.label) == b.statuses.map(\.label)
   }
 
@@ -62,6 +63,12 @@ public struct WorkspaceView: Sendable, Equatable {
     hideCliCreated = ui["hideCliCreatedWorkspaces"]?.boolValue ?? false
     hideDetachedHead = ui["hideDetachedHeadWorkspaces"]?.boolValue ?? false
     filterRepoIds = (ui["filterRepoIds"]?.arrayValue ?? []).compactMap(\.stringValue)
+    let hosts = (ui["visibleWorkspaceHostIds"]?.arrayValue ?? []).compactMap(\.stringValue)
+    if !hosts.isEmpty {
+      visibleHostIds = Set(hosts)
+    } else if let scope = ui["workspaceHostScope"]?.stringValue, scope == "local" || scope.hasPrefix("runtime:") || scope.hasPrefix("ssh:") {
+      visibleHostIds = [scope]
+    }
     let listed = (ui["workspaceStatuses"]?.arrayValue ?? []).compactMap { status -> (id: String, label: String)? in
       guard let id = status["id"]?.stringValue, let label = status["label"]?.stringValue else { return nil }
       return (id, label)

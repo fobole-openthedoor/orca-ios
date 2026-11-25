@@ -247,12 +247,12 @@ final class PiPAgentTelemetry {
   var onUpdate: (() -> Void)?
 
   func follow(_ targets: Set<Key>, model: AppModel) {
-    for key in Array(streams.keys) where !targets.contains(key) || model.session(for: key.host)?.api.connection !== streams[key]?.connection {
+    for key in Array(streams.keys) where !targets.contains(key) || model.session(for: key.host)?.api.connection.transport !== streams[key]?.connection {
       streams.removeValue(forKey: key)?.task?.cancel()
     }
     for key in targets where streams[key] == nil {
       guard let api = model.session(for: key.host)?.api else { continue }
-      let stream = Stream(connection: api.connection)
+      let stream = Stream(connection: api.connection.transport)
       streams[key] = stream
       stream.task = Task { [weak self, weak stream] in
         var delay = Duration.seconds(1)

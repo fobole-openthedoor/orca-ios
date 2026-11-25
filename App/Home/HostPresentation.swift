@@ -10,7 +10,14 @@ struct HostConnectionPresentation {
   let labelColor: UIColor
   let connected: Bool
 
-  init(_ state: ConnectionState) {
+  init(_ state: ConnectionState, server: RemoteOrcaServer? = nil) {
+    if server?.availability == .updateNeeded, state != .connected {
+      label = String(localized: "orcaios.host.remoteServerUpdateNeeded", defaultValue: "Update Orca on the server")
+      dot = Palette.statusAmber
+      labelColor = Palette.statusAmber
+      connected = false
+      return
+    }
     switch state {
     case .connected:
       label = String(localized: "connection.connectionHealth.connected", defaultValue: "Connected")

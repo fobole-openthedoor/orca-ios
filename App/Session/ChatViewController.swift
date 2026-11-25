@@ -142,7 +142,7 @@ final class ChatViewController: UIViewController {
 
     // What was typed here before, and not sent, comes back.
     if !model.isTerminalChat {
-      let draft = ChatDraftStore.load(model.sessionId)
+      let draft = ChatDraftStore.load(model.storageKey)
       composer.restore(text: draft.text, attachments: draft.attachments)
       NotificationCenter.default.addObserver(
         self, selector: #selector(saveDraft), name: UIApplication.willResignActiveNotification, object: nil)
@@ -156,7 +156,7 @@ final class ChatViewController: UIViewController {
       // A quote goes first, as a Markdown block quote the agent reads as quoted.
       let text = ChatQuote.wrap(self.quoteBar.quoted, around: typed)
       self.setQuote(nil)
-      ChatDraftStore.save(self.model.sessionId, text: "", attachments: [])
+      ChatDraftStore.save(self.model.storageKey, text: "", attachments: [])
       self.followsBottom = true
       Task {
         if let refusal = await self.model.submit(text: text, attachments: attachments, queue: queue) { self.say(refusal) }
@@ -764,7 +764,7 @@ final class ChatViewController: UIViewController {
 
   @objc private func saveDraft() {
     guard !model.isTerminalChat else { return }
-    ChatDraftStore.save(model.sessionId, text: composer.draftText, attachments: composer.attachments)
+    ChatDraftStore.save(model.storageKey, text: composer.draftText, attachments: composer.attachments)
   }
 
   /// The chat for picture in picture: what the agent is doing now, then its newest words, calls and thoughts.
@@ -1391,7 +1391,7 @@ final class ChatViewController: UIViewController {
       return refuse(
         String(localized: "components.native-chat.sideChat.noReply", defaultValue: "Available after the first reply."))
     }
-    ChatDraftStore.save(model.sessionId, text: "", attachments: [])
+    ChatDraftStore.save(model.storageKey, text: "", attachments: [])
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     onSideQuestion?(question, through)
   }

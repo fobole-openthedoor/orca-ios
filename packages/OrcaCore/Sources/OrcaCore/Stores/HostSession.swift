@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -8,6 +9,10 @@ import Observation
 public final class HostSession {
   public private(set) var host: PairedHost
   public let api: HostAPI
+  public let cacheNamespace: String
+  public private(set) var remoteServers: [HostSession] = []
+  public private(set) var remoteServer: RemoteOrcaServer?
+  @ObservationIgnored private weak var desktop: HostSession?
 
   public private(set) var connectionState: ConnectionState = .disconnected
   public private(set) var status: HostStatus?
@@ -30,6 +35,9 @@ public final class HostSession {
   @ObservationIgnored private var tasks: [Task<Void, Never>] = []
   @ObservationIgnored private var refreshTask: Task<Void, Never>?
   @ObservationIgnored private var refreshQueued = false
+  @ObservationIgnored private var remoteRefreshTask: Task<Void, Never>?
+  @ObservationIgnored private var remoteRefreshQueued = false
+  @ObservationIgnored private var statusFetchedAt: Date?
 
   /// How often the list is read again even when no event asked for it.
   static let pollInterval: Duration = .seconds(20)
@@ -44,12 +52,25 @@ public final class HostSession {
   ) {
     self.host = host
     self.logStore = logStore
+    cacheNamespace = host.id.uuidString
     connectionLog = PersistedConnectionLog.merge(stored: logStore?.load(hostId: host.id.uuidString) ?? [], live: [])
     var configuration = host.connectionConfiguration
     configuration.clientCapabilities = ClientCapability.all
     configuration.onRelayUpdate = onRelayUpdate
     api = HostAPI(connection: OrcaConnection(configuration: configuration, dialer: dialer), clientId: clientId)
     restoreFromCache()
+  }
+
+  private init(desktop: HostSession, server: RemoteOrcaServer) {
+    self.desktop = desktop
+    remoteServer = server
+    let host = desktop.host
+    self.host = host
+    logStore = nil
+    let key = [host.id.uuidString, server.id, server.route.installationId ?? ""].joined(separator: "\u{0}")
+    cacheNamespace = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+    api = HostAPI(
+      connection: desktop.api.connection.transport, clientId: desktop.api.clientId, server: server, remoteCacheNamespace: cacheNamespace)
   }
 
   // MARK: Cache
@@ -87,10 +108,10 @@ public final class HostSession {
   }
 
   public func start() {
-    guard tasks.isEmpty else {
+    guard desktop == nil, remoteServer == nil, tasks.isEmpty else {
       return
     }
-    let connection = api.connection
+    let connection = api.connection.transport
     tasks.append(Task { [weak self] in
       for await entry in await connection.logEvents() {
         guard let self else {
@@ -108,17 +129,42 @@ public final class HostSession {
         }
         let wasConnected = self.connectionState == .connected
         self.connectionState = state
-        if state != .connected { self.hasLiveWorktrees = false }
+        if state != .connected {
+          self.hasLiveWorktrees = false
+          for server in self.remoteServers { server.applyRemoteConnection(state) }
+        }
         self.path = await connection.path
         if state == .connected, !wasConnected {
           self.lastConnectedAt = Date()
-          self.connected()
+          self.scheduleRefresh()
+          self.scheduleRemoteRefresh()
         }
+      }
+    })
+    let api = api
+    tasks.append(Task { [weak self] in
+      // The connection replays this stream on each reconnect.
+      let events = await api.clientEvents()
+      do {
+        for try await event in events.events {
+          switch event["type"]?.stringValue {
+          case "ready", "worktreesChanged", "reposChanged", "worktreeRowsChanged", "agentListChanged", "workspaceMetadataSet",
+            "botsChanged":
+            self?.scheduleRefresh()
+          case "relayHostsChanged":
+            self?.scheduleRemoteRefresh()
+          default:
+            break
+          }
+        }
+      } catch {
+        // The poll keeps the lists fresh on a host without this stream.
       }
     })
     tasks.append(Task { [weak self] in
       while (try? await Task.sleep(for: Self.pollInterval)) != nil {
         self?.scheduleRefresh()
+        self?.scheduleRemoteRefresh()
       }
     })
   }
@@ -129,21 +175,35 @@ public final class HostSession {
     }
     tasks = []
     refreshTask?.cancel()
+    remoteRefreshTask?.cancel()
+    for server in remoteServers { server.applyRemoteConnection(.disconnected) }
     let connection = api.connection
     Task { await connection.close() }
   }
 
   /// The app came forward or the network changed.
   public func nudge() {
-    let connection = api.connection
+    if let desktop {
+      desktop.nudge()
+      return
+    }
+    let connection = api.connection.transport
     Task { await connection.nudge() }
     scheduleRefresh()
+    scheduleRemoteRefresh()
   }
 
   /// Reads the workspace list now. Calls made while one read is running fold into a single follow-up.
   public func refresh() async {
+    if let desktop {
+      desktop.scheduleRemoteRefresh()
+      await desktop.remoteRefreshTask?.value
+      return
+    }
     scheduleRefresh()
+    scheduleRemoteRefresh()
     await refreshTask?.value
+    await remoteRefreshTask?.value
   }
 
   public func worktree(id: String) -> Worktree? {
@@ -156,7 +216,7 @@ public final class HostSession {
 
   /// The name this phone gave the desktop, else the one it reports.
   public var name: String {
-    host.personalName ?? status?.machineName ?? host.name
+    remoteServer?.label ?? host.personalName ?? status?.machineName ?? host.name
   }
 
   /// Edit host saved this host: a new address redials on it.
@@ -166,35 +226,8 @@ public final class HostSession {
     guard endpointChanged else {
       return
     }
-    let connection = api.connection
+    let connection = api.connection.transport
     Task { await connection.updateEndpoint(host.endpoint) }
-  }
-
-  private func connected() {
-    let api = api
-    tasks.append(Task { [weak self] in
-      if let status = try? await api.status() {
-        self?.status = status
-      }
-    })
-    tasks.append(Task { [weak self] in
-      // Events are hints, never data. A second `ready` means the stream reconnected and some were missed.
-      let events = await api.clientEvents()
-      do {
-        for try await event in events.events {
-          switch event["type"]?.stringValue {
-          case "ready", "worktreesChanged", "reposChanged", "worktreeRowsChanged", "agentListChanged", "workspaceMetadataSet",
-            "botsChanged":
-            self?.scheduleRefresh()
-          default:
-            break
-          }
-        }
-      } catch {
-        // The poll keeps the list fresh on a host without this stream.
-      }
-    })
-    scheduleRefresh()
   }
 
   private func scheduleRefresh() {
@@ -245,6 +278,90 @@ public final class HostSession {
       guard connectionState == .connected, lastConnectedAt == connectedAt, !Task.isCancelled else { return }
       hasLiveWorktrees = false
       loadError = Self.describe(error)
+    }
+  }
+
+  private func isCurrent(_ connectedAt: Date?) -> Bool {
+    connectionState == .connected && lastConnectedAt == connectedAt && !Task.isCancelled
+  }
+
+  private func scheduleRemoteRefresh() {
+    guard connectionState == .connected,
+      statusFetchedAt != lastConnectedAt || status?.supports(HostCapability.desktopRelay) == true
+    else { return }
+    if remoteRefreshTask != nil {
+      remoteRefreshQueued = true
+      return
+    }
+    remoteRefreshTask = Task { [weak self] in
+      repeat {
+        self?.remoteRefreshQueued = false
+        await self?.loadRemoteServers()
+      } while self?.remoteRefreshQueued == true && !Task.isCancelled
+      self?.remoteRefreshTask = nil
+    }
+  }
+
+  private func loadRemoteServers() async {
+    let connectedAt = lastConnectedAt
+    guard isCurrent(connectedAt) else { return }
+    if statusFetchedAt != connectedAt {
+      guard let status = try? await api.status(), isCurrent(connectedAt) else { return }
+      statusFetchedAt = connectedAt
+      self.status = status
+    }
+    guard status?.supports(HostCapability.desktopRelay) == true else {
+      remoteServers = []
+      return
+    }
+    guard let listed = try? await api.remoteServers(), isCurrent(connectedAt) else { return }
+    let previous = Dictionary(uniqueKeysWithValues: remoteServers.compactMap { session in
+      session.remoteServer.map { ($0.route, session) }
+    })
+    let next = listed.map { server in
+      let session = previous[server.route] ?? HostSession(desktop: self, server: server)
+      if session.remoteServer != server { session.remoteServer = server }
+      let state: ConnectionState = server.availability == .ready ? .connected
+        : (["connecting", "provisioning", "waking"].contains(server.health) ? .connecting : .disconnected)
+      session.applyRemoteConnection(state)
+      return session
+    }
+    let routes = Set(listed.map(\.route))
+    for (route, session) in previous where !routes.contains(route) { session.applyRemoteConnection(.disconnected) }
+    if remoteServers.map(\.remoteServer?.route) != next.map(\.remoteServer?.route) { remoteServers = next }
+
+    // The desktop can return its last catalog even while a server is offline.
+    let api = api
+    await withTaskGroup(of: (Int, [Worktree]?).self) { group in
+      for (index, server) in listed.enumerated() {
+        group.addTask { (index, try? await api.remoteWorktrees(server: server)) }
+      }
+      for await (index, rows) in group where isCurrent(connectedAt) {
+        let session = next[index]
+        session.isLoading = false
+        if let rows, session.worktrees != rows { session.worktrees = rows }
+        session.hasLiveWorktrees = rows != nil && session.connectionState == .connected
+      }
+    }
+  }
+
+  private func applyRemoteConnection(_ state: ConnectionState) {
+    guard state != connectionState else { return }
+    connectionState = state
+    hasLiveWorktrees = false
+    guard state == .connected else { return }
+    lastConnectedAt = Date()
+    let connectedAt = lastConnectedAt
+    let api = api
+    Task { [weak self] in
+      async let repos = try? api.repos()
+      async let bots = try? api.botsReply()
+      let hostStatus = try? await api.status()
+      if let self, self.isCurrent(connectedAt) { self.status = hostStatus }
+      let (hostRepos, hostBots) = await (repos, bots)
+      guard let self, self.isCurrent(connectedAt) else { return }
+      self.repos = hostRepos ?? self.repos
+      self.bots = hostBots?.bots ?? self.bots
     }
   }
 

@@ -113,6 +113,7 @@ public actor OrcaConnection {
   }
 
   static let livenessIdPrefix = "mobile-liveness-"
+  private static let routedIdPrefix = "mobile-routed-"
   static let capabilityUpdateMethod = "runtime.clientCapabilities.update"
 
   private struct PendingRequest {
@@ -123,6 +124,7 @@ public actor OrcaConnection {
   private struct StreamEntry {
     let method: String
     var params: JSONValue?
+    let route: RemoteOrcaServer.Route?
     let release: StreamRelease
     let yield: @Sendable (InboundFrame) -> Void
     let finish: @Sendable (Error?) -> Void
@@ -151,6 +153,9 @@ public actor OrcaConnection {
   private var backoffTask: Task<Void, Never>?
   private var socket: (any WebSocketTransport)?
   private var e2ee: E2EEV2ClientSession?
+  private var socketGeneration = 0
+  private var supportsDesktopRelay = false
+  private var readyRemoteRoutes: Set<RemoteOrcaServer.Route> = []
   private var closed = false
   private var reachedConnected = false
   private var counter = 0
@@ -328,22 +333,46 @@ public actor OrcaConnection {
 
   /// Sends one request and returns its `result`. Waits for the connection first, within the same timeout.
   public func request(_ method: String, _ params: JSONValue? = nil, timeout: Duration? = nil) async throws -> JSONValue {
+    try await request(method, params, timeout: timeout, route: nil)
+  }
+
+  func request(_ method: String, _ params: JSONValue?, timeout: Duration?, route: RemoteOrcaServer.Route?) async throws -> JSONValue {
     let timeout = timeout ?? configuration.requestTimeout
     let deadline = clock.now + timeout
     try await waitUntilConnected(timeout: timeout, method: method)
-    return try await perform(method, params, timeout: max(deadline - clock.now, .seconds(1)))
+    guard canRoute(route) else {
+      throw RPCError(code: "remote_runtime_unavailable", message: "The paired desktop cannot reach this server.", data: nil)
+    }
+    let generation = socketGeneration
+    let reply = try await perform(method, params, timeout: max(deadline - clock.now, .seconds(1)), route: route)
+    // A desktop that predates this feature can ignore executionHost and run the call locally.
+    // Reconfirm the capability and server identity on every socket before sending any routed frame.
+    if route == nil, generation == socketGeneration, e2ee != nil {
+      if method == "status.get" {
+        supportsDesktopRelay = HostStatus(reply).supports(HostCapability.desktopRelay)
+        if !supportsDesktopRelay { readyRemoteRoutes.removeAll() }
+      } else if method == "mobileRelay.hosts.list", supportsDesktopRelay, let servers = RemoteOrcaServer.list(reply) {
+        readyRemoteRoutes = Set(servers.filter { $0.availability == .ready }.map(\.route))
+        sendWaitingStreams()
+      }
+    }
+    return reply
   }
 
   /// Opens a streaming request. Every reply to it is yielded until the host ends it or the consumer stops.
   /// The request is replayed after a reconnect, so a consumer sees a fresh opening reply then.
   public func subscribe(_ method: String, _ params: JSONValue? = nil, release: StreamRelease = .none) -> RPCSubscription {
-    let id = nextRequestId()
+    subscribe(method, params, release: release, route: nil)
+  }
+
+  func subscribe(_ method: String, _ params: JSONValue?, release: StreamRelease, route: RemoteOrcaServer.Route?) -> RPCSubscription {
+    let id = nextRequestId(route: route)
     let (stream, continuation) = AsyncThrowingStream<JSONValue, Error>.makeStream()
     continuation.onTermination = { [weak self] _ in
       Task { await self?.dropStream(id) }
     }
     open(
-      id, method, params, release, receivesBinary: false,
+      id, method, params, release, route: route, receivesBinary: false,
       yield: { frame in
         if case .reply(let reply) = frame {
           continuation.yield(reply)
@@ -355,20 +384,26 @@ public actor OrcaConnection {
 
   /// Opens a streaming request that also receives the socket's binary frames, in arrival order with its replies.
   public func subscribeWithBinary(_ method: String, _ params: JSONValue? = nil, release: StreamRelease = .none) -> RPCBinarySubscription {
-    let id = nextRequestId()
+    subscribeWithBinary(method, params, release: release, route: nil)
+  }
+
+  func subscribeWithBinary(
+    _ method: String, _ params: JSONValue?, release: StreamRelease, route: RemoteOrcaServer.Route?
+  ) -> RPCBinarySubscription {
+    let id = nextRequestId(route: route)
     let (stream, continuation) = AsyncThrowingStream<InboundFrame, Error>.makeStream()
     continuation.onTermination = { [weak self] _ in
       Task { await self?.dropStream(id) }
     }
     open(
-      id, method, params, release, receivesBinary: true,
+      id, method, params, release, route: route, receivesBinary: true,
       yield: { continuation.yield($0) },
       finish: { continuation.finish(throwing: $0) })
     return RPCBinarySubscription(requestId: id, frames: stream)
   }
 
   private func open(
-    _ id: String, _ method: String, _ params: JSONValue?, _ release: StreamRelease, receivesBinary: Bool,
+    _ id: String, _ method: String, _ params: JSONValue?, _ release: StreamRelease, route: RemoteOrcaServer.Route?, receivesBinary: Bool,
     yield: @escaping @Sendable (InboundFrame) -> Void, finish: @escaping @Sendable (Error?) -> Void
   ) {
     if closed {
@@ -376,9 +411,20 @@ public actor OrcaConnection {
       return
     }
     streams[id] = StreamEntry(
-      method: method, params: params, release: release, yield: yield, finish: finish, receivesBinary: receivesBinary)
-    if state == .connected {
-      streams[id]?.sent = write(frame(id: id, method: method, params: params))
+      method: method, params: params, route: route, release: release, yield: yield, finish: finish, receivesBinary: receivesBinary)
+    if state == .connected, canRoute(route) {
+      streams[id]?.sent = write(frame(id: id, method: method, params: params, route: route))
+    }
+  }
+
+  private func canRoute(_ route: RemoteOrcaServer.Route?) -> Bool {
+    guard let route else { return true }
+    return supportsDesktopRelay && readyRemoteRoutes.contains(route)
+  }
+
+  private func sendWaitingStreams() {
+    for (id, entry) in streams where !entry.sent && canRoute(entry.route) {
+      streams[id]?.sent = write(frame(id: id, method: entry.method, params: entry.params, route: entry.route))
     }
   }
 
@@ -400,7 +446,13 @@ public actor OrcaConnection {
   /// Fire-and-forget: queues a request whose reply nobody waits for. False when there is no open socket.
   @discardableResult
   public func notify(_ method: String, _ params: JSONValue? = nil) -> Bool {
-    state == .connected && write(frame(id: nextRequestId(), method: method, params: params))
+    notify(method, params, route: nil)
+  }
+
+  @discardableResult
+  func notify(_ method: String, _ params: JSONValue?, route: RemoteOrcaServer.Route?) -> Bool {
+    state == .connected && canRoute(route)
+      && write(frame(id: nextRequestId(route: route), method: method, params: params, route: route))
   }
 
   // MARK: Run loop
@@ -595,6 +647,8 @@ public actor OrcaConnection {
       socket.close()
       self.socket = nil
       self.e2ee = nil
+      supportsDesktopRelay = false
+      readyRemoteRoutes.removeAll()
     }
 
     if case .relay(let token, let version) = route {
@@ -631,6 +685,7 @@ public actor OrcaConnection {
       throw rejected ? ConnectionError.authenticationRejected : ConnectionError.handshakeFailed
     }
     e2ee = session
+    socketGeneration += 1
     lastInboundAt = clock.now
     path = route.isRelay ? .relay : .direct
     dialStage = .open
@@ -668,9 +723,7 @@ public actor OrcaConnection {
       waiter.resume()
     }
     connectWaiters.removeAll()
-    for (id, entry) in streams where !entry.sent {
-      streams[id]?.sent = write(frame(id: id, method: entry.method, params: entry.params))
-    }
+    sendWaitingStreams()
   }
 
   /// Keeps the relay credential alive: confirms the one just used, and replaces it a week before it lapses.
@@ -823,7 +876,7 @@ public actor OrcaConnection {
         data: reply["error"]?["data"]
       )
       outcome = .failure(error)
-      if error.code == "unauthorized" {
+      if error.code == "unauthorized", !id.hasPrefix(Self.routedIdPrefix) {
         settle(id, outcome)
         throw ConnectionError.authenticationRejected
       }
@@ -831,6 +884,12 @@ public actor OrcaConnection {
 
     if var entry = streams[id] {
       switch outcome {
+      case .failure(let error as RPCError) where entry.route != nil && error.code == "remote_runtime_unavailable" && !entry.cancelled:
+        // The desktop connection can outlive a server outage. Retry the stream on the next server catalog read.
+        entry.sent = false
+        entry.answered = false
+        entry.subscriptionId = nil
+        streams[id] = entry
       case .failure(let error):
         streams[id] = nil
         entry.finish(error)
@@ -864,8 +923,10 @@ public actor OrcaConnection {
 
   // MARK: Outbound
 
-  private func perform(_ method: String, _ params: JSONValue?, timeout: Duration) async throws -> JSONValue {
-    let id = nextRequestId()
+  private func perform(
+    _ method: String, _ params: JSONValue?, timeout: Duration, route: RemoteOrcaServer.Route? = nil
+  ) async throws -> JSONValue {
+    let id = nextRequestId(route: route)
     return try await withCheckedThrowingContinuation { continuation in
       let timer = Task { [weak self] in
         guard (try? await Task.sleep(for: timeout)) != nil else {
@@ -874,7 +935,7 @@ public actor OrcaConnection {
         await self?.settle(id, .failure(ConnectionError.timedOut(method: method)))
       }
       pending[id] = PendingRequest(continuation: continuation, timer: timer)
-      if !write(frame(id: id, method: method, params: params)) {
+      if !write(frame(id: id, method: method, params: params, route: route)) {
         settle(id, .failure(ConnectionError.interrupted))
       }
     }
@@ -924,7 +985,7 @@ public actor OrcaConnection {
     connectWaiters.removeValue(forKey: id)?.resume(throwing: ConnectionError.timedOut(method: method))
   }
 
-  private func frame(id: String, method: String, params: JSONValue?) -> JSONValue {
+  private func frame(id: String, method: String, params: JSONValue?, route: RemoteOrcaServer.Route? = nil) -> JSONValue {
     var object: [String: JSONValue] = [
       "id": .string(id),
       "deviceToken": .string(configuration.deviceToken),
@@ -932,6 +993,9 @@ public actor OrcaConnection {
     ]
     if let params {
       object["params"] = params
+    }
+    if let route {
+      object["executionHost"] = .string(route.hostId)
     }
     return .object(object)
   }
@@ -989,7 +1053,7 @@ public actor OrcaConnection {
       return
     }
     // An opener that never reached the socket registered nothing.
-    guard entry.sent, state == .connected else {
+    guard entry.sent, state == .connected, canRoute(entry.route) else {
       streams[id] = nil
       return
     }
@@ -1002,14 +1066,14 @@ public actor OrcaConnection {
         return
       }
       streams[id] = nil
-      _ = write(frame(id: nextRequestId(), method: method, params: ["subscriptionId": .string(subscriptionId)]))
+      _ = notify(method, ["subscriptionId": .string(subscriptionId)], route: entry.route)
     case .requestKeyed(let method, let afterFirstFrame, let params):
       if afterFirstFrame, !entry.answered {
         streams[id]?.cancelled = true
         return
       }
       streams[id] = nil
-      _ = write(frame(id: nextRequestId(), method: method, params: params(id)))
+      _ = notify(method, params(id), route: entry.route)
     }
   }
 
@@ -1036,8 +1100,9 @@ public actor OrcaConnection {
     return counter
   }
 
-  private func nextRequestId() -> String {
-    "rpc-\(nextCounter())-\(Int(Date().timeIntervalSince1970 * 1000))"
+  private func nextRequestId(route: RemoteOrcaServer.Route?) -> String {
+    let prefix = route == nil ? "rpc-" : Self.routedIdPrefix
+    return "\(prefix)\(nextCounter())-\(Int(Date().timeIntervalSince1970 * 1000))"
   }
 }
 

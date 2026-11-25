@@ -10,6 +10,7 @@ public enum HostCapability {
   public static let agentLaunchReplay = "agent.launch.replay-required.v1"
   public static let ticketExchange = "pairing.ticket-exchange.v1"
   public static let terminalQueryReply = "terminal.query-reply-input.v1"
+  public static let desktopRelay = "mobile.desktop-relay.v1"
 }
 
 /// What this client tells the host it can read. Each string is a promise to understand a newer wire
@@ -30,13 +31,19 @@ public enum ClientCapability {
 /// The application-level calls, typed. One per paired host, over its connection.
 /// See `docs/protocol/rpc-surface.md` for the wire shapes.
 public struct HostAPI: Sendable {
-  public let connection: OrcaConnection
+  public let connection: HostRPC
+  let remoteCacheNamespace: String?
   /// This install's stable id, which names the phone as a terminal viewer and input driver.
   public let clientId: String
 
   public init(connection: OrcaConnection, clientId: String) {
-    self.connection = connection
+    self.init(connection: connection, clientId: clientId, server: nil, remoteCacheNamespace: nil)
+  }
+
+  init(connection: OrcaConnection, clientId: String, server: RemoteOrcaServer?, remoteCacheNamespace: String?) {
+    self.connection = HostRPC(transport: connection, server: server)
     self.clientId = clientId
+    self.remoteCacheNamespace = remoteCacheNamespace
   }
 
   var client: JSONValue {
@@ -47,6 +54,17 @@ public struct HostAPI: Sendable {
 
   public func status() async throws -> HostStatus {
     HostStatus(try await connection.request("status.get", [:]))
+  }
+
+  func remoteServers() async throws -> [RemoteOrcaServer]? {
+    RemoteOrcaServer.list(try await connection.request("mobileRelay.hosts.list", timeout: .seconds(8)))
+  }
+
+  func remoteWorktrees(server: RemoteOrcaServer) async throws -> [Worktree]? {
+    let reply = try await connection.request("mobileRelay.hosts.worktrees", ["hostId": .string(server.id)], timeout: .seconds(10))
+    guard let rows = reply["worktrees"]?.arrayValue else { return nil }
+    var seen: Set<String> = []
+    return rows.filter { $0["hostId"]?.stringValue == server.id }.compactMap(Worktree.init).filter { seen.insert($0.id).inserted }
   }
 
   /// Invalidation hints: none carries data, each says what to read again.

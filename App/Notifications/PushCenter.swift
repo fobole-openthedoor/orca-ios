@@ -73,10 +73,11 @@ final class PushCenter: NSObject {
   }
 
   /// Whether `worktreeId` on host `hostId` is the workspace on screen now.
-  static func isViewing(hostId: UUID, worktreeId: String) -> Bool {
+  static func isViewing(hostId: UUID, worktreeId: String, executionHost: String? = nil) -> Bool {
     guard let viewing else { return false }
     return viewing.hostKey.caseInsensitiveCompare(hostId.uuidString) == .orderedSame
       && workspaceId(viewing.worktreeId) == workspaceId(worktreeId)
+      && viewing.executionHost == executionHost
   }
 
   /// A workspace id as the desktop compares them (normalizeWorkspaceSessionKeyToWorkspaceId): a push may
@@ -320,11 +321,13 @@ extension PushCenter: UNUserNotificationCenterDelegate {
     let orca = response.notification.request.content.userInfo["orca"] as? [String: Any]
     let host = orca?["host"] as? String
     let worktree = orca?["worktreeId"] as? String
+    let executionHost = orca?["executionHost"] as? String
     DispatchQueue.main.async {
       if let host, let worktree, var components = URLComponents(string: "orca://open") {
         components.queryItems = [
           URLQueryItem(name: "host", value: host), URLQueryItem(name: "worktree", value: PushCenter.workspaceId(worktree)),
         ]
+        if let executionHost { components.queryItems?.append(URLQueryItem(name: "executionHost", value: executionHost)) }
         if let url = components.url { NotificationCenter.default.post(name: .orcaOpenURL, object: url) }
       }
       completionHandler()
