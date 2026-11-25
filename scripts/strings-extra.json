@@ -95,6 +95,8 @@
         "weeks": "{{count}}w"
       },
       "session": {
+        "agentTabUnavailable": "The agent’s tab is unavailable",
+        "loadTabsFailed": "Could not load workspace tabs",
         "tabUnsupported": "This tab can't be opened on the phone yet",
         "terminalChatBack": "Back to Terminal",
         "terminalChatEmpty": "No messages yet",
@@ -288,6 +290,8 @@
         "weeks": "{{count}} 周"
       },
       "session": {
+        "agentTabUnavailable": "暂时无法打开这个智能体的标签页",
+        "loadTabsFailed": "无法加载工作区标签页",
         "tabUnsupported": "这个标签页暂时不能在手机上打开",
         "terminalChatBack": "返回终端",
         "terminalChatEmpty": "暂无消息",
@@ -502,6 +506,8 @@
         "weeks": "{{count}} 週"
       },
       "session": {
+        "agentTabUnavailable": "暫時無法開啟這個代理的分頁",
+        "loadTabsFailed": "無法載入工作區分頁",
         "tabUnsupported": "這個分頁暫時不能在手機上開啟",
         "terminalChatBack": "返回終端機",
         "terminalChatEmpty": "目前沒有訊息",

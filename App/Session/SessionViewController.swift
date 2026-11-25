@@ -9,8 +9,25 @@ final class SessionViewController: UIViewController {
   private let strip = SessionTabStrip()
   private let content = UIView()
   private let stripEdge = UIScrollEdgeElementContainerInteraction()
+  private let tabsCache: FrameCache
   private var tabs = SessionTabs()
   private var tabsTask: Task<Void, Never>?
+  private var tabReadTask: Task<Void, Never>?
+  private var tabRecoveryTask: Task<Void, Never>?
+  private var agentFocusTask: Task<Void, Never>?
+  private var tabActivationTask: Task<Void, Never>?
+  private var tabsConnected = false
+  private var tabsGeneration = 0
+  private var tabsRevision = 0
+  private var tabsPublication: (epoch: String?, version: Double)?
+  private var tabsError: String?
+  private var agentFocusError: String?
+  private var tabActivationError: String?
+  private var pendingTabSelection: String?
+  private let openingStatus = UIStackView()
+  private let statusLabel = TextLabel(size: 15, color: Palette.textSecondary, alignment: .center, lines: 0)
+  private let statusSpinner = UIActivityIndicatorView(style: .medium)
+  private let retryButton = UIButton(configuration: .tinted())
   private var shownTabId: String?
   private var chats: [String: ChatViewController] = [:]
   private var current: UIViewController?
@@ -37,6 +54,7 @@ final class SessionViewController: UIViewController {
   init(session: HostSession, worktreeId: String, sessionId: String? = nil, paneKey: String? = nil) {
     self.session = session
     self.worktreeId = worktreeId
+    self.tabsCache = FrameCache(name: "tabs-" + session.cacheNamespace + "-" + worktreeId)
     focusSessionId = sessionId
     focusPaneKey = paneKey
     super.init(nibName: nil, bundle: nil)
@@ -45,7 +63,13 @@ final class SessionViewController: UIViewController {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  deinit { tabsTask?.cancel() }
+  deinit {
+    tabsTask?.cancel()
+    tabReadTask?.cancel()
+    tabRecoveryTask?.cancel()
+    agentFocusTask?.cancel()
+    tabActivationTask?.cancel()
+  }
 
   private var selector: String { "id:\(worktreeId)" }
 
@@ -78,12 +102,7 @@ final class SessionViewController: UIViewController {
     }
 
     strip.onSelect = { [weak self] tab in
-      guard let self else { return }
-      self.show(tab)
-      self.updateStrip()
-      let api = self.session.api
-      let selector = self.selector
-      Task { await api.activateTab(tab.id, worktree: selector) }
+      self?.select(tab)
     }
     strip.onClose = { [weak self] tab in
       guard let self else { return }
@@ -107,28 +126,20 @@ final class SessionViewController: UIViewController {
       content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
       content.bottomAnchor.constraint(equalTo: view.bottomAnchor),
     ])
-    let api = session.api
-    let selector = selector
-    Task { await api.activate(worktree: selector) }
+    configureOpeningStatus()
     // The tabs this workspace had last time show at once, so its chat opens without waiting for the desktop.
-    let tabsCache = FrameCache(name: "tabs-" + session.cacheNamespace + "-" + worktreeId)
-    if let cached = tabsCache.load().last {
+    if let cached = tabsCache.load().last, hasSessionTabsSnapshot(cached) {
       let restored = SessionTabs(cached)
       if !restored.tabs.isEmpty, !restored.removed { apply(restored, cached: true) }
     }
-    tabsTask = Task { [weak self] in
-      let subscription = await api.tabs(worktree: selector)
-      do {
-        for try await frame in subscription.events {
-          tabsCache.record(frame, isSnapshot: true)
-          self?.apply(SessionTabs(frame))
-        }
-      } catch {}
-    }
+    updateTabConnection(session.connectionState == .connected)
+    updateOpeningStatus()
   }
 
   override func updateProperties() {
     super.updateProperties()
+    updateTabConnection(session.connectionState == .connected)
+    updateOpeningStatus()
     if let active = tabs.tabs.first(where: { $0.id == shownTabId }), active.terminalHandle != nil {
       show(active)
     }
@@ -162,6 +173,154 @@ final class SessionViewController: UIViewController {
     updateStrip()
   }
 
+  private func updateTabConnection(_ connected: Bool) {
+    guard connected != tabsConnected else { return }
+    tabsConnected = connected
+    tabsGeneration += 1
+    tabsTask?.cancel()
+    tabReadTask?.cancel()
+    tabRecoveryTask?.cancel()
+    agentFocusTask?.cancel()
+    tabActivationTask?.cancel()
+    tabsTask = nil
+    tabReadTask = nil
+    tabRecoveryTask = nil
+    agentFocusTask = nil
+    tabActivationTask = nil
+    agentFocusError = nil
+    tabActivationError = nil
+    tabsError = nil
+    tabsPublication = nil
+    guard connected else { return }
+
+    let api = session.api
+    let selector = selector
+    let generation = tabsGeneration
+    Task { await api.activate(worktree: selector) }
+    reconcileTabs()
+    tabsTask = Task { [weak self] in
+      let subscription = await api.tabs(worktree: selector)
+      do {
+        for try await frame in subscription.events {
+          guard let self, self.tabsGeneration == generation, !Task.isCancelled else { break }
+          if hasSessionTabsSnapshot(frame) { self.acceptTabs(frame) }
+        }
+      } catch {
+        if let self, self.tabsGeneration == generation, !Task.isCancelled, !self.tabsLoaded {
+          self.tabsError = (error as? RPCError)?.message
+          self.updateOpeningStatus()
+        }
+      }
+      await api.connection.unsubscribe(subscription.requestId)
+      guard let self, self.tabsGeneration == generation, !Task.isCancelled else { return }
+      self.tabsTask = nil
+      self.reconcileTabs()
+    }
+    tabRecoveryTask = Task { [weak self] in
+      while (try? await Task.sleep(for: .seconds(3))) != nil {
+        guard let self, self.tabsGeneration == generation else { return }
+        guard self.viewIfLoaded?.window != nil else { continue }
+        if self.tabsTask == nil || !self.tabsLoaded || self.tabs.tabs.contains(where: { $0.kind == .terminal(handle: nil) }) {
+          self.reconcileTabs()
+        }
+      }
+    }
+  }
+
+  private func reconcileTabs() {
+    guard tabsConnected, tabReadTask == nil else { return }
+    let generation = tabsGeneration
+    let revision = tabsRevision
+    let api = session.api
+    let selector = selector
+    tabReadTask = Task { [weak self] in
+      let result: Result<JSONValue, Error>
+      do { result = .success(try await api.tabsSnapshot(worktree: selector)) }
+      catch { result = .failure(error) }
+      guard let self, self.tabsGeneration == generation, !Task.isCancelled else { return }
+      self.tabReadTask = nil
+      switch result {
+      case .success(let frame): self.acceptTabs(frame, startedAt: revision)
+      case .failure(let error):
+        guard !self.tabsLoaded else { return }
+        self.tabsError = (error as? RPCError).map(\.message).flatMap { $0.isEmpty ? nil : $0 }
+          ?? String(localized: "orcaios.session.loadTabsFailed", defaultValue: "Could not load workspace tabs")
+        self.updateOpeningStatus()
+      }
+    }
+  }
+
+  private func acceptTabs(_ frame: JSONValue, startedAt revision: Int? = nil) {
+    guard hasSessionTabsSnapshot(frame) else { return }
+    let epoch = frame["publicationEpoch"]?.stringValue
+    let version = frame["snapshotVersion"]?.doubleValue
+    if let revision, revision != tabsRevision {
+      // An RPC started earlier may only replace a stream update if it proves it is newer.
+      guard let publication = tabsPublication, publication.epoch == epoch, let version,
+        version > publication.version
+      else { return }
+    }
+    if let version {
+      guard tabsPublication?.epoch != epoch || version >= (tabsPublication?.version ?? version) else { return }
+      tabsPublication = (epoch, version)
+    }
+    tabsRevision += 1
+    tabsError = nil
+    tabsCache.record(frame, isSnapshot: true)
+    apply(SessionTabs(frame))
+    updateOpeningStatus()
+  }
+
+  private func configureOpeningStatus() {
+    retryButton.configuration?.title = String(localized: "common.retry", defaultValue: "Retry")
+    retryButton.addAction(UIAction { [weak self] _ in
+      guard let self else { return }
+      self.session.nudge()
+      self.tabsError = nil
+      self.agentFocusError = nil
+      if let tab = self.tabs.tabs.first(where: { $0.id == self.shownTabId }), tab.kind == .terminal(handle: nil),
+        self.tabsConnected
+      {
+        self.select(tab)
+        return
+      }
+      self.reconcileTabs()
+      self.updateOpeningStatus()
+    }, for: .primaryActionTriggered)
+    openingStatus.axis = .vertical
+    openingStatus.spacing = Spacing.md
+    openingStatus.alignment = .center
+    for item in [statusSpinner, statusLabel, retryButton] as [UIView] { openingStatus.addArrangedSubview(item) }
+    openingStatus.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(openingStatus)
+    NSLayoutConstraint.activate([
+      openingStatus.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+      openingStatus.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+      openingStatus.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: Spacing.xl),
+      openingStatus.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -Spacing.xl),
+    ])
+  }
+
+  private func updateOpeningStatus() {
+    let status = HostConnectionPresentation(session.connectionState, server: session.remoteServer)
+    let awaitingAgent = (focusPaneKey != nil || focusSessionId != nil) && shownTabId == nil
+    let activationError = shownTabKind == .terminal(handle: nil) ? tabActivationError : nil
+    let showStatus = awaitingAgent || activationError != nil || (tabs.tabs.isEmpty && (!tabsLoaded || !status.connected))
+    openingStatus.isHidden = !showStatus
+    current?.view.isHidden = showStatus
+    strip.setCanCreateTab(status.connected && tabsLoaded)
+    guard showStatus else { return }
+    let connecting = session.connectionState == .connecting || session.connectionState == .handshaking
+    let openingError = agentFocusError ?? activationError ?? tabsError
+    let loading = connecting || (status.connected && openingError == nil)
+    statusLabel.text = status.connected
+      ? (openingError ?? String(localized: "session.presentation.loadingTabs", defaultValue: "Loading tabs"))
+      : status.label
+    retryButton.isHidden = loading && (status.connected || session.remoteServer == nil)
+    statusSpinner.isHidden = !loading
+    if loading { statusSpinner.startAnimating() } else { statusSpinner.stopAnimating() }
+  }
+
   /// `cached`: the tabs from last time, shown until the desktop's own list arrives; an empty workspace isn't
   /// concluded from them.
   private func apply(_ next: SessionTabs, cached: Bool = false) {
@@ -180,21 +339,94 @@ final class SessionViewController: UIViewController {
       navigationController?.popViewController(animated: true)
       return
     }
-    if let tab = next.agentTab(sessionId: focusSessionId, paneKey: focusPaneKey) {
-      show(tab)
-      updateStrip()
-      if !cached {
-        focusSessionId = nil
-        focusPaneKey = nil
-        let api = session.api
-        let selector = selector
-        Task { await api.activateTab(tab.id, worktree: selector) }
+    if focusSessionId != nil || focusPaneKey != nil {
+      if let tab = next.agentTab(sessionId: focusSessionId, paneKey: focusPaneKey) {
+        if !cached {
+          select(tab)
+          return
+        }
+        show(tab)
+      } else if !cached {
+        if shownTabId != nil { show(nil) }
+        recoverAgentFocus()
       }
+      updateStrip()
       return
     }
-    let active = next.tabs.first { $0.id == next.activeTabId } ?? next.tabs.first
+    let requested = next.tabs.first { $0.id == pendingTabSelection }
+    if requested == nil || requested?.id == next.activeTabId { pendingTabSelection = nil }
+    let active = requested ?? next.activeTab
     show(active)
     updateStrip()
+  }
+
+  private func select(_ tab: SessionTab) {
+    clearAgentFocus()
+    pendingTabSelection = tab.id
+    tabActivationError = nil
+    show(tab)
+    updateStrip()
+    updateOpeningStatus()
+    guard tabsConnected else { return }
+    tabActivationTask?.cancel()
+    let revision = tabsRevision
+    let api = session.api
+    let selector = selector
+    tabActivationTask = Task { [weak self] in
+      do {
+        let reply = try await api.activateTab(tab.id, worktree: selector)
+        guard let self, !Task.isCancelled, self.shownTabId == tab.id else { return }
+        self.acceptTabs(reply, startedAt: revision)
+      } catch {
+        guard let self, !Task.isCancelled, self.shownTabId == tab.id, self.shownTabKind == .terminal(handle: nil) else { return }
+        self.tabActivationError = (error as? RPCError).map(\.message).flatMap { $0.isEmpty ? nil : $0 }
+          ?? String(localized: "orcaios.session.agentTabUnavailable", defaultValue: "The agent’s tab is unavailable")
+        self.updateOpeningStatus()
+      }
+    }
+  }
+
+  private func clearAgentFocus() {
+    focusSessionId = nil
+    focusPaneKey = nil
+    agentFocusError = nil
+    agentFocusTask?.cancel()
+    agentFocusTask = nil
+  }
+
+  private func recoverAgentFocus() {
+    guard agentFocusTask == nil, agentFocusError == nil, tabsConnected else { return }
+    let paneKey = focusPaneKey
+    let structuredID = SessionTabs.structuredSessionID(forPaneKey: paneKey)
+      ?? session.worktree(id: worktreeId)?.agents.first { $0.paneKey == paneKey }?.structuredSessionId
+      ?? (paneKey == nil ? focusSessionId : nil)
+    let api = session.api
+    let selector = selector
+    let workspaceID = worktreeId
+    let revision = tabsRevision
+    agentFocusTask = Task { [weak self] in
+      let issue = String(localized: "orcaios.session.agentTabUnavailable", defaultValue: "The agent’s tab is unavailable")
+      do {
+        let latest = try await api.tabsSnapshot(worktree: selector)
+        guard let self, !Task.isCancelled else { return }
+        self.acceptTabs(latest, startedAt: revision)
+        guard !Task.isCancelled else { return }
+        if let structuredID, try await api.revealChat(sessionId: structuredID, in: workspaceID) {
+          let revision = self.tabsRevision
+          let refreshed = try await api.tabsSnapshot(worktree: selector)
+          guard !Task.isCancelled else { return }
+          self.acceptTabs(refreshed, startedAt: revision)
+          guard !Task.isCancelled else { return }
+        }
+        self.agentFocusError = issue
+      } catch {
+        guard let self, !Task.isCancelled else { return }
+        self.agentFocusError = (error as? RPCError).map(\.message).flatMap { $0.isEmpty ? nil : $0 } ?? issue
+      }
+      guard let self, !Task.isCancelled else { return }
+      self.agentFocusTask = nil
+      self.updateOpeningStatus()
+    }
   }
 
   /// The state the header and tab show. With a chat on screen, it is whether that chat's agent is running a
@@ -301,7 +533,10 @@ final class SessionViewController: UIViewController {
       }
     case .terminal(nil):
       // The desktop is still starting this tab's terminal; the tab shows it once it has a handle.
-      next = PendingTerminalViewController()
+      next = PendingTerminalViewController { [weak self] in
+        guard let self, let pending = self.tabs.tabs.first(where: { $0.id == self.shownTabId }) else { return }
+        if self.tabsConnected { self.select(pending) } else { self.session.nudge() }
+      }
     case .terminal(let handle?):
       if let terminalChat {
         let chat = ChatViewController(model: ChatSessionModel(api: session.api, terminal: terminalChat), terminalGround: ground)
@@ -704,6 +939,7 @@ final class SessionViewController: UIViewController {
     Task {
       do {
         try await write()
+        if tabsTask == nil { reconcileTabs() }
       } catch {
         let message = (error as? RPCError)?.message ?? error.localizedDescription
         let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
@@ -718,6 +954,7 @@ final class SessionViewController: UIViewController {
   override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
     workspaceVisible = true
+    if session.remoteServer != nil, !tabsConnected { session.nudge() }
     updateNavigationAppearance()
   }
 
@@ -817,6 +1054,15 @@ final class SessionViewController: UIViewController {
 
 /// A terminal tab before its terminal exists: a spinner and a word, replaced as soon as the handle arrives.
 private final class PendingTerminalViewController: UIViewController {
+  private let retry: () -> Void
+
+  init(retry: @escaping () -> Void) {
+    self.retry = retry
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
   override func viewDidLoad() {
     super.viewDidLoad()
     view.backgroundColor = Palette.bgBase
@@ -825,7 +1071,10 @@ private final class PendingTerminalViewController: UIViewController {
     let label = TextLabel(
       String(localized: "orcaios.session.terminalStarting", defaultValue: "Starting terminal…"), size: 15,
       color: Palette.textMuted, alignment: .center, lines: 0)
-    let stack = UIStackView(arrangedSubviews: [spinner, label])
+    let button = UIButton(configuration: .tinted())
+    button.configuration?.title = String(localized: "common.retry", defaultValue: "Retry")
+    button.addAction(UIAction { [weak self] _ in self?.retry() }, for: .primaryActionTriggered)
+    let stack = UIStackView(arrangedSubviews: [spinner, label, button])
     stack.axis = .vertical
     stack.alignment = .center
     stack.spacing = Spacing.sm

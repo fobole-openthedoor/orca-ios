@@ -103,6 +103,10 @@ final class SessionTabStrip: UIView {
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+  func setCanCreateTab(_ available: Bool) {
+    addButton.isEnabled = available
+  }
+
   func show(tabs: [SessionTab], shownId: String?, agentState: String?, botHome: Bool = false) {
     guard tabs != self.tabs || shownId != self.shownId || agentState != self.agentState || botHome != self.botHome
     else { return }

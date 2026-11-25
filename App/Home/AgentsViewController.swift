@@ -4,7 +4,7 @@ import UIKit
 /// The Agents tab groups related panes before placing them in Needs you, Working or Done.
 final class AgentsViewController: UIViewController {
   struct Row: Hashable {
-    let hostId: UUID
+    let scope: String
     let worktreeId: String
     let paneKey: String
   }
@@ -84,8 +84,7 @@ final class AgentsViewController: UIViewController {
     entries = [:]
     var needsYou = 0
     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    for host in model.hosts {
-      guard let session = model.session(for: host.id) else { continue }
+    for session in model.workspaceSessions {
       var panes: [Worktree.Agent] = []
       var worktreesByPane: [String: Worktree] = [:]
       for worktree in session.worktrees where !worktree.isArchived {
@@ -99,9 +98,9 @@ final class AgentsViewController: UIViewController {
         guard let worktree = worktreesByPane[agent.paneKey] else { return [] }
         let entry = Entry(agent: agent, worktree: worktree, session: session, depth: depth)
         let children = branch.children.flatMap { visibleRows($0, depth: depth + 1) }
-        let text = [entry.title, agent.lastAssistantMessage ?? "", worktree.title].joined(separator: " ")
+        let text = [entry.title, agent.lastAssistantMessage ?? "", worktree.title, session.name].joined(separator: " ")
         guard query.isEmpty || text.localizedStandardContains(query) || !children.isEmpty else { return [] }
-        return [(Row(hostId: host.id, worktreeId: worktree.id, paneKey: agent.paneKey), entry)] + children
+        return [(Row(scope: session.cacheNamespace, worktreeId: worktree.id, paneKey: agent.paneKey), entry)] + children
       }
       for branch in Worktree.Agent.lineage(panes, forAgentsTab: true) {
         let family = visibleRows(branch, depth: 0)
@@ -145,7 +144,7 @@ final class AgentsViewController: UIViewController {
       guard let self, let entry = self.entries[row] else { return }
       cell.contentConfiguration = AgentCardConfiguration(
         agent: entry.agent, title: entry.title, state: entry.state, stamp: entry.stamp,
-        workspace: entry.worktree.title, depth: entry.depth)
+        workspace: entry.worktree.title, depth: entry.depth, hostLabel: entry.session.remoteServer?.label)
       var background = UIBackgroundConfiguration.listCell()
       background.backgroundColor = Palette.bgPanel
       cell.backgroundConfiguration = background
@@ -188,10 +187,10 @@ final class AgentsViewController: UIViewController {
     ])
   }
 
-  /// The pane keys of the agents that pass, by their desktop.
+  /// Pane keys grouped by the connection that owns them.
   private func agentKeys(_ passes: (Worktree, Worktree.Agent) -> Bool) -> [(HostSession, [String])] {
-    model.hosts.compactMap { host in
-      guard let session = model.session(for: host.id) else { return nil }
+    model.workspaceSessions.compactMap { session in
+      guard session.connectionState == .connected else { return nil }
       let keys = session.worktrees.filter { !$0.isArchived }.flatMap { worktree in
         worktree.agents.filter { $0.listed != false && passes(worktree, $0) }.map(\.paneKey)
       }
@@ -211,7 +210,7 @@ extension AgentsViewController: UICollectionViewDelegate, UISearchResultsUpdatin
     collectionView.deselectItem(at: indexPath, animated: true)
     guard let row = dataSource.itemIdentifier(for: indexPath), let entry = entries[row] else { return }
     let controller = SessionViewController(
-      session: entry.session, worktreeId: row.worktreeId, sessionId: entry.agent.orcaSessionId, paneKey: row.paneKey)
+      session: entry.session, worktreeId: row.worktreeId, sessionId: entry.agent.workspaceSessionId, paneKey: row.paneKey)
     navigationController?.pushViewController(controller, animated: true)
   }
 }
@@ -224,6 +223,7 @@ struct AgentCardConfiguration: UIContentConfiguration {
   let stamp: Double
   let workspace: String
   let depth: Int
+  var hostLabel: String? = nil
 
   func makeContentView() -> UIView & UIContentView { AgentCardView(configuration: self) }
   func updated(for state: UIConfigurationState) -> AgentCardConfiguration { self }
@@ -292,7 +292,8 @@ private final class AgentCardView: UIView, UIContentView {
     mark.icon = AgentMark.icon(for: agent.agentType)
     mark.isHidden = mark.icon == nil
     let worker = configuration.depth > 0 || agent.listParentPaneKey != nil
-    workspace.text = worker ? "\(WorkspaceAgentRole.worker.title) · \(configuration.workspace)" : configuration.workspace
+    workspace.text = [worker ? WorkspaceAgentRole.worker.title : nil, configuration.workspace, configuration.hostLabel]
+      .compactMap { $0 }.joined(separator: " · ")
     isAccessibilityElement = true
     accessibilityLabel = [configuration.title, detail.text, workspace.text].compactMap { $0 }.joined(separator: ", ")
   }

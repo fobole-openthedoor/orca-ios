@@ -11,6 +11,8 @@ public struct PairedHost: Sendable, Equatable, Codable, Identifiable {
   public var deviceToken: String
   public var publicKeyB64: String
   public var pairedAt: Date
+  /// The Orca store identified by the paired desktop after authentication.
+  public var installationId: String?
   /// Set when the desktop serves this phone through Orca's relay as well.
   public var relay: RelayEndpoint?
   public var relayCredentials: RelayCredentialBundle?
@@ -121,11 +123,17 @@ public actor PairedHostStore {
 
   @discardableResult
   public func update(_ host: PairedHost) throws -> [PairedHost] {
+    try update(host.id) { $0 = host }
+  }
+
+  /// Applies a field update to the latest saved record so overlapping writes preserve each other's data.
+  @discardableResult
+  public func update(_ id: PairedHost.ID, change: @Sendable (inout PairedHost) -> Void) throws -> [PairedHost] {
     var hosts = try hosts()
-    guard let index = hosts.firstIndex(where: { $0.id == host.id }) else {
-      return hosts
-    }
-    hosts[index] = host
+    guard let index = hosts.firstIndex(where: { $0.id == id }) else { return hosts }
+    let previous = hosts[index]
+    change(&hosts[index])
+    guard hosts[index] != previous else { return hosts }
     try save(hosts)
     return hosts
   }

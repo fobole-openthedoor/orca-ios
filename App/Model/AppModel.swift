@@ -46,6 +46,23 @@ final class AppModel {
 
   func session(for id: PairedHost.ID) -> HostSession? { sessions[id] }
 
+  private var pairedSessions: [HostSession] {
+    orderedHosts.compactMap { sessions[$0.id] }
+  }
+
+  var workspaceSessions: [HostSession] {
+    let paired = pairedSessions
+    return paired + HostSession.visibleRemoteServers(paired.flatMap(\.remoteServers), paired: paired)
+  }
+
+  func visibleWorkspaceServers(_ candidates: [HostSession]) -> [HostSession] {
+    HostSession.visibleRemoteServers(candidates, paired: pairedSessions)
+  }
+
+  func workspaceSession(scope: String) -> HostSession? {
+    workspaceSessions.first { $0.cacheNamespace == scope }
+  }
+
   /// Pairs with the desktop that showed `offer`; re-pairing the same desktop replaces its old entry.
   func pair(_ offer: PairingOffer) async throws -> PairedHost {
     let host = try await PairingFlow.pair(offer, name: String(localized: "Desktop"))
@@ -71,7 +88,10 @@ final class AppModel {
 
   /// Edit host: saves the phone's name and address for a desktop; its session redials a new address.
   func update(_ host: PairedHost) async throws {
-    hosts = try await store.update(host)
+    hosts = try await store.update(host.id) {
+      $0.personalName = host.personalName
+      $0.endpoint = host.endpoint
+    }
     sessions[host.id]?.update(host)
   }
 
@@ -83,14 +103,19 @@ final class AppModel {
   private func startSession(for host: PairedHost) {
     guard sessions[host.id] == nil else { return }
     let store = store
-    let session = HostSession(host: host, clientId: clientId) { relay, credentials in
-      Task {
-        guard var saved = try? await store.hosts().first(where: { $0.id == host.id }) else { return }
-        saved.relay = relay
-        saved.relayCredentials = credentials
-        _ = try? await store.update(saved)
-      }
-    }
+    let session = HostSession(
+      host: host, clientId: clientId,
+      onInstallationId: { installationId in
+        Task { try? await store.update(host.id) { $0.installationId = installationId } }
+      },
+      onRelayUpdate: { relay, credentials in
+        Task {
+          try? await store.update(host.id) {
+            $0.relay = relay
+            $0.relayCredentials = credentials
+          }
+        }
+      })
     sessions[host.id] = session
     session.start()
   }

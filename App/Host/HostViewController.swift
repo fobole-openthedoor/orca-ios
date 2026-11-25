@@ -7,6 +7,7 @@ final class HostViewController: UIViewController {
   private enum Section: Hashable {
     case bots
     case project(String)
+    case projectGroup(String)
     /// A lane that isn't a project: `pinned`, `all`, `status:<id>` or `pr:<state>`.
     case lane(String)
   }
@@ -35,19 +36,24 @@ final class HostViewController: UIViewController {
 
   private struct WorkspacePlacement {
     let depth: Int
+    let projectDepth: Int
     let childCount: Int
   }
 
   private let session: HostSession
+  private let model = AppModel.shared
   private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
   private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
   private var collapsed: Set<String> = []
+  private var groupCollapseOverrides: [String: Bool] = [:]
   private var foldedWorktrees: Set<RowID> = []
   private var foldedBots: Set<RowID> = []
   private var placements: [RowID: WorkspacePlacement] = [:]
   private var workspacesByID: [RowID: WorkspaceEntry] = [:]
   private var botsByID: [RowID: (Bot, HostSession)] = [:]
   private var projectNames: [String: String] = [:]
+  private var projectGroups: [String: WorkspaceProjectCatalog.Group] = [:]
+  private var sectionDepths: [Section: Int] = [:]
   private var sectionCounts: [Section: Int] = [:]
   private var query = ""
   private var workspaceView = WorkspaceView()
@@ -177,10 +183,11 @@ final class HostViewController: UIViewController {
   }
 
   private var listingSessions: [HostSession] {
-    [session] + session.remoteServers.filter { source in
+    let candidates = session.remoteServers.filter { source in
       guard let id = source.remoteServer?.id else { return false }
       return workspaceView.visibleHostIds?.contains(id) != false
     }
+    return [session] + model.visibleWorkspaceServers(candidates)
   }
 
   private var workspaceEntries: [WorkspaceEntry] {
@@ -217,7 +224,9 @@ final class HostViewController: UIViewController {
       }
     }.filter { seenBots.insert($0.0).inserted }
     botsByID = Dictionary(bots, uniquingKeysWith: { first, _ in first })
-    let entries = workspaceEntries
+    var seenWorkspaces = Set<RowID>()
+    let entries = workspaceEntries.filter { seenWorkspaces.insert($0.id).inserted }
+    for source in listingSessions { _ = source.remoteServer }
     let knownRepoIds = Set(entries.map(\.worktree.repoId))
     let filtered = entries.filter { entry in
       guard workspaceView.keeps(entry.worktree, knownRepoIds: knownRepoIds) else { return false }
@@ -241,21 +250,26 @@ final class HostViewController: UIViewController {
     placements.removeAll(keepingCapacity: true)
     sectionCounts.removeAll(keepingCapacity: true)
     projectNames.removeAll(keepingCapacity: true)
-    func append(_ branches: [LineageBranch<WorkspaceEntry>], to section: Section, collapsed: Bool) {
+    projectGroups.removeAll(keepingCapacity: true)
+    sectionDepths.removeAll(keepingCapacity: true)
+    func append(_ branches: [LineageBranch<WorkspaceEntry>], to section: Section, collapsed: Bool, depth: Int = 0) {
       snapshot.appendSections([section])
+      sectionDepths[section] = depth
+      let projectDepth: Int
+      if case .projectGroup = section { projectDepth = depth + 1 } else { projectDepth = depth }
       var items: [Item] = []
       var count = 0
-      func visit(_ branch: LineageBranch<WorkspaceEntry>, depth: Int, visible: Bool) {
+      func visit(_ branch: LineageBranch<WorkspaceEntry>, lineageDepth: Int, visible: Bool) {
         let id = branch.entry.id
         count += 1
         if visible {
           items.append(.worktree(id))
-          placements[id] = WorkspacePlacement(depth: depth, childCount: branch.children.count)
+          placements[id] = WorkspacePlacement(depth: lineageDepth, projectDepth: projectDepth, childCount: branch.children.count)
         }
         let showChildren = visible && (!needle.isEmpty || !foldedWorktrees.contains(id))
-        for child in branch.children { visit(child, depth: depth + 1, visible: showChildren) }
+        for child in branch.children { visit(child, lineageDepth: lineageDepth + 1, visible: showChildren) }
       }
-      for root in branches { visit(root, depth: 0, visible: !collapsed) }
+      for root in branches { visit(root, lineageDepth: 0, visible: !collapsed) }
       sectionCounts[section] = count
       snapshot.appendItems(items, toSection: section)
     }
@@ -268,15 +282,50 @@ final class HostViewController: UIViewController {
     lane("pinned", pinned)
     switch workspaceView.groupBy {
     case "repo":
-      let groups = Dictionary(grouping: worktrees, by: \.entry.project.id)
-      for projectId in projectOrder(worktrees, entries: entries) {
-        guard var branches = groups[projectId], let project = branches.first?.entry.project else { continue }
-        projectNames[projectId] = project.name
-        // A project's own checkout leads its group unless the order is manual (section-order.ts).
-        if workspaceView.sortBy != "manual" {
-          branches = branches.filter { $0.entry.worktree.isMainWorktree } + branches.filter { !$0.entry.worktree.isMainWorktree }
+      let catalog = session.workspaceProjects
+      var folders: [String: [LineageBranch<WorkspaceEntry>]] = [:]
+      let projectRows = worktrees.filter { row in
+        guard row.entry.worktree.isFolderWorkspace,
+          let groupID = catalog.folderGroupID(repoId: row.entry.worktree.repoId)
+        else { return true }
+        folders[groupID, default: []].append(row)
+        return false
+      }
+      let rowsByProject = Dictionary(grouping: projectRows, by: \.entry.project.id)
+      let projects = Dictionary(entries.map { ($0.project.id, $0.project) }, uniquingKeysWith: {
+        ($0.order ?? Int.max) <= ($1.order ?? Int.max) ? $0 : $1
+      })
+      let projectList = projectOrder(projectRows, entries: entries).compactMap { projects[$0] }
+      func count(_ section: WorkspaceProjectCatalog.Section) -> Int {
+        switch section {
+        case .project: return 1
+        case .group(let group, let children):
+          return (folders[group.id]?.count ?? 0) + children.reduce(0) { $0 + count($1) }
         }
-        append(branches, to: .project(projectId), collapsed: collapsed.contains(projectId) && needle.isEmpty)
+      }
+      func visit(_ item: WorkspaceProjectCatalog.Section, depth: Int) {
+        switch item {
+        case .group(let group, let children):
+          let total = count(item)
+          guard needle.isEmpty || total > 0 else { return }
+          let section = Section.projectGroup(group.id)
+          projectGroups[group.id] = group
+          let folded = groupIsCollapsed(group)
+          append(folders[group.id] ?? [], to: section, collapsed: folded, depth: depth)
+          sectionCounts[section] = total
+          if !folded { for child in children { visit(child, depth: depth + 1) } }
+        case .project(let project):
+          guard var branches = rowsByProject[project.id] else { return }
+          projectNames[project.id] = project.name
+          // A project's own checkout leads its group unless the order is manual.
+          if workspaceView.sortBy != "manual" {
+            branches = branches.filter { $0.entry.worktree.isMainWorktree } + branches.filter { !$0.entry.worktree.isMainWorktree }
+          }
+          append(branches, to: .project(project.id), collapsed: collapsed.contains(project.id) && needle.isEmpty, depth: depth)
+        }
+      }
+      for root in catalog.sections(projects: projectList, manualOrder: workspaceView.projectOrderBy != "recent") {
+        visit(root, depth: 0)
       }
     case "workspace-status":
       for status in workspaceView.statuses {
@@ -339,7 +388,9 @@ final class HostViewController: UIViewController {
         // Separators start at the row's text (worktree-list-row-layout textInset).
         configuration.bottomSeparatorInsets.leading = WorkspaceRowView.textInset
         if let self, case .worktree(let id) = self.dataSource.itemIdentifier(for: indexPath) {
-          configuration.bottomSeparatorInsets.leading += WorkspaceRowView.indent(depth: self.placements[id]?.depth ?? 0)
+          if let placement = self.placements[id] {
+            configuration.bottomSeparatorInsets.leading += WorkspaceRowView.indent(depth: placement.depth + placement.projectDepth)
+          }
         }
         configuration.bottomSeparatorInsets.trailing = 0
         let section = self?.dataSource.sectionIdentifier(for: indexPath.section)
@@ -358,10 +409,11 @@ final class HostViewController: UIViewController {
     let worktreeCell = UICollectionView.CellRegistration<UICollectionViewListCell, RowID> { [weak self] cell, _, id in
       guard let self, let entry = self.workspacesByID[id] else { return }
       // Grouped by project, the heading already names the project.
-      let projectName = self.workspaceView.groupBy == "repo" ? entry.repoName : nil
+      let projectName = self.workspaceView.groupBy == "repo" ? entry.project.name : nil
       let placement = self.placements[id]
       var configuration = WorkspaceRowConfiguration(
         worktree: entry.worktree, projectName: projectName, depth: placement?.depth ?? 0,
+        projectDepth: placement?.projectDepth ?? 0,
         childCount: placement?.childCount ?? 0, childrenCollapsed: self.foldedWorktrees.contains(id))
       if let server = entry.session.remoteServer {
         let status = HostConnectionPresentation(entry.session.connectionState, server: server)
@@ -371,6 +423,7 @@ final class HostViewController: UIViewController {
       if configuration.childCount > 0, self.query.isEmpty {
         configuration.onToggleChildren = { [weak self] in self?.toggleChildren(of: id) }
       }
+      configuration.onOpenAgent = { [weak self] agent in self?.openWorkspace(id, agent: agent) }
       cell.contentConfiguration = configuration
       var background = UIBackgroundConfiguration.listCell()
       background.backgroundColor = Palette.bgBase
@@ -392,8 +445,14 @@ final class HostViewController: UIViewController {
       case .project(let projectId):
         header.configureProject(
           name: self.projectNames[projectId] ?? projectId, count: self.sectionCounts[section] ?? 0,
-          collapsed: self.collapsed.contains(projectId) && self.query.isEmpty
+          collapsed: self.collapsed.contains(projectId) && self.query.isEmpty, depth: self.sectionDepths[section] ?? 0
         ) { [weak self] in self?.toggle(projectId) }
+      case .projectGroup(let id):
+        guard let group = self.projectGroups[id] else { return }
+        header.configureProject(
+          name: group.name, count: self.sectionCounts[section] ?? 0,
+          collapsed: self.groupIsCollapsed(group), depth: self.sectionDepths[section] ?? 0
+        ) { [weak self] in self?.toggleGroup(id) }
       case .lane(let key):
         header.configureLane(title: self.laneTitle(key), count: self.sectionCounts[section] ?? 0, pinned: key == "pinned", collapsed: self.collapsed.contains(key) && self.query.isEmpty) {
           [weak self] in self?.toggleLane(key)
@@ -499,6 +558,17 @@ final class HostViewController: UIViewController {
     applySnapshot()
   }
 
+  private func groupIsCollapsed(_ group: WorkspaceProjectCatalog.Group) -> Bool {
+    query.isEmpty && (groupCollapseOverrides[group.id] ?? group.isCollapsed)
+  }
+
+  private func toggleGroup(_ id: String) {
+    guard query.isEmpty, let group = projectGroups[id] else { return }
+    Haptics.select()
+    groupCollapseOverrides[id] = !groupIsCollapsed(group)
+    applySnapshot()
+  }
+
   // MARK: Menus
 
   /// The ⋯ menu (host-screen-header.tsx): this desktop's pages, then the saved host's own settings.
@@ -579,6 +649,12 @@ final class HostViewController: UIViewController {
     push(floating)
   }
 
+  private func openWorkspace(_ id: RowID, agent: Worktree.Agent? = nil) {
+    guard let entry = workspacesByID[id] else { return }
+    push(SessionViewController(
+      session: entry.session, worktreeId: entry.worktree.id, sessionId: agent?.workspaceSessionId, paneKey: agent?.paneKey))
+  }
+
 }
 
 extension HostViewController: UICollectionViewDelegate, UISearchResultsUpdating {
@@ -592,9 +668,7 @@ extension HostViewController: UICollectionViewDelegate, UISearchResultsUpdating 
     collectionView.deselectItem(at: indexPath, animated: true)
     switch dataSource.itemIdentifier(for: indexPath) {
     case .worktree(let id):
-      if let entry = workspacesByID[id] {
-        push(SessionViewController(session: entry.session, worktreeId: entry.worktree.id))
-      }
+      openWorkspace(id)
     case .bot(let id), .botHome(let id):
       if let (bot, source) = botsByID[id] {
         BotDirectory.open(bot, in: source, from: navigationController)

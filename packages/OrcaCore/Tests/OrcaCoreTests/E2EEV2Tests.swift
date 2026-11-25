@@ -269,4 +269,19 @@ final class MemoryStorage: SecretStorage, @unchecked Sendable {
 
     #expect(try await store.remove(laptop.id).map(\.id) == [again.id])
   }
+
+  @Test func learnsIdentityWithoutOverwritingHostSettings() async throws {
+    let storage = MemoryStorage()
+    let store = PairedHostStore(storage: storage)
+    let host = PairedHost(name: "Studio", offer: Self.offer(key: 1))
+    try await store.add(host)
+    #expect(try await PairedHostStore(storage: storage).hosts().first?.installationId == nil)
+
+    try await store.update(host.id) { $0.installationId = "studio-store" }
+    try await store.update(host.id) { $0.personalName = "Edited name" }
+    let saved = try #require(try await PairedHostStore(storage: storage).hosts().first)
+    #expect(saved.installationId == "studio-store")
+    #expect(saved.personalName == "Edited name")
+    #expect(saved.deviceToken == host.deviceToken)
+  }
 }

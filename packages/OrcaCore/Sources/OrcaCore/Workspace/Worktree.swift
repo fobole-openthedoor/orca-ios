@@ -23,7 +23,8 @@ public struct Worktree: Sendable, Equatable, Identifiable {
     public var lastAssistantMessage: String?
     public var toolName: String?
     public var orcaSessionId: String?
-    var structuredSessionId: String?
+    public private(set) var structuredSessionId: String?
+    public var workspaceSessionId: String? { structuredSessionId ?? orcaSessionId }
     public var parentPaneKey: String?
     /// The pane's own state, before the host rolls its child work into the pane status.
     public var mainState: String?

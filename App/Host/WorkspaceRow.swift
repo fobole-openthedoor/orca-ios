@@ -76,11 +76,13 @@ struct WorkspaceRowConfiguration: UIContentConfiguration {
   /// reads as its branch (or "Project folder") instead of repeating the heading.
   var projectName: String? = nil
   var depth = 0
+  var projectDepth = 0
   var childCount = 0
   var childrenCollapsed = false
   var onToggleChildren: (() -> Void)? = nil
   var hostLabel: String? = nil
   var hostStatus: HostConnectionPresentation? = nil
+  var onOpenAgent: ((Worktree.Agent) -> Void)? = nil
 
   func makeContentView() -> UIView & UIContentView { WorkspaceRowView(configuration: self) }
   func updated(for state: UIConfigurationState) -> WorkspaceRowConfiguration { self }
@@ -127,7 +129,7 @@ final class WorkspaceRowView: UIView, UIContentView {
     glyphs.alignment = .center
     agents.axis = .vertical
     agents.spacing = 0
-    let nameRow = UIStackView(arrangedSubviews: [name, glyphs, UIView(), terminalCount, disclosure])
+    let nameRow = UIStackView(arrangedSubviews: [name, glyphs, hostMetadata, UIView(), terminalCount, disclosure])
     nameRow.axis = .horizontal
     nameRow.spacing = Spacing.sm
     nameRow.alignment = .center
@@ -136,16 +138,15 @@ final class WorkspaceRowView: UIView, UIContentView {
     hostMetadata.spacing = 4
     hostMetadata.addArrangedSubview(LucideView(.server, size: 11, strokeWidth: 1.7, color: Palette.textMuted))
     hostMetadata.addArrangedSubview(hostLabel)
-    hostMetadata.addArrangedSubview(hostHealth)
-    hostMetadata.addArrangedSubview(UIView())
     hostLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    let main = UIStackView(arrangedSubviews: [nameRow, hostMetadata, agents])
+    hostLabel.lineBreakMode = .byTruncatingTail
+    let main = UIStackView(arrangedSubviews: [nameRow, hostHealth, agents])
     main.axis = .vertical
     main.translatesAutoresizingMaskIntoConstraints = false
     addSubview(indicator)
     addSubview(branch)
     addSubview(main)
-    name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    name.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
     terminalCount.setContentCompressionResistancePriority(.required, for: .horizontal)
     disclosure.setContentCompressionResistancePriority(.required, for: .horizontal)
     disclosure.addAction(UIAction { [weak self] _ in
@@ -160,6 +161,7 @@ final class WorkspaceRowView: UIView, UIContentView {
       branch.trailingAnchor.constraint(equalTo: indicator.leadingAnchor, constant: -3),
       branch.centerYAnchor.constraint(equalTo: name.centerYAnchor),
       textLeading,
+      hostLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 96),
       main.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.lg),
       main.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.md),
       main.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.md),
@@ -172,7 +174,7 @@ final class WorkspaceRowView: UIView, UIContentView {
   private func apply() {
     guard let configuration = configuration as? WorkspaceRowConfiguration else { return }
     let worktree = configuration.worktree
-    let indent = Self.indent(depth: configuration.depth)
+    let indent = Self.indent(depth: configuration.depth + configuration.projectDepth)
     indicatorX.constant = 2 + Spacing.lg + 10 + indent
     textLeading.constant = Self.textInset + indent
     branch.isHidden = configuration.depth == 0
@@ -190,7 +192,7 @@ final class WorkspaceRowView: UIView, UIContentView {
     hostLabel.text = configuration.hostLabel
     hostHealth.isHidden = configuration.hostStatus == nil
     hostHealth.textColor = configuration.hostStatus?.labelColor ?? Palette.textMuted
-    hostHealth.text = configuration.hostStatus.map { "· \($0.label)" }
+    hostHealth.text = configuration.hostStatus?.label
 
     glyphs.arrangedSubviews.forEach { $0.removeFromSuperview() }
     if !worktree.comment.isEmpty { glyphs.addArrangedSubview(LucideView(.stickyNote, size: 13, strokeWidth: 2, color: Palette.textMuted)) }
@@ -202,6 +204,7 @@ final class WorkspaceRowView: UIView, UIContentView {
 
     agents.arrangedSubviews.forEach { $0.removeFromSuperview() }
     var labels: [String] = []
+    var agentActions: [UIAccessibilityCustomAction] = []
     func addChild(_ branch: AgentBranch<Worktree.Agent.Child>, depth: Int) {
       let child = branch.entry
       let label = child.label ?? WorkspaceAgentRole.subagent.title
@@ -214,9 +217,16 @@ final class WorkspaceRowView: UIView, UIContentView {
     func addAgent(_ branch: AgentBranch<Worktree.Agent>, depth: Int) {
       let agent = branch.entry
       let role: WorkspaceAgentRole? = agent.parentPaneKey != nil ? .worker : nil
+      let open = configuration.onOpenAgent.map { handler in { handler(agent) } }
       agents.addArrangedSubview(AgentLineView(
         title: agent.title, role: role, detail: agent.lastAssistantMessage, state: agent.mainState ?? agent.state,
-        agentType: agent.agentType, updatedAt: agent.updatedAt, depth: depth))
+        agentType: agent.agentType, updatedAt: agent.updatedAt, depth: depth, onOpen: open))
+      if let open {
+        agentActions.append(UIAccessibilityCustomAction(name: agent.title) { _ in
+          open()
+          return true
+        })
+      }
       labels.append([role?.title, agent.title].compactMap { $0 }.joined(separator: ", "))
       for child in agent.childLineage { addChild(child, depth: depth + 1) }
       for worker in branch.children { addAgent(worker, depth: depth + 1) }
@@ -226,6 +236,7 @@ final class WorkspaceRowView: UIView, UIContentView {
     agents.isHidden = labels.isEmpty
     glyphs.isHidden = glyphs.arrangedSubviews.isEmpty
     configureDisclosure(configuration)
+    accessibilityCustomActions = (accessibilityCustomActions ?? []) + agentActions
     isAccessibilityElement = true
     if configuration.depth > 0 {
       labels.insert(String(localized: "components.worktreeListRow.child", defaultValue: "Child workspace"), at: 0)
@@ -266,9 +277,14 @@ final class WorkspaceRowView: UIView, UIContentView {
 
 /// One agent under its workspace (worktree/agent-lineage/presentation/WorktreeAgentRow.tsx): dot, mark,
 /// "title · last message", and how long ago.
-private final class AgentLineView: UIView {
-  init(title: String, role: WorkspaceAgentRole?, detail: String?, state: String, agentType: String?, updatedAt: Double?, depth: Int) {
+private final class AgentLineView: UIControl {
+  init(
+    title: String, role: WorkspaceAgentRole?, detail: String?, state: String, agentType: String?, updatedAt: Double?, depth: Int,
+    onOpen: (() -> Void)? = nil
+  ) {
     super.init(frame: .zero)
+    isUserInteractionEnabled = onOpen != nil
+    if let onOpen { addAction(UIAction { _ in onOpen() }, for: .touchUpInside) }
     let dot = UIView()
     dot.translatesAutoresizingMaskIntoConstraints = false
     dot.backgroundColor = AgentStatusDot.color(for: state)
@@ -292,6 +308,7 @@ private final class AgentLineView: UIView {
     row.spacing = Spacing.xs + 2
     row.alignment = .center
     row.setCustomSpacing(Spacing.md, after: text)
+    row.isUserInteractionEnabled = false
     row.translatesAutoresizingMaskIntoConstraints = false
     addSubview(row)
     NSLayoutConstraint.activate([
@@ -358,6 +375,7 @@ final class WorkspaceSectionHeader: UICollectionReusableView {
     leading = row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2 + Spacing.lg + 3)
     NSLayoutConstraint.activate([
       leading,
+      row.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -48),
       row.topAnchor.constraint(equalTo: topAnchor, constant: Spacing.md),
       row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Spacing.sm),
       add.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Spacing.sm),
@@ -393,7 +411,7 @@ final class WorkspaceSectionHeader: UICollectionReusableView {
     pin.isHidden = !pinned
   }
 
-  func configureProject(name: String, count rowCount: Int, collapsed: Bool, onTap: @escaping () -> Void) {
+  func configureProject(name: String, count rowCount: Int, collapsed: Bool, depth: Int = 0, onTap: @escaping () -> Void) {
     chevron.isHidden = false
     folder.isHidden = false
     pin.isHidden = true
@@ -401,7 +419,7 @@ final class WorkspaceSectionHeader: UICollectionReusableView {
     title.text = name
     count.text = "\(rowCount)"
     add.isHidden = true
-    leading.constant = 2 + Spacing.lg + 3
+    leading.constant = 2 + Spacing.lg + 3 + WorkspaceRowView.indent(depth: depth)
     self.onTap = onTap
     accessibilityTraits = [.header, .button]
   }

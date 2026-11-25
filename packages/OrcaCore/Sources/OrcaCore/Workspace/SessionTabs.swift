@@ -1,4 +1,12 @@
+import CryptoKit
 import Foundation
+
+/// Control frames and unpublished tab inventories cannot replace the displayed tabs.
+public func hasSessionTabsSnapshot(_ json: JSONValue) -> Bool {
+  if json["removed"]?.boolValue == true { return true }
+  let epoch = json["publicationEpoch"]?.stringValue
+  return json["tabs"]?.arrayValue != nil && epoch != "none" && epoch != "none:client-navigation"
+}
 
 /// One tab of a workspace's session, from `session.tabs.subscribe`.
 public struct SessionTab: Sendable, Equatable, Identifiable {
@@ -24,6 +32,7 @@ public struct SessionTab: Sendable, Equatable, Identifiable {
   public private(set) var terminalChat: TerminalChatSource?
   public private(set) var prefersTerminalChat = false
   private var terminalAgentReported = false
+  fileprivate var terminalPaneKey: String?
   /// The desktop's terminal palette (xterm theme keys: background, foreground, cursor, black … brightWhite).
   public var terminalColors: [String: String]?
   /// For browser tabs: the page's address and navigation state, which change without changing the tab.
@@ -44,6 +53,11 @@ public struct SessionTab: Sendable, Equatable, Identifiable {
     switch type {
     case "terminal":
       kind = .terminal(handle: json["terminal"]?.stringValue)
+      if let parent = json["parentTabId"]?.stringValue ?? json["id"]?.stringValue,
+        let leaf = json["leafId"]?.stringValue
+      {
+        terminalPaneKey = "\(parent):\(leaf)"
+      }
       terminalChat = TerminalChatSource(tab: json)
       prefersTerminalChat = json["viewMode"]?.stringValue == "chat"
       terminalAgentReported = json["agentStatus"]?.objectValue != nil
@@ -126,17 +140,41 @@ public struct SessionTabs: Sendable, Equatable {
     }
   }
 
-  /// Structured chats have a stable session ID. A terminal pane identifies the tab before its leaf ID.
+  public var activeTab: SessionTab? {
+    tabs.first { $0.id == activeTabId } ?? tabs.first(where: \.isActive) ?? tabs.first
+  }
+
+  /// Structured chats have a stable session ID. The host projects each split terminal leaf as its own tab.
   public func agentTab(sessionId: String?, paneKey: String?) -> SessionTab? {
-    if let sessionId, let chat = tabs.first(where: {
-      if case .agentSession(let id, _) = $0.kind { return id == sessionId }
+    let prefix = "orca_session_id:"
+    let key = sessionId.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }
+    let paneSession = Self.structuredSessionID(forPaneKey: paneKey)
+    if let chat = tabs.first(where: {
+      if case .agentSession(let id, _) = $0.kind { return id == key || id == paneSession }
       return false
     }) {
       return chat
     }
-    guard let paneKey, let separator = paneKey.lastIndex(of: ":") else { return nil }
+    guard let paneKey else { return nil }
+    if let exact = tabs.first(where: { $0.id == paneKey || $0.terminalPaneKey == paneKey }) { return exact }
+    guard let separator = paneKey.lastIndex(of: ":") else { return nil }
     let tabId = paneKey[..<separator]
-    return tabs.first { $0.id == tabId }
+    return tabs.first { $0.id == tabId && $0.terminalPaneKey == nil }
+  }
+
+  /// A slot-based chat can keep the same pane address after its visible tab ID changes.
+  public static func structuredSessionID(forPaneKey paneKey: String?) -> String? {
+    let prefix = "structured-agent-session-"
+    guard let paneKey, paneKey.hasPrefix(prefix), let colon = paneKey.firstIndex(of: ":") else { return nil }
+    let sessionID = String(paneKey[..<colon].dropFirst(prefix.count))
+    guard !sessionID.isEmpty, sessionID.utf8.count <= 256 else { return nil }
+    let hex = SHA256.hash(data: Data(sessionID.utf8)).prefix(16).flatMap { [Int($0 >> 4), Int($0 & 15)] }
+    let digits = Array("0123456789abcdef")
+    var leaf = hex.map { digits[$0] }
+    leaf[12] = "4"
+    leaf[16] = "a"
+    for index in [20, 16, 12, 8] { leaf.insert("-", at: index) }
+    return paneKey[paneKey.index(after: colon)...] == String(leaf) ? sessionID : nil
   }
 }
 
@@ -150,6 +188,7 @@ public struct HostStatus: Sendable, Equatable {
   public var hostModel: String?
   public var capabilities: Set<String>
   public var pairedDeviceId: String?
+  public var installationId: String?
   /// The desktop has its Floating Workspace turned on (host-status-gates.ts): only an explicit true counts.
   public var floatingWorkspaceEnabled: Bool
 
@@ -160,6 +199,8 @@ public struct HostStatus: Sendable, Equatable {
     hostKind = json["hostMachine"]?["kind"]?.stringValue
     hostModel = json["hostMachine"]?["model"]?.stringValue
     pairedDeviceId = json["pairedDeviceId"]?.stringValue
+    let reportedInstallationId = json["hostDescriptor"]?["installationId"]?.stringValue
+    installationId = reportedInstallationId.flatMap { $0.isEmpty ? nil : $0 }
     floatingWorkspaceEnabled = json["floatingWorkspaceEnabled"]?.boolValue == true
     // One bad entry drops the whole list, as the official client does: a partial list would
     // silently disable features the host does have.

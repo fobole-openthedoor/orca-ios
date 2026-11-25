@@ -10,10 +10,12 @@ public final class HostSession {
   public private(set) var host: PairedHost
   public let api: HostAPI
   public let cacheNamespace: String
+  public private(set) var installationId: String?
   public private(set) var remoteServers: [HostSession] = []
   public private(set) var workspaceProjects = WorkspaceProjectCatalog()
   public private(set) var remoteServer: RemoteOrcaServer?
   @ObservationIgnored private weak var desktop: HostSession?
+  @ObservationIgnored private let onInstallationId: (@Sendable (String) -> Void)?
 
   public private(set) var connectionState: ConnectionState = .disconnected
   public private(set) var status: HostStatus?
@@ -49,10 +51,13 @@ public final class HostSession {
   public init(
     host: PairedHost, clientId: String, dialer: any WebSocketDialer = URLSessionWebSocketDialer(),
     logStore: PersistedConnectionLog? = .shared,
+    onInstallationId: (@Sendable (String) -> Void)? = nil,
     onRelayUpdate: (@Sendable (RelayEndpoint, RelayCredentialBundle) -> Void)? = nil
   ) {
     self.host = host
     self.logStore = logStore
+    self.onInstallationId = onInstallationId
+    installationId = host.installationId
     cacheNamespace = host.id.uuidString
     connectionLog = PersistedConnectionLog.merge(stored: logStore?.load(hostId: host.id.uuidString) ?? [], live: [])
     var configuration = host.connectionConfiguration
@@ -65,6 +70,8 @@ public final class HostSession {
   private init(desktop: HostSession, server: RemoteOrcaServer) {
     self.desktop = desktop
     remoteServer = server
+    installationId = server.installationId
+    onInstallationId = nil
     let host = desktop.host
     self.host = host
     logStore = nil
@@ -215,6 +222,26 @@ public final class HostSession {
     repos.first { $0.id == id }
   }
 
+  /// Directly paired stores own their rows. For a store reached only through relays, prefer the route
+  /// that has read a live workspace list, keeping the caller's order when routes are equally usable.
+  public static func visibleRemoteServers(_ candidates: [HostSession], paired: [HostSession]) -> [HostSession] {
+    let pairedIds = Set(paired.compactMap(\.installationId))
+    func availability(_ server: HostSession) -> Int {
+      if server.hasLiveWorktrees { return 2 }
+      return server.connectionState == .connected ? 1 : 0
+    }
+    var selected: [String: HostSession] = [:]
+    for server in candidates {
+      guard let id = server.installationId, !pairedIds.contains(id) else { continue }
+      if let prior = selected[id], availability(prior) >= availability(server) { continue }
+      selected[id] = server
+    }
+    return candidates.filter { server in
+      guard let id = server.installationId else { return true }
+      return selected[id] === server
+    }
+  }
+
   /// The name this phone gave the desktop, else the one it reports.
   public var name: String {
     remoteServer?.label ?? host.personalName ?? status?.machineName ?? host.name
@@ -310,6 +337,10 @@ public final class HostSession {
       guard let status = try? await api.status(), isCurrent(connectedAt) else { return }
       statusFetchedAt = connectedAt
       self.status = status
+      if let id = status.installationId, id != installationId {
+        installationId = id
+        onInstallationId?(id)
+      }
     }
     guard status?.supports(HostCapability.desktopRelay) == true else {
       remoteServers = []
@@ -324,7 +355,8 @@ public final class HostSession {
       let session = previous[server.route] ?? HostSession(desktop: self, server: server)
       if session.remoteServer != server { session.remoteServer = server }
       let state: ConnectionState = server.availability == .ready ? .connected
-        : (["connecting", "provisioning", "waking"].contains(server.health) ? .connecting : .disconnected)
+        : (server.availability == .unavailable && ["available", "connecting", "provisioning", "waking"].contains(server.health)
+           ? .connecting : .disconnected)
       session.applyRemoteConnection(state)
       return session
     }
@@ -332,7 +364,7 @@ public final class HostSession {
     for (route, session) in previous where !routes.contains(route) { session.applyRemoteConnection(.disconnected) }
     if remoteServers.map(\.remoteServer?.route) != next.map(\.remoteServer?.route) { remoteServers = next }
 
-    async let projects = listed.isEmpty ? WorkspaceProjectCatalog() : (try? api.workspaceProjects())
+    async let projects = try? api.workspaceProjects()
 
     // The desktop can return its last catalog even while a server is offline.
     let api = api

@@ -91506,6 +91506,52 @@
         }
       }
     },
+    "orcaios.session.agentTabUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The agent’s tab is unavailable"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂时无法打开这个智能体的标签页"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暫時無法開啟這個代理的分頁"
+          }
+        }
+      }
+    },
+    "orcaios.session.loadTabsFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not load workspace tabs"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载工作区标签页"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法載入工作區分頁"
+          }
+        }
+      }
+    },
     "orcaios.session.tabUnsupported": {
       "extractionState": "manual",
       "localizations": {

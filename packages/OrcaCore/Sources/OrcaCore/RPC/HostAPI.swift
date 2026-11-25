@@ -92,7 +92,6 @@ public struct HostAPI: Sendable {
     return ((reply["repos"]?.arrayValue ?? []).compactMap(Repo.init), reply)
   }
 
-  /// Tells the desktop this workspace was opened; nobody waits for the answer.
   /// Makes a workspace in a project (`worktree.create`) and returns its id. A name the user typed is kept as
   /// its display name; an agent, when given, starts in it.
   public func createWorktree(repoId: String, name: String, agent: String?) async throws -> String? {
@@ -108,8 +107,9 @@ public struct HostAPI: Sendable {
     return result["worktree"]?["id"]?.stringValue
   }
 
+  /// Tells the runtime this client opened a workspace, without switching other clients' workspaces.
   public func activate(worktree selector: String) async {
-    await connection.notify("worktree.activate", ["worktree": .string(selector)])
+    await connection.notify("worktree.activate", ["worktree": .string(selector), "notifyClients": false])
   }
 
   public func setPinned(_ pinned: Bool, worktree selector: String) async throws {
@@ -135,6 +135,14 @@ public struct HostAPI: Sendable {
 
   // MARK: Tabs
 
+  public func tabsSnapshot(worktree selector: String) async throws -> JSONValue {
+    let reply = try await connection.request("session.tabs.list", ["worktree": .string(selector)], timeout: .seconds(8))
+    guard reply["tabs"]?.arrayValue != nil || reply["removed"]?.boolValue == true else {
+      throw RPCError(code: "invalid_response", message: "", data: nil)
+    }
+    return reply
+  }
+
   public func tabs(worktree selector: String) async -> RPCSubscription {
     await connection.subscribe(
       "session.tabs.subscribe", ["worktree": .string(selector)],
@@ -144,8 +152,17 @@ public struct HostAPI: Sendable {
       })
   }
 
-  public func activateTab(_ tabId: String, worktree selector: String) async {
-    await connection.notify("session.tabs.activate", ["worktree": .string(selector), "tabId": .string(tabId)])
+  public func activateTab(_ tabId: String, worktree selector: String) async throws -> JSONValue {
+    try await connection.request(
+      "session.tabs.activate", ["worktree": .string(selector), "tabId": .string(tabId), "notifyClients": false, "navigation": "caller"])
+  }
+
+  /// Make an existing host-owned chat visible again after the host dropped its tab.
+  public func revealChat(sessionId: String, in worktreeId: String) async throws -> Bool {
+    let reply = try await connection.request(
+      "agentSession.reveal", ["sessionId": .string(sessionId), "navigation": "caller"], timeout: .seconds(12))
+    return reply["ok"]?.boolValue == true
+      && reply["sessionId"] == .string(sessionId) && reply["workspaceId"] == .string(worktreeId)
   }
 
   public func closeTab(_ tabId: String, worktree selector: String) async throws {

@@ -169,7 +169,10 @@ final class RelayUpdates: @unchecked Sendable {
       let params = request["params"] ?? .null
       switch request["method"]?.stringValue {
       case "status.get":
-        socket.succeed(request, ["machineName": "Studio", "capabilities": ["pairing.ticket-exchange.v1"]])
+        socket.succeed(request, [
+          "machineName": "Studio", "capabilities": ["pairing.ticket-exchange.v1"],
+          "hostDescriptor": ["installationId": "studio-store"],
+        ])
       case "pairing.provisionRelay":
         installedHash.set(params["newResumeTokenHash"]?.stringValue)
         socket.succeed(request, ["v": 1, "reqId": params["reqId"] ?? .null, "authorizationMode": "relay-basis", "currentVersion": 1,
@@ -204,6 +207,7 @@ final class RelayUpdates: @unchecked Sendable {
 
     let paired = try await PairingFlow.pair(offer, name: "Desktop", dialer: host, timeout: .seconds(5))
     #expect(paired.name == "Studio")
+    #expect(paired.installationId == "studio-store")
     #expect(paired.relay?.cellUrl == "https://cell-9.test")
     let credentials = try #require(paired.relayCredentials)
     #expect(credentials.current.hash == installedHash.get())

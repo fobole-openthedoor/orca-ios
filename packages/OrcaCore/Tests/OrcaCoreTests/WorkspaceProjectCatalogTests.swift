@@ -36,6 +36,38 @@ import Testing
     #expect(local.name == remote.name)
   }
 
+  @Test func preservesNestedGroupsManualPlacementAndUngroupedProjects() throws {
+    let catalog = try #require(WorkspaceProjectCatalog([
+      "projectGroups": [
+        ["id": "team", "name": "Team", "rootProjectOrder": 500, "isCollapsed": true],
+        ["id": "server", "name": "Server", "parentGroupId": "team"],
+        ["id": "cycle", "name": "Cycle", "parentGroupId": "cycle"],
+      ],
+      "repos": [
+        ["id": "base", "displayName": "Base"],
+        ["id": "remote", "displayName": "Remote", "executionHostId": "runtime:server", "projectGroupId": "server"],
+        ["id": "orphan", "displayName": "Orphan", "projectGroupId": "missing"],
+      ],
+      "projects": [], "setups": [],
+    ]))
+    let base = catalog.project(hostId: "local", repoId: "base", fallbackName: "Base")
+    let remote = catalog.project(hostId: "runtime:server", repoId: "remote", fallbackName: "Remote")
+    let orphan = catalog.project(hostId: "local", repoId: "orphan", fallbackName: "Orphan")
+    let roots = catalog.sections(projects: [orphan, remote, base], manualOrder: true)
+    #expect(roots.count == 4)
+    #expect(roots[1] == .project(base))
+    #expect(roots[3] == .project(orphan))
+    guard case .group(let team, let children) = roots[2], case .group(let server, let projects)? = children.first else {
+      Issue.record("Expected the server group nested under the team group")
+      return
+    }
+    #expect(team.isCollapsed)
+    #expect(server.id == "server")
+    #expect(projects == [.project(remote)])
+    #expect(catalog.folderGroupID(repoId: "folder-workspace:server") == "server")
+    #expect(catalog.folderGroupID(repoId: "folder-workspace:missing") == nil)
+  }
+
   private func repo(_ id: String, host: String) -> JSONValue {
     ["id": .string(id), "executionHostId": .string(host), "displayName": "Code"]
   }

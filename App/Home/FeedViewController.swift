@@ -7,7 +7,7 @@ final class FeedViewController: UIViewController {
   private enum Section: Hashable { case working, bots, desktops, tasks }
   private enum Item: Hashable {
     /// A workspace whose agent is working or waiting on you, on any desktop: one tap back into it.
-    case working(hostId: PairedHost.ID, worktreeId: String)
+    case working(scope: String, worktreeId: String)
     case bot(BotKey)
     case host(PairedHost.ID)
     case pair
@@ -52,13 +52,13 @@ final class FeedViewController: UIViewController {
     var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
     // Work in progress leads, newest first; a bot's home is in its own row below.
     var working: [(Item, Double)] = []
-    for host in hosts {
-      guard let session = model.session(for: host.id) else { continue }
+    for session in model.workspaceSessions {
+      _ = session.connectionState
       let homes = Set(session.bots.bots.map(\.homeWorktreeId))
       for worktree in session.worktrees where !worktree.isArchived && !homes.contains(worktree.id) {
         guard worktree.isWorking || worktree.needsAttention else { continue }
         let stamp = worktree.agents.compactMap(\.updatedAt).max() ?? worktree.lastActivityAt ?? 0
-        working.append((.working(hostId: host.id, worktreeId: worktree.id), stamp))
+        working.append((.working(scope: session.cacheNamespace, worktreeId: worktree.id), stamp))
       }
     }
     if !working.isEmpty {
@@ -164,10 +164,17 @@ final class FeedViewController: UIViewController {
       cell.backgroundConfiguration = Self.rowBackground()
     }
     let workingCell = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, item in
-      guard let self, case .working(let hostId, let worktreeId) = item,
-        let worktree = self.model.session(for: hostId)?.worktree(id: worktreeId)
+      guard let self, case .working(let scope, let worktreeId) = item,
+        let session = self.model.workspaceSession(scope: scope), let worktree = session.worktree(id: worktreeId)
       else { return }
-      cell.contentConfiguration = WorkspaceRowConfiguration(worktree: worktree)
+      var configuration = WorkspaceRowConfiguration(worktree: worktree, hostLabel: session.remoteServer?.label)
+      if let server = session.remoteServer, session.connectionState != .connected {
+        configuration.hostStatus = HostConnectionPresentation(session.connectionState, server: server)
+      }
+      configuration.onOpenAgent = { [weak self] agent in
+        self?.openWorkspace(scope: scope, worktreeId: worktreeId, agent: agent)
+      }
+      cell.contentConfiguration = configuration
       cell.backgroundConfiguration = Self.rowBackground()
     }
     dataSource = UICollectionViewDiffableDataSource(collectionView: collection) { collection, indexPath, item in
@@ -209,6 +216,13 @@ final class FeedViewController: UIViewController {
     guard let session = model.session(for: id) else { return }
     navigationController?.pushViewController(HostViewController(session: session), animated: true)
   }
+
+  private func openWorkspace(scope: String, worktreeId: String, agent: Worktree.Agent? = nil) {
+    guard let session = model.workspaceSession(scope: scope) else { return }
+    let controller = SessionViewController(
+      session: session, worktreeId: worktreeId, sessionId: agent?.workspaceSessionId, paneKey: agent?.paneKey)
+    navigationController?.pushViewController(controller, animated: true)
+  }
 }
 
 extension FeedViewController: UICollectionViewDelegate {
@@ -216,9 +230,8 @@ extension FeedViewController: UICollectionViewDelegate {
     Haptics.select()
     collectionView.deselectItem(at: indexPath, animated: true)
     switch dataSource.itemIdentifier(for: indexPath) {
-    case .working(let hostId, let worktreeId):
-      guard let session = model.session(for: hostId) else { return }
-      navigationController?.pushViewController(SessionViewController(session: session, worktreeId: worktreeId), animated: true)
+    case .working(let scope, let worktreeId):
+      openWorkspace(scope: scope, worktreeId: worktreeId)
     case .bot(let key):
       if let (bot, session) = botRows[key] { BotDirectory.open(bot, in: session, from: navigationController) }
     case .host(let id): openHost(id)

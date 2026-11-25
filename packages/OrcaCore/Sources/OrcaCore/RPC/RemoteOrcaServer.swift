@@ -15,6 +15,7 @@ public struct RemoteOrcaServer: Sendable, Equatable {
 
   let route: Route
   public var id: String { route.hostId }
+  public var installationId: String? { route.installationId }
   public let label: String
   public let health: String
   public let availability: Availability
@@ -23,7 +24,8 @@ public struct RemoteOrcaServer: Sendable, Equatable {
     guard let id = json["hostId"]?.stringValue, id.hasPrefix("runtime:"), id.count > "runtime:".count,
       id.utf8.count <= 1024
     else { return nil }
-    route = Route(hostId: id, installationId: json["installationId"]?.stringValue)
+    let installationId = json["installationId"].flatMap(\.stringValue).flatMap { $0.isEmpty ? nil : $0 }
+    route = Route(hostId: id, installationId: installationId)
     label = json["label"]?.stringValue ?? id
     health = json["health"]?.stringValue ?? "disconnected"
     availability = json["relay"]?.stringValue.flatMap(Availability.init(rawValue:)) ?? .unavailable

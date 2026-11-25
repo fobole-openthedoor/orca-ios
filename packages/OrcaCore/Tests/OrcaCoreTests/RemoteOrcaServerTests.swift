@@ -9,6 +9,66 @@ import Testing
     "hostId": serverId, "label": "Build server", "health": "available", "relay": "ready", "installationId": "server-store",
   ]
 
+  @Test func prefersAnExplicitPairingAndOtherwiseChoosesOneLiveRelayPerInstallation() async throws {
+    let relay = FakeHost { request, socket in
+      switch request["method"]?.stringValue {
+      case "status.get":
+        socket.succeed(request, ["capabilities": [.string(HostCapability.desktopRelay)]])
+      case "mobileRelay.hosts.list":
+        socket.succeed(request, ["hosts": [
+          ["hostId": "runtime:offline", "label": "Build server", "relay": "unavailable", "installationId": "server-store"],
+          Self.server,
+          ["hostId": "runtime:other", "label": "Build server", "relay": "ready", "installationId": "another-store"],
+          ["hostId": "runtime:unknown", "label": "Build server", "relay": "ready", "installationId": ""],
+        ]])
+      case "mobileRelay.hosts.worktrees":
+        let host = request["params"]?["hostId"] ?? .null
+        socket.succeed(request, ["worktrees": host == "runtime:offline" ? .null : [
+          ["hostId": host, "worktreeId": "same-id", "repoId": "repo"],
+        ]])
+      default:
+        socket.succeed(request, [:])
+      }
+    }
+    let direct = FakeHost { request, socket in
+      switch request["method"]?.stringValue {
+      case "status.get":
+        socket.succeed(request, ["hostDescriptor": ["installationId": "server-store"]])
+      default:
+        socket.succeed(request, [:])
+      }
+    }
+    func pairing(_ host: FakeHost) -> PairedHost {
+      PairedHost(name: "Build server", offer: PairingOffer(
+        endpoint: "ws://host.test:6768", deviceToken: "token", publicKeyB64: host.publicKeyB64))
+    }
+    let a = HostSession(host: pairing(relay), clientId: "phone", dialer: relay, logStore: nil)
+    let learned = LockedBox<String?>(nil)
+    let b = HostSession(host: pairing(direct), clientId: "phone", dialer: direct, logStore: nil, onInstallationId: {
+      learned.set($0)
+    })
+    a.start()
+    defer { a.stop(); b.stop() }
+    await eventually("relayed workspace catalogs") {
+      a.remoteServers.count == 4 && a.remoteServers.filter(\.hasLiveWorktrees).count == 3
+    }
+    let candidates = a.remoteServers
+    func visible(with paired: [HostSession]) -> [String] {
+      HostSession.visibleRemoteServers(candidates, paired: paired).compactMap { $0.remoteServer?.id }
+    }
+    #expect(visible(with: [a, b]) == ["runtime:server", "runtime:other", "runtime:unknown"])
+    b.start()
+    await eventually("the directly paired installation identity") { learned.get() == "server-store" }
+    #expect(visible(with: [a, b]) == ["runtime:other", "runtime:unknown"])
+    #expect(visible(with: [a]) == ["runtime:server", "runtime:other", "runtime:unknown"])
+
+    var saved = b.host
+    saved.installationId = try #require(learned.get())
+    let offline = HostSession(host: saved, clientId: "phone", logStore: nil)
+    #expect(visible(with: [a, offline]) == ["runtime:other", "runtime:unknown"])
+    #expect(a.remoteServers.count == 4)
+  }
+
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func discoversServerWorkspacesAndRoutesTabsTerminalAndCleanupThroughDesktop(useCloudRelay: Bool) async throws {
     let serverOnline = LockedBox(true)
@@ -37,7 +97,26 @@ import Testing
                      ["repoId": "remote", "hostId": Self.serverId, "projectId": "shared"]],
         ]])
       case "session.tabs.subscribe":
+        socket.stream(request, ["type": "ready"])
+        socket.stream(request, ["type": "snapshot", "tabs": [], "publicationEpoch": "none:client-navigation"])
         socket.stream(request, ["type": "snapshot", "tabs": []])
+      case "session.tabs.list":
+        socket.succeed(request, [
+          "activeTabId": "desktop-tab",
+          "tabs": [
+            ["id": "structured", "type": "agent-session", "agent": "codex", "sessionId": "agent-id"],
+            ["id": "desktop-tab::left", "type": "terminal", "parentTabId": "desktop-tab", "leafId": "left", "terminal": "shell-left"],
+            ["id": "desktop-tab::right", "type": "terminal", "parentTabId": "desktop-tab", "leafId": "right",
+             "terminal": "shell-right", "isActive": true],
+            ["id": "split:tab", "type": "terminal", "terminal": "shell"],
+          ],
+        ])
+      case "agentSession.reveal":
+        socket.succeed(request, ["ok": true, "sessionId": "agent-id", "workspaceId": "same-id"])
+      case "session.tabs.activate":
+        socket.succeed(request, ["tabs": [["id": "desktop-tab::right", "type": "terminal", "terminal": "shell-right"]]])
+      case "agentSession.subscribe":
+        socket.stream(request, ["type": "snapshot", "items": []])
       case "terminal.subscribe":
         socket.stream(request, ["type": "subscribed", "streamId": 17])
         socket.binary([1, 2, 3])
@@ -71,8 +150,34 @@ import Testing
 
     let tabs = await server.api.tabs(worktree: "id:same-id")
     var tabEvents = tabs.events.makeAsyncIterator()
-    #expect(try await tabEvents.next()?["type"] == "snapshot")
+    let ready = try #require(try await tabEvents.next())
+    #expect(!hasSessionTabsSnapshot(ready))
+    let unpublished = try #require(try await tabEvents.next())
+    #expect(!hasSessionTabsSnapshot(unpublished))
+    let snapshot = try #require(try await tabEvents.next())
+    #expect(hasSessionTabsSnapshot(snapshot))
     await server.api.connection.unsubscribe(tabs.requestId)
+
+    let replay = try await server.api.tabsSnapshot(worktree: "id:same-id")
+    let inventory = SessionTabs(replay)
+    #expect(inventory.agentTab(sessionId: "orca_session_id:agent-id", paneKey: "other")?.id == "structured")
+    #expect(inventory.agentTab(
+      sessionId: nil, paneKey: "structured-agent-session-agent-id:b1003ddd-4777-4bf5-a4c8-400bc21a330a")?.id == "structured")
+    #expect(SessionTabs.structuredSessionID(forPaneKey: "structured-agent-session-agent-id:b1003ddd-4777-4bf5-a4c8-400bc21a330b") == nil)
+    #expect(inventory.agentTab(sessionId: nil, paneKey: "desktop-tab:left")?.terminalHandle == "shell-left")
+    #expect(inventory.agentTab(sessionId: nil, paneKey: "desktop-tab:right")?.terminalHandle == "shell-right")
+    #expect(inventory.agentTab(sessionId: nil, paneKey: "desktop-tab:missing") == nil)
+    #expect(inventory.activeTab?.terminalHandle == "shell-right")
+    let activated = try await server.api.activateTab("desktop-tab::right", worktree: "id:same-id")
+    #expect(SessionTabs(activated).activeTab?.terminalHandle == "shell-right")
+    #expect(inventory.agentTab(sessionId: nil, paneKey: "split:tab:leaf")?.id == "split:tab")
+    #expect(inventory.agentTab(sessionId: nil, paneKey: "split:tab")?.id == "split:tab")
+    #expect(try await server.api.revealChat(sessionId: "agent-id", in: "same-id"))
+    #expect(try await server.api.revealChat(sessionId: "agent-id", in: "other-workspace") == false)
+    let chat = await server.api.chat(sessionId: "agent-id", resumingFrom: nil)
+    var chatEvents = chat.events.makeAsyncIterator()
+    #expect(try await chatEvents.next()?["type"] == "snapshot")
+    await server.api.connection.unsubscribe(chat.requestId)
 
     let terminal = await server.api.terminal(handle: "shell", cols: 80, rows: 24)
     var terminalFrames = terminal.frames.makeAsyncIterator()
@@ -82,10 +187,14 @@ import Testing
     await server.api.connection.unsubscribe(terminal.requestId)
 
     let requests = host.seenRequests
-    let routedMethods = ["session.tabs.subscribe", "session.tabs.unsubscribe", "terminal.subscribe", "terminal.send", "terminal.unsubscribe"]
+    let routedMethods = ["session.tabs.subscribe", "session.tabs.unsubscribe", "session.tabs.list", "session.tabs.activate", "agentSession.reveal",
+                         "agentSession.subscribe", "agentSession.unsubscribe", "terminal.subscribe", "terminal.send", "terminal.unsubscribe"]
     for method in routedMethods {
       #expect(requests.first { $0["method"]?.stringValue == method }?["executionHost"] == Self.serverId)
     }
+    let activation = try #require(requests.first { $0["method"] == "session.tabs.activate" })
+    #expect(activation["params"]?["navigation"] == "caller")
+    #expect(activation["params"]?["notifyClients"] == false)
     let catalogCall = try #require(requests.first { $0["method"] == "mobileRelay.hosts.worktrees" })
     #expect(catalogCall["params"] == ["hostId": Self.serverId])
     #expect(catalogCall["executionHost"] == nil)

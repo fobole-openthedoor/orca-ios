@@ -34,6 +34,7 @@ public enum PairingFlow {
       throw await connection.state == .authFailed ? PairingError.rejected : PairingError.unreachable
     }
     var host = PairedHost(name: status["machineName"]?.stringValue ?? Self.fallbackName(offer, name), offer: offer)
+    host.installationId = HostStatus(status).installationId
 
     if let relay = offer.relay {
       // The token never leaves the phone; the host stores only its hash.
